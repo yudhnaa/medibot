@@ -1,3 +1,11 @@
 {
-  "reportUnannotatedClassAttribute": false
+  "reportUnannotatedClassAttribute": false,
+  "reportUnknownVariableType": false,
+  "reportUnknownArgumentType": false,
+  "reportUnusedCallResult": false,
+  "reportUnknownMemberType": false,
+  "reportMissingTypeStubs": false,
+  "reportAny": false,
+  "reportMissingParameterType": false,
+  "reportExplicitAny": false
 }

@@ -20,3 +20,18 @@ langchain==1.2.3
 langgraph==1.0.6
 langchain-google-genai==4.1.3
 django-stubs==5.2.8
+
+
+# Chatbot dependencies
+daphne==4.2.1
+channels==4.3.2
+channels-redis==4.3.0
+langchain-postgres==0.0.16
+langchain-text-splitters==1.1.0
+pgvector==0.3.6
+google-genai==1.57.0
+
+# NLP dependencies for medical chatbot
+py_vncorenlp==0.1.4
+transformers==4.57.5
+torch==2.9.1

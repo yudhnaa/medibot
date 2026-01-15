@@ -16,6 +16,8 @@ from datetime import timedelta
 from celery.schedules import crontab
 from dotenv import load_dotenv
 
+from utils.logger import get_logging_config
+
 load_dotenv()
 # Build paths inside the project like this: os.path.join(BASE_DIR, ...)
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -34,18 +36,23 @@ REST_FRAMEWORK = {
         "rest_framework_simplejwt.authentication.JWTAuthentication",
     ),
     "DEFAULT_FILTER_BACKENDS": ("django_filters.rest_framework.DjangoFilterBackend",),
+    "DEFAULT_RENDERER_CLASSES": ("django_core.renderers.CustomJSONRenderer",),
+    "EXCEPTION_HANDLER": "django_core.exceptions.custom_exception_handler",
 }
 
 
 # Application definition
 
 INSTALLED_APPS = [
+    "daphne",
     "django.contrib.admin",
     "django.contrib.auth",
     "django.contrib.contenttypes",
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
+    "django.contrib.postgres",
+    "channels",
     "rest_framework",
     "rest_framework_simplejwt",
     "rest_framework_simplejwt.token_blacklist",
@@ -55,6 +62,7 @@ INSTALLED_APPS = [
     "django_celery_results",
     "django_celery_beat",
     "authentication",
+    "chatbot",
 ]
 
 SIMPLE_JWT = {
@@ -157,3 +165,25 @@ CELERYBEAT_SCHEDULE = {
         ),
     },
 }
+
+# Django Channels Configuration
+ASGI_APPLICATION = "django_template.asgi.application"
+CHANNEL_LAYERS = {
+    "default": {
+        "BACKEND": "channels_redis.core.RedisChannelLayer",
+        "CONFIG": {
+            "hosts": [(os.getenv("REDIS_HOST", "localhost"), 6379)],
+        },
+    },
+}
+
+
+LOGGING = get_logging_config(
+    log_level="DEBUG",
+    enable_colors=True,
+    log_to_file=False,
+    log_file_path="logs/app.log",
+    enable_django_debug=False,
+)
+
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "")
