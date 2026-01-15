@@ -1,4 +1,4 @@
-from typing import ClassVar, override
+from typing import override
 
 from django.db import models
 
@@ -24,13 +24,6 @@ class ChatbotConfig(models.Model):
     - PROCESSING_CONFIG: Text processing settings (chunk size, batch size)
     """
 
-    # Predefined configuration keys
-    KEY_RAG_CONFIG: ClassVar[str] = "RAG_CONFIG"
-    KEY_MODEL_CONFIG: ClassVar[str] = "MODEL_CONFIG"
-    KEY_RATE_LIMITS: ClassVar[str] = "RATE_LIMITS"
-    KEY_FEATURE_FLAGS: ClassVar[str] = "FEATURE_FLAGS"
-    KEY_PROCESSING_CONFIG: ClassVar[str] = "PROCESSING_CONFIG"
-
     key = models.CharField(
         max_length=100,
         unique=True,
@@ -43,6 +36,7 @@ class ChatbotConfig(models.Model):
         verbose_name="Category",
     )
     value = models.JSONField(
+        null=True,
         verbose_name="Value",
         help_text="Configuration value (can be string, number, object, etc.)",
     )
@@ -69,14 +63,14 @@ class ChatbotConfig(models.Model):
 
     @override
     def __str__(self) -> str:
-        return f"{self.key} ({self.category})"
+        return f"{self.key} ({self.category}): {self.value}"
 
     @classmethod
     def get_config(cls, key: str, default: object = None) -> object:
         """Get a configuration value by key."""
         try:
             config = cls.objects.get(key=key, is_active=True)
-            return config.value  # pyright: ignore[reportAny]
+            return config.value
         except cls.DoesNotExist:
             return default
 
@@ -99,27 +93,3 @@ class ChatbotConfig(models.Model):
             },
         )
         return config
-
-    @classmethod
-    def get_rag_config(cls) -> dict[str, object]:
-        """Get RAG pipeline configuration."""
-        result = cls.get_config(cls.KEY_RAG_CONFIG, default={})
-        return result if isinstance(result, dict) else {}
-
-    @classmethod
-    def get_model_config(cls) -> dict[str, object]:
-        """Get model configuration."""
-        result = cls.get_config(cls.KEY_MODEL_CONFIG, default={})
-        return result if isinstance(result, dict) else {}
-
-    @classmethod
-    def get_rate_limits(cls) -> dict[str, object]:
-        """Get rate limit configuration."""
-        result = cls.get_config(cls.KEY_RATE_LIMITS, default={})
-        return result if isinstance(result, dict) else {}
-
-    @classmethod
-    def get_feature_flags(cls) -> dict[str, bool]:
-        """Get feature flags."""
-        result = cls.get_config(cls.KEY_FEATURE_FLAGS, default={})
-        return result if isinstance(result, dict) else {}

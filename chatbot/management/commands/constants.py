@@ -24,7 +24,8 @@ DEFAULT_RAG_CONFIG: dict[str, float | int] = {
 DEFAULT_MODEL_CONFIG: dict[str, str | float | bool | int] = {
     "IS_USE_PAID_GOOGLE_GEMINI_API_KEY": False,
     "LLM_MODEL": "gemini-2.5-flash",
-    "EMBEDDING_MODEL": "models/gemini-embedding-001",
+    "GEMINI_EMBEDDING_MODEL": "models/gemini-embedding-001",
+    "TRANSFORMERS_EMBEDDING_MODEL": "Qwen/Qwen3-Embedding-0.6B",
     "TEMPERATURE": 0,
     "EMBEDDINGS_NORMALIZED": True,
     "VECTOR_DIMENSIONS": 3072,

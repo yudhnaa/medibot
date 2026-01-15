@@ -32,40 +32,66 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         force = options["force"]
 
-        configs = [
-            (
-                ChatbotConfig.KEY_RAG_CONFIG,
-                DEFAULT_RAG_CONFIG,
-                ConfigCategory.RAG,
-                CONFIG_DESCRIPTIONS["RAG_CONFIG"],
-            ),
-            (
-                ChatbotConfig.KEY_MODEL_CONFIG,
-                DEFAULT_MODEL_CONFIG,
-                ConfigCategory.MODEL,
-                CONFIG_DESCRIPTIONS["MODEL_CONFIG"],
-            ),
-            (
-                ChatbotConfig.KEY_RATE_LIMITS,
-                DEFAULT_RATE_LIMITS,
-                ConfigCategory.RATE_LIMIT,
-                CONFIG_DESCRIPTIONS["RATE_LIMITS"],
-            ),
-            (
-                ChatbotConfig.KEY_FEATURE_FLAGS,
-                DEFAULT_FEATURE_FLAGS,
-                ConfigCategory.FEATURE,
-                CONFIG_DESCRIPTIONS["FEATURE_FLAGS"],
-            ),
-            (
-                ChatbotConfig.KEY_PROCESSING_CONFIG,
-                DEFAULT_PROCESSING_CONFIG,
-                ConfigCategory.PROCESSING,
-                CONFIG_DESCRIPTIONS["PROCESSING_CONFIG"],
-            ),
-        ]
+        # 1. Flatten all configs into a single list
+        all_configs = []
 
-        for key, value, category, description in configs:
+        # RAG Config
+        for key, value in DEFAULT_RAG_CONFIG.items():
+            all_configs.append(
+                (
+                    key,
+                    value,
+                    ConfigCategory.RAG,
+                    CONFIG_DESCRIPTIONS["RAG_CONFIG"],
+                )
+            )
+
+        # Model Config
+        for key, value in DEFAULT_MODEL_CONFIG.items():
+            all_configs.append(
+                (
+                    key,
+                    value,
+                    ConfigCategory.MODEL,
+                    CONFIG_DESCRIPTIONS["MODEL_CONFIG"],
+                )
+            )
+
+        # Rate Limits
+        for key, value in DEFAULT_RATE_LIMITS.items():
+            all_configs.append(
+                (
+                    key,
+                    value,
+                    ConfigCategory.RATE_LIMIT,
+                    CONFIG_DESCRIPTIONS["RATE_LIMITS"],
+                )
+            )
+
+        # Feature Flags
+        for key, value in DEFAULT_FEATURE_FLAGS.items():
+            all_configs.append(
+                (
+                    key,
+                    value,
+                    ConfigCategory.FEATURE,
+                    CONFIG_DESCRIPTIONS["FEATURE_FLAGS"],
+                )
+            )
+
+        # Processing Config
+        for key, value in DEFAULT_PROCESSING_CONFIG.items():
+            all_configs.append(
+                (
+                    key,
+                    value,
+                    ConfigCategory.PROCESSING,
+                    CONFIG_DESCRIPTIONS["PROCESSING_CONFIG"],
+                )
+            )
+
+        # 2. Iterate and create/update
+        for key, value, category, description in all_configs:
             config, created = ChatbotConfig.objects.get_or_create(
                 key=key,
                 defaults={
