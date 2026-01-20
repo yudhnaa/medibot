@@ -3,10 +3,12 @@ Custom Exception Handler and Custom Exceptions.
 Provides standardized exception handling for all API endpoints.
 """
 
+import logging
 from typing import Any
 
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.http import Http404
+
 from rest_framework import status
 from rest_framework.exceptions import APIException
 from rest_framework.response import Response
@@ -188,8 +190,11 @@ def custom_exception_handler(
 
     # For unhandled exceptions, return a generic 500 error
     # Note: In production, you may want to log the exception here
+
+    logger = logging.getLogger(__name__)
+    logger.exception(f"Unhandled exception: {exc}")
     return _build_error_response(
-        message="An unexpected error occurred",
+        message=f"Error: {exc!s}",  # TODO: Change back to generic message in production
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         errors=None,
     )
@@ -212,27 +217,42 @@ def _build_error_response(
     )
 
 
+def _extract_message_from_dict(data: dict[str, Any]) -> str | None:
+    """Extract error message from a dictionary."""
+    if "detail" in data:
+        detail = data["detail"]
+        if isinstance(detail, str):
+            return detail
+        if isinstance(detail, list) and detail:
+            return str(detail[0])
+    if "message" in data:
+        return str(data["message"])
+    if "error" in data:
+        return str(data["error"])
+    if "non_field_errors" in data:
+        non_field_errors = data["non_field_errors"]
+        if isinstance(non_field_errors, list) and non_field_errors:
+            return str(non_field_errors[0])
+    return None
+
+
+def _extract_message_from_sequence(data: list[Any]) -> str | None:
+    """Extract error message from a list."""
+    return str(data[0]) if data else None
+
+
 def _extract_message(data: Any, status_code: int) -> str:
     """Extract error message from response data."""
     if isinstance(data, dict):
-        if "detail" in data:
-            detail = data["detail"]
-            if isinstance(detail, str):
-                return detail
-            if isinstance(detail, list) and detail:
-                return str(detail[0])
-        if "message" in data:
-            return str(data["message"])
-        if "error" in data:
-            return str(data["error"])
-        if "non_field_errors" in data:
-            non_field_errors = data["non_field_errors"]
-            if isinstance(non_field_errors, list) and non_field_errors:
-                return str(non_field_errors[0])
+        message = _extract_message_from_dict(data)
+        if message:
+            return message
     elif isinstance(data, str):
         return data
-    elif isinstance(data, list) and data:
-        return str(data[0])
+    elif isinstance(data, list):
+        message = _extract_message_from_sequence(data)
+        if message:
+            return message
 
     return _get_default_message(status_code)
 

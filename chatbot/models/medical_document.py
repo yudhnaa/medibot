@@ -1,5 +1,7 @@
-from typing import override
+from typing_extensions import override
+
 from django.db import models
+
 from pgvector.django import HnswIndex, VectorField
 
 

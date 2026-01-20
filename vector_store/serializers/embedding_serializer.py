@@ -1,9 +1,10 @@
-from embeddings.services.constants import (
+from rest_framework import serializers
+
+from vector_store.services.constants import (
     EMBEDDING_PROVIDER_GEMINI,
     EMBEDDING_PROVIDER_TEI,
     EMBEDDING_PROVIDER_TRANSFORMERS,
 )
-from rest_framework import serializers
 
 
 class EmbedTextSerializer(serializers.Serializer):

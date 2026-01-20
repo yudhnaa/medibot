@@ -1,5 +1,5 @@
-from typing import override
 import uuid
+from typing_extensions import override
 
 from django.db import models
 

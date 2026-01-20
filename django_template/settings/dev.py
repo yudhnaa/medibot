@@ -1,8 +1,15 @@
-from .base import *
+# pylint: disable=wildcard-import,unused-wildcard-import
+from .base import *  # noqa: F401,F403
 
 ALLOWED_HOSTS = ["localhost", "127.0.0.1"]
 
-DEBUG = os.getenv("DEBUG", True)
+DEBUG = os.getenv("DEBUG", "True").lower() in ("true", "1", "yes")
+
+# CORS Settings for Development
+CORS_ALLOWED_ORIGINS = ["http://localhost:3001", "http://127.0.0.1:3001"]
+
+# Allow credentials (cookies, authorization headers)
+CORS_ALLOW_CREDENTIALS = True
 
 STATIC_ROOT = os.path.join(BASE_DIR, "static_root")
 
@@ -22,7 +29,7 @@ DATABASES = {
 
 if DEBUG:
     try:
-        import debug_toolbar  # NOQA
+        import debug_toolbar  # NOQA  # pyright: ignore[reportUnusedImport]
     except ImportError:
         pass
     else:
@@ -35,26 +42,31 @@ if DEBUG:
 
 # Logging
 LOGGING = {
-    'version': 1,
-    'disable_existing_loggers': False,
-    'formatters': {
-        'standard': {
-            'format': "[%(asctime)s] %(levelname)s [%(name)s:%(lineno)s] %(message)s",
-            'datefmt': "%d/%b/%Y %H:%M:%S"
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "standard": {
+            "format": "[%(asctime)s] %(levelname)s [%(name)s:%(lineno)s] %(message)s",
+            "datefmt": "%d/%b/%Y %H:%M:%S",
         },
     },
-    'handlers': {
-        'console': {
-            'level': 'INFO',
-            'class': 'logging.StreamHandler',
-            'formatter': 'standard'
+    "handlers": {
+        "console": {
+            "level": "INFO",
+            "class": "logging.StreamHandler",
+            "formatter": "standard",
         },
     },
-    'loggers': {
-        'django': {
-            'handlers': ['console'],
-            'propagate': True,
-            'level': 'INFO',
+    "loggers": {
+        "django": {
+            "handlers": ["console"],
+            "propagate": True,
+            "level": "INFO",
         },
-    }
+        "chatbot": {
+            "handlers": ["console"],
+            "propagate": True,
+            "level": "DEBUG",
+        },
+    },
 }

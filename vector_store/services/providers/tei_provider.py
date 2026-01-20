@@ -4,15 +4,15 @@ TEI Embedding Provider
 
 import logging
 import os
-from typing import override
+from typing_extensions import override
 
 import requests
 
-from embeddings.services.constants import (
+from vector_store.services.constants import (
     TEI_EMBEDDING_ENDPOINT_SUFFIX,
     TEI_ENDPOINT_ENV_NAME,
 )
-from embeddings.services.providers.embedding_interface import EmbeddingProvider
+from vector_store.services.providers.embedding_interface import EmbeddingProvider
 
 logger = logging.getLogger(__name__)
 

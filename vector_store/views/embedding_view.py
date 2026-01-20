@@ -6,9 +6,9 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from embeddings.serializers import EmbedDocumentsSerializer, EmbedTextSerializer
-from embeddings.services.constants import EMBEDDING_PROVIDER_GEMINI
-from embeddings.services.embedding_service import EmbeddingService
+from vector_store.serializers import EmbedDocumentsSerializer, EmbedTextSerializer
+from vector_store.services.constants import EMBEDDING_PROVIDER_GEMINI
+from vector_store.services.embedding_service import EmbeddingService
 
 
 class EmbedTextView(APIView):

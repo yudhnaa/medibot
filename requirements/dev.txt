@@ -1,3 +1,17 @@
 -r  base.txt
 pre-commit==4.5.1
 django-debug-toolbar==6.1.0
+
+# Linter & Formatter Tools (PEP 8)
+pylint==4.0.4
+flake8==7.3.0
+mypy==1.19.1
+black==25.12.0
+isort==7.0.0
+autoflake==2.3.1
+bandit==1.9.3
+
+# Linter Plugins & Extensions
+flake8-pyproject==1.2.4
+django-stubs==5.2.8
+pylint-django==2.7.0

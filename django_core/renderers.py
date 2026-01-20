@@ -3,7 +3,8 @@ Custom API Renderers.
 Standardizes all API responses with a consistent format.
 """
 
-from typing import Any, override
+from typing import Any
+from typing_extensions import override
 
 from rest_framework.renderers import JSONRenderer
 
@@ -73,24 +74,30 @@ class CustomJSONRenderer(JSONRenderer):
 
         return super().render(wrapped_data, accepted_media_type, renderer_context)
 
+    def _extract_error_from_dict(self, data: dict[str, Any]) -> str | None:
+        """Extract error message from a dictionary."""
+        if "detail" in data:
+            detail = data["detail"]
+            if isinstance(detail, str):
+                return detail
+            if isinstance(detail, list) and detail:
+                return str(detail[0])
+        if "message" in data:
+            return str(data["message"])
+        if "error" in data:
+            return str(data["error"])
+        if "non_field_errors" in data:
+            errors = data["non_field_errors"]
+            if isinstance(errors, list) and errors:
+                return str(errors[0])
+        return None
+
     def _extract_error_message(self, data: Any, status_code: int) -> str:
         """Extract a human-readable error message from the data."""
         if isinstance(data, dict):
-            # Check for common error message fields
-            if "detail" in data:
-                detail = data["detail"]
-                if isinstance(detail, str):
-                    return detail
-                if isinstance(detail, list) and detail:
-                    return str(detail[0])
-            if "message" in data:
-                return str(data["message"])
-            if "error" in data:
-                return str(data["error"])
-            if "non_field_errors" in data:
-                errors = data["non_field_errors"]
-                if isinstance(errors, list) and errors:
-                    return str(errors[0])
+            message = self._extract_error_from_dict(data)
+            if message:
+                return message
         elif isinstance(data, str):
             return data
         elif isinstance(data, list) and data:

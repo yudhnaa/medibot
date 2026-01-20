@@ -5,15 +5,15 @@ Main service for generating text embeddings using different providers.
 
 import logging
 
-from embeddings.services.constants import (
+from vector_store.services.constants import (
     EMBEDDING_PROVIDER_GEMINI,
     EMBEDDING_PROVIDER_TEI,
     EMBEDDING_PROVIDER_TRANSFORMERS,
 )
-from embeddings.services.providers.embedding_interface import EmbeddingProvider
-from embeddings.services.providers.gemini_provider import GeminiEmbeddingProvider
-from embeddings.services.providers.tei_provider import TEIEmbeddingProvider
-from embeddings.services.providers.transformers_provider import (
+from vector_store.services.providers.embedding_interface import EmbeddingProvider
+from vector_store.services.providers.gemini_provider import GeminiEmbeddingProvider
+from vector_store.services.providers.tei_provider import TEIEmbeddingProvider
+from vector_store.services.providers.transformers_provider import (
     TransformersEmbeddingProvider,
 )
 
@@ -32,7 +32,9 @@ class EmbeddingService:
         EMBEDDING_PROVIDER_TRANSFORMERS: TransformersEmbeddingProvider,
     }
 
-    def __init__(self, provider: str = EMBEDDING_PROVIDER_TRANSFORMERS, **kwargs):  # pyright: ignore[reportUnknownParameterType]
+    def __init__(
+        self, provider: str = EMBEDDING_PROVIDER_TRANSFORMERS, **kwargs
+    ):  # pyright: ignore[reportUnknownParameterType]
         """
         Initialize embedding service with specified provider.
 

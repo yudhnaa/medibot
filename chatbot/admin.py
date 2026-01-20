@@ -1,9 +1,9 @@
 from django.contrib import admin
 
 from chatbot.models import (
+    ChatbotConfig,
     ChatMessage,
     ChatSession,
-    ChatbotConfig,
     MedicalDocument,
     UserPreference,
 )

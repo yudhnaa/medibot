@@ -16,8 +16,6 @@ from datetime import timedelta
 from celery.schedules import crontab
 from dotenv import load_dotenv
 
-from utils.logger import get_logging_config
-
 load_dotenv()
 # Build paths inside the project like this: os.path.join(BASE_DIR, ...)
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -53,6 +51,7 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles",
     "django.contrib.postgres",
     "channels",
+    "corsheaders",
     "rest_framework",
     "rest_framework_simplejwt",
     "rest_framework_simplejwt.token_blacklist",
@@ -63,15 +62,15 @@ INSTALLED_APPS = [
     "django_celery_beat",
     "authentication",
     "chatbot",
-    "embeddings",
+    "vector_store",
 ]
 
 SIMPLE_JWT = {
     "ACCESS_TOKEN_LIFETIME": timedelta(
-        minutes=int(os.getenv("ACCESS_TOKEN_LIFETIME", 5))
+        minutes=int(os.getenv("ACCESS_TOKEN_LIFETIME", "5"))
     ),
     "REFRESH_TOKEN_LIFETIME": timedelta(
-        days=int(os.getenv("REFRESH_TOKEN_LIFETIME", 1))
+        days=int(os.getenv("REFRESH_TOKEN_LIFETIME", "1"))
     ),
 }
 
@@ -80,6 +79,7 @@ SITE_ID = 1
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
+    "corsheaders.middleware.CorsMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
@@ -178,13 +178,5 @@ CHANNEL_LAYERS = {
     },
 }
 
-
-LOGGING = get_logging_config(
-    log_level="DEBUG",
-    enable_colors=True,
-    log_to_file=False,
-    log_file_path="logs/app.log",
-    enable_django_debug=False,
-)
 
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "")

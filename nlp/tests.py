@@ -3,10 +3,11 @@ Tests for NLP services pipeline.
 Tests NER, negation detection, text normalization, and the integrator.
 """
 
-from typing_extensions import override
 from unittest.mock import MagicMock, patch
 
 from django.test import TestCase
+
+from typing_extensions import override
 
 from nlp.services.negation_detector import (
     CueType,

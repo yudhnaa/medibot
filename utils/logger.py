@@ -22,6 +22,7 @@ Django Settings Configuration (add to settings/base.py):
 import logging
 import sys
 from typing import Any, Literal
+
 from typing_extensions import override
 
 # ANSI color codes for terminal output

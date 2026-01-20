@@ -20,9 +20,10 @@ class EmbeddingProvider(ABC):
         Returns:
             List of floats representing the embedding vector
         """
-        pass
 
-    def embed_documents(self, texts: list[str]) -> list[list[float]]:  # pyright: ignore[reportUnusedParameter]
+    def embed_documents(
+        self, texts: list[str]
+    ) -> list[list[float]]:  # pyright: ignore[reportUnusedParameter]
         """
         Generate embedding vectors for multiple documents.
 

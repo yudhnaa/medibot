@@ -11,12 +11,11 @@ from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from pydantic import SecretStr
 
 from chatbot.models import ChatbotConfig
-
-from embeddings.services.constants import (
+from vector_store.services.constants import (
     DEFAULT_EMBEDDING_MODEL,
     GOOGLE_API_KEY_ENV_NAME,
 )
-from embeddings.services.providers.embedding_interface import EmbeddingProvider
+from vector_store.services.providers.embedding_interface import EmbeddingProvider
 
 logger = logging.getLogger(__name__)
 

@@ -12,12 +12,11 @@ from torch import Tensor
 from transformers import AutoModel, AutoTokenizer
 
 from chatbot.models import ChatbotConfig
-
-from embeddings.services.constants import (
+from vector_store.services.constants import (
     DEFAULT_TRANSFORMERS_INSTRUCTION,
     DEFAULT_TRANSFORMERS_MODEL,
 )
-from embeddings.services.providers.embedding_interface import EmbeddingProvider
+from vector_store.services.providers.embedding_interface import EmbeddingProvider
 
 logger = logging.getLogger(__name__)
 

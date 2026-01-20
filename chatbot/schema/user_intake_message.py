@@ -1,21 +1,25 @@
 from __future__ import annotations
-from typing import Any, Literal
-from pydantic import Field, model_validator
-from uuid import uuid4, UUID
+
 from datetime import datetime, timezone
+from typing import Any, Literal
+from uuid import UUID, uuid4
+
 from langchain_core.messages import BaseMessage, HumanMessage
+from pydantic import Field, model_validator
 
 from chatbot.schema.constants import (
-    Sex,
-    Pregnancy,
-    MAX_DISEASE_NAME_LENGTH,
     MAX_AGE,
+    MAX_DISEASE_NAME_LENGTH,
     MAX_ONSET_DAYS,
+    Pregnancy,
+    Sex,
 )
 
 
 class UserIntakeMessage(BaseMessage):
-    type: Literal["user_intake"] = "user_intake"  # pyright: ignore[reportIncompatibleVariableOverride]
+    type: Literal["user_intake"] = (
+        "user_intake"  # pyright: ignore[reportIncompatibleVariableOverride]
+    )
 
     disease_name: str | None = Field(default=None, max_length=MAX_DISEASE_NAME_LENGTH)
     symptoms: list[str] = Field(default_factory=list)
@@ -31,7 +35,9 @@ class UserIntakeMessage(BaseMessage):
     pregnancy_status: Pregnancy | None = None
     location_country: str | None = None
 
-    id: UUID = Field(default_factory=uuid4)  # pyright: ignore[reportIncompatibleVariableOverride]
+    id: UUID = Field(
+        default_factory=uuid4
+    )  # pyright: ignore[reportIncompatibleVariableOverride]
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     content: str = ""

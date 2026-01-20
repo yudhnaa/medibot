@@ -53,3 +53,9 @@ static
 old_source
 
 libs
+# knowns (ignore all except docs)
+.knowns/*
+!.knowns/docs/
+!.knowns/docs/**
+
+frontend/

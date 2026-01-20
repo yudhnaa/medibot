@@ -1,6 +1,6 @@
 from django.urls import path
 
-from embeddings.views import EmbedDocumentsView, EmbedTextView
+from vector_store.views import EmbedDocumentsView, EmbedTextView
 
 urlpatterns = [
     path("text/", EmbedTextView.as_view(), name="embed_text"),

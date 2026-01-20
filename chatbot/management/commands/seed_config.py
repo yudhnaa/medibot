@@ -4,6 +4,7 @@ Usage: python manage.py seed_config
 """
 
 from typing import override
+
 from django.core.management.base import BaseCommand
 
 from chatbot.management.commands.constants import (

@@ -1,4 +1,4 @@
-from embeddings.serializers.embedding_serializer import (
+from vector_store.serializers.embedding_serializer import (
     EmbedDocumentsSerializer,
     EmbedTextSerializer,
 )
