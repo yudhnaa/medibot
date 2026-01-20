@@ -65,6 +65,9 @@ INSTALLED_APPS = [
     "vector_store",
 ]
 
+# Custom User Model
+AUTH_USER_MODEL = "authentication.Customer"
+
 SIMPLE_JWT = {
     "ACCESS_TOKEN_LIFETIME": timedelta(
         minutes=int(os.getenv("ACCESS_TOKEN_LIFETIME", "5"))
@@ -124,9 +127,6 @@ AUTH_PASSWORD_VALIDATORS = [
         "NAME": "django.contrib.auth.password_validation.NumericPasswordValidator",
     },
 ]
-
-# Custom User Model
-AUTH_USER_MODEL = "authentication.Customer"
 
 
 # Internationalization
