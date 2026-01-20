@@ -53,8 +53,11 @@ static
 old_source
 
 libs
+.mypy_cache/
+.pytest_cache/
+
 # knowns (ignore all except docs)
-.knowns/*
+.knowns/
 !.knowns/docs/
 !.knowns/docs/**
 
