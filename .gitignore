@@ -60,5 +60,7 @@ libs
 .knowns/
 !.knowns/docs/
 !.knowns/docs/**
+AGENTS.md
+CLAUDE.md
 
 frontend/
