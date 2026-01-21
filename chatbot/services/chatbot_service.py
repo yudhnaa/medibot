@@ -7,9 +7,10 @@ import logging
 import re
 import time
 import uuid
-from collections.abc import Generator
+from collections.abc import AsyncGenerator, Generator
 from typing import Any, cast
 
+from asgiref.sync import sync_to_async
 from langchain_core.documents import Document
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.output_parsers.string import StrOutputParser
@@ -139,20 +140,27 @@ class ChatbotService:
     def _create_context_function(self):
         """Create the context-building function for RAG."""
 
-        def get_context(inputs: dict[str, Any]) -> str:
+        async def get_context(inputs: dict[str, Any]) -> str:
             question = inputs.get("question") or ""
             audit_id = str(uuid.uuid4())
 
             try:
-                # Step 1: Analyze query with NER + negation
-                analysis = self._analyze_query(question)
+                # Step 1: Analyze query with NER + negation (CPU bound, fast enough to keep sync or wrap if needed)
+                # analysis = self._analyze_query(question)
+                # Providing it wraps non-async DB? NERNegationIntegrator usually just NLP.
+                # If it accesses DB, wrap it. Let's wrap to be safe if we are unsure, though overhead.
+                # Assuming _analyze_query is CPU only for now based on code (regex/spacy).
+                analysis = await sync_to_async(self._analyze_query)(question)
 
-                # Step 2: Gate for single disease
-                gate = self._gate_with_index_c(question)
+                # Step 2: Gate for single disease (Uses VectorStore -> DB)
+                gate = await sync_to_async(self._gate_with_index_c)(question)
 
                 if gate.get("go_single") and gate.get("title"):
                     title = gate.get("title", "")
-                    docs = self._fetch_docs_for_title(title, index="B", k=200)
+                    # DB Call
+                    docs = await sync_to_async(self._fetch_docs_for_title)(
+                        title, index="B", k=200
+                    )
                     context = self._build_single_disease_context(title, docs)
 
                     # Cache documents
@@ -165,8 +173,10 @@ class ChatbotService:
                         "doc_count": len(docs),
                     }
                 else:
-                    # Multi-disease retrieval
-                    tier_result = self._multi_disease_retrieval(analysis)
+                    # Multi-disease retrieval (Uses VectorStore -> DB)
+                    tier_result = await sync_to_async(self._multi_disease_retrieval)(
+                        analysis
+                    )
                     context = self._build_multi_disease_context(
                         question, analysis, tier_result
                     )
@@ -245,6 +255,52 @@ class ChatbotService:
             self._save_message(MessageRole.ASSISTANT, error_msg)
             return error_msg
 
+    async def aquery(self, question: str) -> str:
+        """
+        Async process a medical question and return response.
+        """
+        start_time = time.time()
+
+        try:
+            # Save user message
+            await sync_to_async(self._save_message)(MessageRole.USER, question)
+
+            # Update intake
+            await sync_to_async(self._apply_analysis_to_intake)(question)
+
+            # Get chat history
+            chat_history = await sync_to_async(self._get_chat_history)()
+
+            # Run chain
+            response = await self._chain.ainvoke(
+                {
+                    "question": question,
+                    "chat_history": chat_history,
+                }
+            )
+
+            response_time_ms = int((time.time() - start_time) * 1000)
+
+            # Save assistant message
+            await sync_to_async(self._save_message)(
+                MessageRole.ASSISTANT,
+                response,
+                response_time_ms=response_time_ms,
+                metadata={
+                    "audit_id": self._last_audit.get("audit_id"),
+                    "mode": self._last_audit.get("mode"),
+                },
+            )
+
+            logger.info(f"Query processed in {response_time_ms}ms")
+            return response
+
+        except Exception as e:
+            logger.error(f"Error processing query: {e}")
+            error_msg = f"Xin lỗi, đã xảy ra lỗi khi xử lý câu hỏi của bạn: {e!s}"
+            await sync_to_async(self._save_message)(MessageRole.ASSISTANT, error_msg)
+            return error_msg
+
     def stream_response(self, question: str) -> Generator[str, None, None]:
         """
         Stream response tokens for a question.
@@ -290,6 +346,53 @@ class ChatbotService:
             logger.error(f"Streaming error: {e}")
             error_msg = f"Lỗi: {e!s}"
             self._save_message(MessageRole.ASSISTANT, error_msg)
+            yield error_msg
+
+    async def astream_response(self, question: str) -> AsyncGenerator[str, None]:
+        """
+        Async stream response tokens for a question.
+
+        Args:
+            question: User's question
+
+        Yields:
+            Response text chunks
+        """
+        # Save user message (DB op -> async)
+        await sync_to_async(self._save_message)(MessageRole.USER, question)
+
+        # Update intake (DB/Analysis -> async)
+        await sync_to_async(self._apply_analysis_to_intake)(question)
+
+        # Get history (DB op -> async)
+        chat_history = await sync_to_async(self._get_chat_history)()
+
+        start_time = time.time()
+        full_response = ""
+
+        try:
+            async for chunk in self._streaming_chain.astream(
+                {
+                    "question": question,
+                    "chat_history": chat_history,
+                }
+            ):
+                # StrOutputParser always returns str
+                full_response += chunk
+                yield chunk
+
+            # Save complete response (DB op -> async)
+            response_time_ms = int((time.time() - start_time) * 1000)
+            await sync_to_async(self._save_message)(
+                MessageRole.ASSISTANT,
+                full_response,
+                response_time_ms=response_time_ms,
+            )
+
+        except Exception as e:
+            logger.error(f"Async streaming error: {e}")
+            error_msg = f"Lỗi: {e!s}"
+            await sync_to_async(self._save_message)(MessageRole.ASSISTANT, error_msg)
             yield error_msg
 
     # ---------------------------

@@ -5,12 +5,14 @@ DRF views for chat API endpoints.
 
 import logging
 import time
+import asyncio
 from typing import Any, cast
 from typing_extensions import override
 from uuid import UUID
 
 from django.db.models import QuerySet
 from django.http import StreamingHttpResponse
+from asgiref.sync import sync_to_async
 
 from rest_framework import permissions, status, viewsets
 from rest_framework.decorators import action
@@ -82,7 +84,56 @@ class ChatView(APIView):
 
     permission_classes = [permissions.IsAuthenticated]
 
-    def post(self, request: Request) -> Response | StreamingHttpResponse:
+    @override
+    async def dispatch(
+        self, request: Request, *args: Any, **kwargs: Any
+    ) -> Response | StreamingHttpResponse:
+        """
+        Custom async dispatch to handle DRF's sync authentication safely and support async handlers.
+        Replaces APIView.dispatch logic with async-aware steps.
+        """
+        self.args = args
+        self.kwargs = kwargs
+
+        # 1. Initialize Request (Standard DRF)
+        request = self.initialize_request(request, *args, **kwargs)
+        self.request = request
+        self.headers = (
+            self.default_response_headers
+        )  # dep: APIView usually sets this if available
+
+        try:
+            # 2. Perform initialization (Auth, Perms, Throttling) in a thread safe way!
+            # sync_to_async protects against SynchronousOnlyOperation during DB auth
+            await sync_to_async(self.initial)(request, *args, **kwargs)
+
+            # 3. Get Handler
+            if request.method.lower() in self.http_method_names:
+                handler = getattr(
+                    self, request.method.lower(), self.http_method_not_allowed
+                )
+            else:
+                handler = self.http_method_not_allowed
+
+            # 4. Execute Handler
+            # Since handler (post) is async def, this returns a coroutine
+            response = handler(request, *args, **kwargs)
+
+            # Await the coroutine to get actual Response
+            if asyncio.iscoroutine(response) or asyncio.isfuture(response):
+                response = await response
+
+            # 5. Finalize Response
+            self.response = self.finalize_response(request, response, *args, **kwargs)
+            return self.response
+
+        except Exception as exc:
+            # Handle exceptions (e.g. Auth failed)
+            response = self.handle_exception(exc)
+            self.response = self.finalize_response(request, response, *args, **kwargs)
+            return self.response
+
+    async def post(self, request: Request) -> Response | StreamingHttpResponse:
         """Send a message and get a response."""
         serializer = ChatInputSerializer(data=request.data)
         if not serializer.is_valid():
@@ -101,7 +152,7 @@ class ChatView(APIView):
 
         # Get session
         try:
-            session = ChatSession.objects.get(
+            session = await ChatSession.objects.aget(
                 session_id=session_id, customer=request.user
             )
         except ChatSession.DoesNotExist:
@@ -112,14 +163,15 @@ class ChatView(APIView):
 
         # Process with chatbot service
         start_time = time.time()
-        chatbot = ChatbotService(session)
+        # ChatbotService.__init__ touches DB (Config), so we must run it in a thread
+        chatbot = await sync_to_async(ChatbotService)(session)
 
         if use_stream:
             # Return streaming response
             return self._streaming_response(chatbot, message, session_id)
 
-        # Regular response
-        response_text = chatbot.query(message)
+        # Regular response (Async)
+        response_text = await chatbot.aquery(message)
         response_time_ms = int((time.time() - start_time) * 1000)
 
         response_data = {
@@ -141,29 +193,20 @@ class ChatView(APIView):
     ) -> StreamingHttpResponse:
         """Generate a streaming response."""
 
-        def event_stream():
+        async def event_stream():
             try:
                 chunk_count = 0
-                for chunk in chatbot.stream_response(message):
+                async for chunk in chatbot.astream_response(message):
                     chunk_count += 1
                     logger.info(f"Streaming chunk {chunk_count}: {repr(chunk)}")
                     # Format as Server-Sent Event
                     if "\n" in chunk:
                         # Handle multi-line chunks
                         payload = ""
-                        for line in chunk.splitlines(keepends=False):
-                            payload += f"data: {line}\n"
-                        # If chunk ends with a newline that splitlines dropped effectively (it doesn't usually, but let's be safe),
-                        # or if we need to preserve trailing newlines of the chunk itself?
-                        # Actually simpler: Replace internal newlines with literal \n data lines.
-                        # But splitlines is safer.
-                        # Let's ensure strict SSE compliance:
-                        # "data: line1\ndata: line2\n\n"
-
-                        lines = chunk.split("\n")
-                        # Note: split('\n') on "A\nB" -> ["A", "B"]
-                        # on "A\n" -> ["A", ""] which is what we want because data: \n is empty line.
-                        formatted_lines = [f"data: {line}" for line in lines]
+                        # Use splitlines to handle various newline formats safely
+                        formatted_lines = [
+                            f"data: {line}" for line in chunk.splitlines()
+                        ]
                         payload = "\n".join(formatted_lines) + "\n\n"
                     else:
                         payload = f"data: {chunk}\n\n"

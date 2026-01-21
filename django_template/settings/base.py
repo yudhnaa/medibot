@@ -42,7 +42,6 @@ REST_FRAMEWORK = {
 # Application definition
 
 INSTALLED_APPS = [
-    "daphne",
     "django.contrib.admin",
     "django.contrib.auth",
     "django.contrib.contenttypes",
@@ -50,7 +49,6 @@ INSTALLED_APPS = [
     "django.contrib.messages",
     "django.contrib.staticfiles",
     "django.contrib.postgres",
-    "channels",
     "corsheaders",
     "rest_framework",
     "rest_framework_simplejwt",
@@ -167,17 +165,6 @@ CELERYBEAT_SCHEDULE = {
             1,
             2,
         ),
-    },
-}
-
-# Django Channels Configuration
-ASGI_APPLICATION = "django_template.asgi.application"
-CHANNEL_LAYERS = {
-    "default": {
-        "BACKEND": "channels_redis.core.RedisChannelLayer",
-        "CONFIG": {
-            "hosts": [(os.getenv("REDIS_HOST", "localhost"), 6379)],
-        },
     },
 }
 
