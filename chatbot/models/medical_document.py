@@ -26,11 +26,11 @@ class MedicalDocument(models.Model):
     title = models.CharField(max_length=500, verbose_name="Title")
     content = models.TextField(verbose_name="Content")
     embedding = VectorField(
-        dimensions=768,
+        dimensions=1024,
         null=True,
         blank=True,
         verbose_name="Vector Embedding",
-        help_text="768-dimensional embedding from text-embedding-004",
+        help_text="1024-dimensional embedding",
     )
     section_type = models.CharField(
         max_length=50,

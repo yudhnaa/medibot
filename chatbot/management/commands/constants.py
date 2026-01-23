@@ -28,7 +28,7 @@ DEFAULT_MODEL_CONFIG: dict[str, str | float | bool | int] = {
     "TRANSFORMERS_EMBEDDING_MODEL": "Qwen/Qwen3-Embedding-0.6B",
     "TEMPERATURE": 0,
     "EMBEDDINGS_NORMALIZED": True,
-    "VECTOR_DIMENSIONS": 3072,
+    "VECTOR_DIMENSIONS": 1024,
 }
 
 # =============================================================================

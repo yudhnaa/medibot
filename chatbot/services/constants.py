@@ -52,3 +52,32 @@ DEFAULT_RAG_NEG_SYM_SIM_THRESH = 0.75
 DEFAULT_RAG_FINAL_TITLES = 5
 DEFAULT_RAG_MERGE_WEIGHT_ENTITIES = 0.5
 DEFAULT_RAG_MERGE_WEIGHT_QUERY = 0.5
+
+# Document retrieval and display limits
+DEFAULT_SINGLE_DISEASE_DOCS_K = 200  # Number of docs to fetch for single disease mode
+DEFAULT_DOCS_CACHE_SIZE = 10  # Number of docs to cache for UI display
+DEFAULT_SECTION_ITEMS_LIMIT = 10  # Max items per section in context
+DEFAULT_DOC_PREVIEW_LENGTH = 300  # Character limit for doc preview
+
+# Index search defaults
+DEFAULT_INDEX_C_K = 1  # Top k for Index C gate search
+DEFAULT_INDEX_B_K = 100  # Default k for Index B search
+
+# Vietnamese error and context messages
+MSG_ANALYSIS_ERROR = (
+    "Không thể phân tích đầy đủ truy vấn. Vui lòng cung cấp thêm thông tin."
+)
+MSG_NO_DOCS_FOR_TITLE = "Không tìm thấy tài liệu cho bệnh: {title}"
+MSG_CONTEXT_HINT_SINGLE = "\nGỢI Ý: Tóm tắt triệu chứng, nguyên nhân, điều trị. Không suy diễn ngoài tài liệu."
+MSG_CONTEXT_HINT_MULTI = (
+    "\nGỢI Ý: Trình bày danh sách bệnh có tổ chức. Khuyến nghị cung cấp thêm thông tin."
+)
+MSG_PROCESSING_ERROR = "Xin lỗi, đã xảy ra lỗi khi xử lý câu hỏi của bạn: {error}"
+MSG_STREAMING_ERROR = "Lỗi: {error}"
+
+# Context headers
+HEADER_SINGLE_DISEASE = "THÔNG TIN CHI TIẾT VỀ BỆNH: {title}"
+HEADER_SINGLE_DISEASE_SUBTITLE = "(Tổng hợp từ cơ sở dữ liệu y khoa)\n"
+HEADER_MULTI_DISEASE_ANALYSIS = "PHÂN TÍCH TRUY VẤN (NER & phủ định):"
+HEADER_MULTI_DISEASE_CANDIDATES = "\nCÁC BỆNH CÓ KHẢ NĂNG:"
+HEADER_PATIENT_INFO = "\nTHÔNG TIN BỆNH NHÂN:\n"

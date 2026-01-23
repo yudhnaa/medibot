@@ -17,8 +17,8 @@ from chatbot.schema.constants import (
 
 
 class UserIntakeMessage(BaseMessage):
-    type: Literal["user_intake"] = (
-        "user_intake"  # pyright: ignore[reportIncompatibleVariableOverride]
+    type: Literal["user_intake"] = (  # pyright: ignore[reportIncompatibleVariableOverride]
+        "user_intake"
     )
 
     disease_name: str | None = Field(default=None, max_length=MAX_DISEASE_NAME_LENGTH)
@@ -35,9 +35,7 @@ class UserIntakeMessage(BaseMessage):
     pregnancy_status: Pregnancy | None = None
     location_country: str | None = None
 
-    id: UUID = Field(
-        default_factory=uuid4
-    )  # pyright: ignore[reportIncompatibleVariableOverride]
+    id: UUID = Field(default_factory=uuid4)  # pyright: ignore[reportIncompatibleVariableOverride]
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     content: str = ""

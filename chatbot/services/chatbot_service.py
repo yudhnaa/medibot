@@ -21,11 +21,27 @@ from chatbot.models import ChatbotConfig, ChatMessage, ChatSession, MessageRole
 from chatbot.prompts.system_vi import SYSTEM_PROMPT_VI
 from chatbot.schema.user_intake_message import UserIntakeMessage
 from chatbot.services.constants import (
+    DEFAULT_DOCS_CACHE_SIZE,
+    DEFAULT_DOC_PREVIEW_LENGTH,
+    DEFAULT_INDEX_B_K,
     DEFAULT_RAG_B_TOPK,
     DEFAULT_RAG_FINAL_TITLES,
     DEFAULT_RAG_THRESH_C,
     DEFAULT_RAG_TITLE_TOP_M,
+    DEFAULT_SECTION_ITEMS_LIMIT,
+    DEFAULT_SINGLE_DISEASE_DOCS_K,
+    HEADER_MULTI_DISEASE_ANALYSIS,
+    HEADER_MULTI_DISEASE_CANDIDATES,
+    HEADER_PATIENT_INFO,
+    HEADER_SINGLE_DISEASE,
+    HEADER_SINGLE_DISEASE_SUBTITLE,
     LABEL_ALIASES,
+    MSG_ANALYSIS_ERROR,
+    MSG_CONTEXT_HINT_MULTI,
+    MSG_CONTEXT_HINT_SINGLE,
+    MSG_NO_DOCS_FOR_TITLE,
+    MSG_PROCESSING_ERROR,
+    MSG_STREAMING_ERROR,
     SECTION_HEADERS,
     SECTION_ORDER,
     SYNONYM_MAP,
@@ -159,12 +175,12 @@ class ChatbotService:
                     title = gate.get("title", "")
                     # DB Call
                     docs = await sync_to_async(self._fetch_docs_for_title)(
-                        title, index="B", k=200
+                        title, index="B", k=DEFAULT_SINGLE_DISEASE_DOCS_K
                     )
                     context = self._build_single_disease_context(title, docs)
 
                     # Cache documents
-                    self._last_docs_cache = docs[:10]
+                    self._last_docs_cache = docs[:DEFAULT_DOCS_CACHE_SIZE]
                     self._last_audit = {
                         "audit_id": audit_id,
                         "ts": time.time(),
@@ -194,7 +210,7 @@ class ChatbotService:
 
             except Exception as ex:
                 logger.warning(f"Context build error: {ex}")
-                context = "Không thể phân tích đầy đủ truy vấn. Vui lòng cung cấp thêm thông tin."
+                context = MSG_ANALYSIS_ERROR
                 self._last_query_text = question
 
             # Append intake context
@@ -251,7 +267,7 @@ class ChatbotService:
 
         except Exception as e:
             logger.error(f"Error processing query: {e}")
-            error_msg = f"Xin lỗi, đã xảy ra lỗi khi xử lý câu hỏi của bạn: {e!s}"
+            error_msg = MSG_PROCESSING_ERROR.format(error=str(e))
             self._save_message(MessageRole.ASSISTANT, error_msg)
             return error_msg
 
@@ -297,7 +313,7 @@ class ChatbotService:
 
         except Exception as e:
             logger.error(f"Error processing query: {e}")
-            error_msg = f"Xin lỗi, đã xảy ra lỗi khi xử lý câu hỏi của bạn: {e!s}"
+            error_msg = MSG_PROCESSING_ERROR.format(error=str(e))
             await sync_to_async(self._save_message)(MessageRole.ASSISTANT, error_msg)
             return error_msg
 
@@ -344,7 +360,7 @@ class ChatbotService:
 
         except Exception as e:
             logger.error(f"Streaming error: {e}")
-            error_msg = f"Lỗi: {e!s}"
+            error_msg = MSG_STREAMING_ERROR.format(error=str(e))
             self._save_message(MessageRole.ASSISTANT, error_msg)
             yield error_msg
 
@@ -391,7 +407,7 @@ class ChatbotService:
 
         except Exception as e:
             logger.error(f"Async streaming error: {e}")
-            error_msg = f"Lỗi: {e!s}"
+            error_msg = MSG_STREAMING_ERROR.format(error=str(e))
             await sync_to_async(self._save_message)(MessageRole.ASSISTANT, error_msg)
             yield error_msg
 
@@ -486,7 +502,8 @@ class ChatbotService:
                 return result
 
             doc = docs[0]
-            score = getattr(doc, "score", 0.0) or 0.0
+            distance = getattr(doc, "distance", 1.0)
+            score = 1.0 - (distance / 2.0)
             title = (doc.title or doc.content or "").strip().lower()
 
             result["top_score"] = float(score)
@@ -509,7 +526,7 @@ class ChatbotService:
         return result
 
     def _fetch_docs_for_title(
-        self, title: str, index: str = "B", k: int = 100
+        self, title: str, index: str = "B", k: int = DEFAULT_INDEX_B_K
     ) -> list[Document]:
         """Fetch documents for a disease title."""
         try:
@@ -536,7 +553,7 @@ class ChatbotService:
     def _build_single_disease_context(self, title: str, docs: list[Document]) -> str:
         """Build context for single disease mode."""
         if not docs:
-            return f"Không tìm thấy tài liệu cho bệnh: {title}"
+            return MSG_NO_DOCS_FOR_TITLE.format(title=title)
 
         by_section: dict[str, list[str]] = {s: [] for s in SECTION_ORDER}
         for d in docs:
@@ -546,8 +563,8 @@ class ChatbotService:
                 by_section[sec].append(txt)
 
         lines = [
-            f"THÔNG TIN CHI TIẾT VỀ BỆNH: {title}",
-            "(Tổng hợp từ cơ sở dữ liệu y khoa)\n",
+            HEADER_SINGLE_DISEASE.format(title=title),
+            HEADER_SINGLE_DISEASE_SUBTITLE,
         ]
 
         for sec in SECTION_ORDER:
@@ -558,14 +575,12 @@ class ChatbotService:
             if sec == "general":
                 lines.append(f"  {items[0]}")
             else:
-                for it in items[:10]:
+                for it in items[:DEFAULT_SECTION_ITEMS_LIMIT]:
                     brief = re.sub(r"\s+", " ", it).strip()
                     lines.append(f"  * {brief}")
             lines.append("")
 
-        lines.append(
-            "\nGỢI Ý: Tóm tắt triệu chứng, nguyên nhân, điều trị. Không suy diễn ngoài tài liệu."
-        )
+        lines.append(MSG_CONTEXT_HINT_SINGLE)
         return "\n".join(lines)
 
     def _multi_disease_retrieval(self, analysis: dict[str, Any]) -> dict[str, Any]:
@@ -610,7 +625,8 @@ class ChatbotService:
                     },
                 )
                 grp["docs"].append(doc)
-                score = getattr(doc, "score", 0.5) or 0.5
+                distance = getattr(doc, "distance", 1.0)
+                score = 1.0 - (distance / 2.0)
                 grp["scores"].append(float(score))
 
             # Calculate average scores
@@ -658,7 +674,7 @@ class ChatbotService:
         tier_result: dict[str, Any],
     ) -> str:
         """Build context for multi-disease response."""
-        lines = ["PHÂN TÍCH TRUY VẤN (NER & phủ định):"]
+        lines = [HEADER_MULTI_DISEASE_ANALYSIS]
 
         pos = analysis.get("positives", {})
         neg = analysis.get("negatives", {})
@@ -670,13 +686,11 @@ class ChatbotService:
         if pos.get("ETIOLOGY"):
             lines.append(f"- Căn nguyên: {', '.join(pos['ETIOLOGY'])}")
 
-        lines.append("\nCÁC BỆNH CÓ KHẢ NĂNG:")
+        lines.append(HEADER_MULTI_DISEASE_CANDIDATES)
         for i, c in enumerate(tier_result.get("candidates", [])):
             lines.append(f"{i + 1}. {c['title']} - điểm: {c['final_score']:.3f}")
 
-        lines.append(
-            "\nGỢI Ý: Trình bày danh sách bệnh có tổ chức. Khuyến nghị cung cấp thêm thông tin."
-        )
+        lines.append(MSG_CONTEXT_HINT_MULTI)
         return "\n".join(lines)
 
     # ---------------------------
@@ -721,7 +735,7 @@ class ChatbotService:
             info.append(f"Giới tính: {intake.sex}")
 
         if info:
-            return "\nTHÔNG TIN BỆNH NHÂN:\n" + "\n".join(info)
+            return HEADER_PATIENT_INFO + "\n".join(info)
         return ""
 
     def update_intake(self, **kwargs: Any) -> UserIntakeMessage:
@@ -746,7 +760,9 @@ class ChatbotService:
         """Get current user intake."""
         return self._user_intake
 
-    def get_last_docs(self, max_items: int = 10) -> list[dict[str, Any]]:
+    def get_last_docs(
+        self, max_items: int = DEFAULT_DOCS_CACHE_SIZE
+    ) -> list[dict[str, Any]]:
         """Get last retrieved documents for UI display."""
         out = []
         for d in self._last_docs_cache[:max_items]:
@@ -756,8 +772,8 @@ class ChatbotService:
                     "section": d.metadata.get("section"),
                     "source": d.metadata.get("source"),
                     "preview": (
-                        d.page_content[:300] + "..."
-                        if len(d.page_content) > 300
+                        d.page_content[:DEFAULT_DOC_PREVIEW_LENGTH] + "..."
+                        if len(d.page_content) > DEFAULT_DOC_PREVIEW_LENGTH
                         else d.page_content
                     ),
                 }
