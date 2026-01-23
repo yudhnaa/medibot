@@ -12,6 +12,7 @@ from chatbot.serializers.chat_serializers import (
     UserIntakeInputSerializer,
     UserIntakeOutputSerializer,
 )
+from chatbot.serializers.user_intake_serializer import UserIntakeSerializer
 
 __all__ = [
     "ChatInputSerializer",
@@ -22,4 +23,5 @@ __all__ = [
     "RetrievedDocSerializer",
     "UserIntakeInputSerializer",
     "UserIntakeOutputSerializer",
+    "UserIntakeSerializer",
 ]

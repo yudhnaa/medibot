@@ -6,6 +6,7 @@ from chatbot.models.medical_document import (
     MedicalDocument,
     SectionType,
 )
+from chatbot.models.user_intake import UserIntake
 from chatbot.models.user_preference import ResponseStyle, UserPreference
 
 __all__ = [
@@ -19,4 +20,5 @@ __all__ = [
     "ConfigCategory",
     "UserPreference",
     "ResponseStyle",
+    "UserIntake",
 ]

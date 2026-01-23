@@ -10,6 +10,7 @@ from typing import Any, cast
 from typing_extensions import override
 from uuid import UUID
 
+from django.db import transaction
 from django.db.models import QuerySet
 from django.http import StreamingHttpResponse
 from asgiref.sync import sync_to_async
@@ -59,9 +60,17 @@ class ChatSessionViewSet(viewsets.ModelViewSet):
 
     @override
     def perform_create(self, serializer: ChatSessionCreateSerializer) -> None:
-        """Create a new session for the current user."""
-        # Use customer_id since Customer extends User with multi-table inheritance
-        serializer.save(customer_id=self.request.user.pk)
+        """Create a new session, deactivating any existing active sessions."""
+        user = self.request.user
+
+        with transaction.atomic():
+            # Deactivate all current active sessions for this user
+            ChatSession.objects.filter(customer_id=user.pk, is_active=True).update(
+                is_active=False
+            )
+
+            # Create new active session
+            serializer.save(customer_id=user.pk, is_active=True)
 
     @action(detail=True, methods=["get"])
     def messages(self, _request: Request, pk: str | None = None) -> Response:  # noqa: ARG002
@@ -161,6 +170,12 @@ class ChatView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
+        if not session.is_active:
+            return Response(
+                {"error": "This session is inactive. Please start a new session."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
         # Process with chatbot service
         start_time = time.time()
         # ChatbotService.__init__ touches DB (Config), so we must run it in a thread
@@ -181,6 +196,7 @@ class ChatView(APIView):
             "metadata": {
                 "mode": chatbot.get_last_audit().get("mode"),
             },
+            "is_active": session.is_active,
         }
 
         return Response(

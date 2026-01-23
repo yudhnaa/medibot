@@ -98,6 +98,7 @@ class ChatResponseSerializer(serializers.Serializer):
     response = serializers.CharField()
     response_time_ms = serializers.IntegerField()
     metadata = serializers.DictField(required=False)
+    is_active = serializers.BooleanField(default=True, read_only=True)
 
 
 class UserIntakeInputSerializer(serializers.Serializer):

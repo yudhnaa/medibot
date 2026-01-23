@@ -34,11 +34,30 @@ class ChatSession(models.Model):
     updated_at = models.DateTimeField(auto_now=True, verbose_name="Updated At")
     is_active = models.BooleanField(default=True, verbose_name="Is Active")
 
+    def clear_chat(self) -> None:
+        """
+        Clear all messages in this session and reset user intake fields.
+        Removes all chat messages and resets session-specific intake data.
+        """
+        # Delete all messages in this session
+        self.messages.all().delete()
+
+        # Reset user intake session-specific fields
+        if hasattr(self.customer, "intake"):
+            self.customer.intake.reset_session_specific_fields()
+
     class Meta:
         db_table = "chat_session"
         verbose_name = "Chat Session"
         verbose_name_plural = "Chat Sessions"
         ordering = ["-updated_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["customer"],
+                condition=models.Q(is_active=True),
+                name="one_active_session_per_customer",
+            )
+        ]
 
     @override
     def __str__(self) -> str:

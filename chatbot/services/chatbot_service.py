@@ -17,9 +17,14 @@ from langchain_core.output_parsers.string import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.runnables import RunnableLambda, RunnablePassthrough
 
-from chatbot.models import ChatbotConfig, ChatMessage, ChatSession, MessageRole
+from chatbot.models import (
+    ChatbotConfig,
+    ChatMessage,
+    ChatSession,
+    MessageRole,
+    UserIntake,
+)
 from chatbot.prompts.system_vi import SYSTEM_PROMPT_VI
-from chatbot.schema.user_intake_message import UserIntakeMessage
 from chatbot.services.constants import (
     DEFAULT_DOCS_CACHE_SIZE,
     DEFAULT_DOC_PREVIEW_LENGTH,
@@ -69,8 +74,10 @@ class ChatbotService:
         self.session = session
         self.session_id = str(session.session_id)
 
-        # User intake tracking
-        self._user_intake = UserIntakeMessage(content="")
+        # User intake tracking (database model)
+        self._user_intake_db, _ = UserIntake.objects.get_or_create(
+            customer=self.session.customer
+        )
 
         # Document cache for UI
         self._last_docs_cache: list[Document] = []
@@ -214,7 +221,7 @@ class ChatbotService:
                 self._last_query_text = question
 
             # Append intake context
-            intake_ctx = self._get_intake_context()
+            intake_ctx = await sync_to_async(self._get_intake_context)()
             return context + ("\n" + intake_ctx if intake_ctx else "")
 
         return RunnableLambda(get_context)
@@ -698,29 +705,43 @@ class ChatbotService:
     # ---------------------------
 
     def _apply_analysis_to_intake(self, question: str) -> None:
-        """Update intake from analyzed question."""
+        """Update intake from analyzed question and persist to database."""
         analysis = self._analyze_query(question)
         pos = analysis.get("positives", {}) or {}
         neg = analysis.get("negatives", {}) or {}
 
-        # Update symptoms
-        for sym in pos.get("SYMPTOM", []):
-            if sym and sym not in self._user_intake.symptoms:
-                self._user_intake.symptoms.append(sym)
+        symptoms_updated = False
 
+        # Update positive symptoms
+        for sym in pos.get("SYMPTOM", []):
+            if sym and sym not in self._user_intake_db.symptoms:
+                self._user_intake_db.symptoms.append(sym)
+                symptoms_updated = True
+
+        # Update negated symptoms
         for sym in neg.get("SYMPTOM", []):
-            if sym and sym not in self._user_intake.symptoms_negated:
-                self._user_intake.symptoms_negated.append(sym)
+            if sym and sym not in self._user_intake_db.symptoms_negated:
+                self._user_intake_db.symptoms_negated.append(sym)
+                symptoms_updated = True
 
         # Remove negated from positive
-        neg_set = {s.lower() for s in self._user_intake.symptoms_negated}
-        self._user_intake.symptoms = [
-            s for s in self._user_intake.symptoms if s.lower() not in neg_set
+        neg_set = {s.lower() for s in self._user_intake_db.symptoms_negated}
+        filtered_symptoms = [
+            s for s in self._user_intake_db.symptoms if s.lower() not in neg_set
         ]
+        if filtered_symptoms != self._user_intake_db.symptoms:
+            self._user_intake_db.symptoms = filtered_symptoms
+            symptoms_updated = True
+
+        # Save to database if changed
+        if symptoms_updated:
+            self._user_intake_db.save()
 
     def _get_intake_context(self) -> str:
-        """Get intake context string for LLM."""
-        intake = self._user_intake
+        """Get intake context string for LLM from database."""
+        # Refresh to get latest data
+        self._user_intake_db.refresh_from_db()
+        intake = self._user_intake_db
         info: list[str] = []
 
         if intake.disease_name:
@@ -738,27 +759,54 @@ class ChatbotService:
             return HEADER_PATIENT_INFO + "\n".join(info)
         return ""
 
-    def update_intake(self, **kwargs: Any) -> UserIntakeMessage:
-        """Update user intake fields."""
-        for key in ["disease_name", "age", "sex", "onset_days", "pregnancy_status"]:
+    def update_intake(self, **kwargs: Any) -> UserIntake:
+        """Update user intake fields and save to database."""
+        # Update scalar fields
+        for key in [
+            "disease_name",
+            "age",
+            "sex",
+            "onset_days",
+            "pregnancy_status",
+            "location_country",
+        ]:
             if key in kwargs and kwargs[key] is not None:
-                setattr(self._user_intake, key, kwargs[key])
+                setattr(self._user_intake_db, key, kwargs[key])
 
+        # Update list fields (append mode)
         if "symptoms" in kwargs:
             for s in kwargs["symptoms"] or []:
-                if s and s not in self._user_intake.symptoms:
-                    self._user_intake.symptoms.append(s)
+                if s and s not in self._user_intake_db.symptoms:
+                    self._user_intake_db.symptoms.append(s)
 
         if "symptoms_negated" in kwargs:
             for s in kwargs["symptoms_negated"] or []:
-                if s and s not in self._user_intake.symptoms_negated:
-                    self._user_intake.symptoms_negated.append(s)
+                if s and s not in self._user_intake_db.symptoms_negated:
+                    self._user_intake_db.symptoms_negated.append(s)
 
-        return self._user_intake
+        if "chronic_conditions" in kwargs:
+            for c in kwargs["chronic_conditions"] or []:
+                if c and c not in self._user_intake_db.chronic_conditions:
+                    self._user_intake_db.chronic_conditions.append(c)
 
-    def get_intake(self) -> UserIntakeMessage:
-        """Get current user intake."""
-        return self._user_intake
+        if "allergies" in kwargs:
+            for a in kwargs["allergies"] or []:
+                if a and a not in self._user_intake_db.allergies:
+                    self._user_intake_db.allergies.append(a)
+
+        if "meds" in kwargs:
+            for m in kwargs["meds"] or []:
+                if m and m not in self._user_intake_db.meds:
+                    self._user_intake_db.meds.append(m)
+
+        # Save to database
+        self._user_intake_db.save()
+        return self._user_intake_db
+
+    def get_intake(self) -> UserIntake:
+        """Get current user intake from database."""
+        self._user_intake_db.refresh_from_db()
+        return self._user_intake_db
 
     def get_last_docs(
         self, max_items: int = DEFAULT_DOCS_CACHE_SIZE
