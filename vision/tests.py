@@ -203,3 +203,166 @@ class GradCAMTests(TestCase):
         self.assertEqual(result.shape, (1, 32, 32))
         self.assertGreaterEqual(result.min().item(), 0.0)
         self.assertLessEqual(result.max().item(), 1.0 + 1e-6)
+
+
+# =============================================================================
+# Phase 2: API endpoint tests
+# =============================================================================
+
+from io import BytesIO
+
+from django.core.files.uploadedfile import SimpleUploadedFile
+from rest_framework.test import APIClient
+
+from PIL import Image
+
+
+def _create_test_image() -> SimpleUploadedFile:
+    """Create a minimal valid JPEG in memory."""
+    buf = BytesIO()
+    Image.new("L", (64, 64), color=128).save(buf, format="JPEG")
+    buf.seek(0)
+    return SimpleUploadedFile("xray.jpg", buf.read(), content_type="image/jpeg")
+
+
+def _get_authed_client() -> APIClient:
+    """Return an APIClient authenticated with a test user."""
+    from authentication.models import Customer
+
+    user = Customer.objects.create_user(  # type: ignore[attr-defined]
+        username="testuser",
+        email="testuser@example.com",
+        password="testpass123",
+    )
+    client = APIClient()
+    client.force_authenticate(user=user)
+    return client
+
+
+class AnalyzeViewTests(TestCase):
+    """Tests for POST /api/v1/vision/analyze/."""
+
+    def setUp(self) -> None:
+        self.client = _get_authed_client()
+        self.url = "/api/v1/vision/analyze/"
+
+    @patch("vision.views.analyze_xray")
+    def test_analyze_success(self, mock_analyze: MagicMock) -> None:
+        """Test successful X-ray analysis returns classification results."""
+        mock_analyze.return_value = {
+            "class_probs": {
+                "COVID": 0.8,
+                "Normal": 0.1,
+                "Viral Pneumonia": 0.05,
+                "Lung Opacity": 0.05,
+            },
+            "pred_label": "COVID",
+            "findings": ["bilateral involvement"],
+            "heatmap_path": None,
+            "mask_path": None,
+            "embedding": [0.1] * 1024,
+        }
+        image = _create_test_image()
+        response = self.client.post(self.url, {"image": image}, format="multipart")
+        self.assertEqual(response.status_code, 200)
+        json_data = response.json()
+        data = json_data["data"]
+        self.assertEqual(data["pred_label"], "COVID")
+        self.assertIn("bilateral involvement", data["findings"])
+        self.assertEqual(len(data["embedding"]), 1024)
+        mock_analyze.assert_called_once()
+
+    def test_analyze_missing_image_returns_400(self) -> None:
+        """Test missing image file returns 400."""
+        response = self.client.post(self.url, {}, format="multipart")
+        self.assertEqual(response.status_code, 400)
+
+    def test_analyze_unauthenticated_returns_401(self) -> None:
+        """Test unauthenticated request returns 401."""
+        client = APIClient()
+        image = _create_test_image()
+        response = client.post(self.url, {"image": image}, format="multipart")
+        self.assertEqual(response.status_code, 401)
+
+
+class EmbedViewTests(TestCase):
+    """Tests for POST /api/v1/vision/embed/."""
+
+    def setUp(self) -> None:
+        self.client = _get_authed_client()
+        self.url = "/api/v1/vision/embed/"
+
+    @patch("vision.views.ingest_embeddings")
+    def test_embed_success(self, mock_ingest: MagicMock) -> None:
+        """Test successful batch embedding returns count."""
+        mock_ingest.return_value = {"status": "ok", "count": 42}
+        response = self.client.post(self.url, {"batch_size": 16}, format="json")
+        self.assertEqual(response.status_code, 200)
+        json_data = response.json()
+        data = json_data["data"]
+        self.assertEqual(data["status"], "ok")
+        self.assertEqual(data["count"], 42)
+        mock_ingest.assert_called_once()
+
+    def test_embed_unauthenticated_returns_401(self) -> None:
+        """Test unauthenticated request returns 401."""
+        client = APIClient()
+        response = client.post(self.url, {"batch_size": 16}, format="json")
+        self.assertEqual(response.status_code, 401)
+
+    @patch("vision.views.ingest_embeddings")
+    def test_embed_default_batch_size(self, mock_ingest: MagicMock) -> None:
+        """Test empty body uses default batch_size=32."""
+        mock_ingest.return_value = {"status": "ok", "count": 100}
+        response = self.client.post(self.url, {}, format="json")
+        self.assertEqual(response.status_code, 200)
+        mock_ingest.assert_called_once()
+        _, kwargs = mock_ingest.call_args
+        self.assertEqual(kwargs["batch_size"], 32)
+
+
+class SimilarViewTests(TestCase):
+    """Tests for POST /api/v1/vision/similar/."""
+
+    def setUp(self) -> None:
+        self.client = _get_authed_client()
+        self.url = "/api/v1/vision/similar/"
+
+    @patch("vision.views.query_similar")
+    @patch("vision.views.get_conn")
+    @patch("vision.views.load_config")
+    def test_similar_success(
+        self, mock_cfg: MagicMock, mock_conn: MagicMock, mock_query: MagicMock
+    ) -> None:
+        """Test similarity search returns matching results."""
+        mock_cfg.return_value = {"pgvector": {"table": "xray_embeddings"}}
+        mock_query.return_value = [
+            ("img_001", "COVID", {"source": "kaggle"}, 0.123),
+            ("img_002", "Normal", {"source": "kaggle"}, 0.456),
+        ]
+        response = self.client.post(
+            self.url,
+            {"embedding": [0.1] * 1024, "k": 2},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+        json_data = response.json()
+        data = json_data["data"]
+        self.assertEqual(len(data), 2)
+        self.assertEqual(data[0]["image_id"], "img_001")
+        mock_query.assert_called_once()
+
+    def test_similar_missing_embedding_returns_400(self) -> None:
+        """Test missing embedding returns 400."""
+        response = self.client.post(self.url, {}, format="json")
+        self.assertEqual(response.status_code, 400)
+
+    def test_similar_unauthenticated_returns_401(self) -> None:
+        """Test unauthenticated request returns 401."""
+        client = APIClient()
+        response = client.post(
+            self.url,
+            {"embedding": [0.1] * 1024, "k": 5},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 401)

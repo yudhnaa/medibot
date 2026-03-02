@@ -39,6 +39,7 @@ urlpatterns = [
     path("api/v1/auth/", include("authentication.urls")),
     path("api/v1/chatbot/", include("chatbot.urls")),
     path("api/v1/vector-store/", include("vector_store.urls")),
+    path("api/v1/vision/", include("vision.urls")),
     path("admin/", admin.site.urls),
 ] + static(settings.STATIC_URL, document_root=settings.STATIC_ROOT)
 
