@@ -61,7 +61,16 @@ INSTALLED_APPS = [
     "authentication",
     "chatbot",
     "vector_store",
+    "vision",
 ]
+
+# Vision module configuration
+VISION_CONFIG_PATH = os.path.join(
+    os.path.dirname(BASE_DIR), "vision", "configs", "train.yaml"
+)
+VISION_CHECKPOINT_PATH = os.path.join(
+    os.path.dirname(BASE_DIR), "vision", "checkpoints", "best.pt"
+)
 
 # Custom User Model
 AUTH_USER_MODEL = "authentication.Customer"

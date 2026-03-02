@@ -1,0 +1,55 @@
+data:
+  root: data/kaggle_covid
+  img_size: 224
+  batch_size: 16
+  num_workers: 4
+  augment: true
+  split:
+    seed: 42
+    train: 0.8
+    val: 0.1
+    test: 0.1
+
+classes:
+  - COVID
+  - Normal
+  - Viral Pneumonia
+  - Lung Opacity
+
+model:
+  weights: densenet121-res224-all
+  num_classes: 4
+  freeze_epochs: 3
+  lr: 1.0e-4
+  weight_decay: 1.0e-5
+  max_epochs: 20
+  device: auto
+  feature_layer: features
+  embedding_dim: 1024
+
+outputs:
+  checkpoints: checkpoints
+  logs: logs
+  explain: outputs/explain
+  masks: outputs/masks
+
+explain:
+  cam_alpha: 0.5
+  heatmap_threshold: 0.3
+
+findings:
+  bilateral_threshold: 0.25
+  diffuse_threshold: 0.45
+
+segmentation:
+  use_lung_mask: true
+  img_size: 512
+  lung_threshold: 0.5
+
+pgvector:
+  host: localhost
+  port: 5432
+  name: medibot
+  user: postgres
+  password: postgres
+  table: xray_embeddings

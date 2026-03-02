@@ -37,3 +37,11 @@ google-genai==1.57.0
 py_vncorenlp==0.1.4
 transformers==4.57.5
 torch==2.9.1
+
+# Vision module dependencies (X-ray classifier)
+torchvision
+torchxrayvision
+scikit-image
+opencv-python
+pyyaml
+scikit-learn
