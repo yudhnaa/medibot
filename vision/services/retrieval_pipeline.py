@@ -50,7 +50,7 @@ def insert_embedding(
 def query_similar(conn, table: str, embedding, k: int = 5):
     with conn.cursor() as cur:
         cur.execute(
-            f"SELECT image_id, label, metadata, embedding <-> %s AS distance FROM {table} ORDER BY embedding <-> %s LIMIT %s",
+            f"SELECT image_id, label, metadata, embedding <-> %s::vector AS distance FROM {table} ORDER BY embedding <-> %s::vector LIMIT %s",
             (embedding, embedding, k),
         )
         rows = cur.fetchall()
