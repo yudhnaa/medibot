@@ -66,3 +66,7 @@ CLAUDE.md
 frontend/
 processed_data/
 tmp/
+
+# media files
+media/
+outputs/
