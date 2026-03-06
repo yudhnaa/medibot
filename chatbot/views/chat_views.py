@@ -21,6 +21,9 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from vision.models import XRayAnalysis
+from vision.services.vision_service import analyze_xray
+
 from chatbot.models import ChatMessage, ChatSession
 from chatbot.serializers import (
     ChatInputSerializer,
@@ -153,11 +156,63 @@ class ChatView(APIView):
         session_id: UUID = validated["session_id"]
         message: str = validated["message"]
         use_stream: bool = validated.get("stream", False)
+        xray_analysis_id: int | None = validated.get("xray_analysis_id")
+        uploaded_image = request.FILES.get("image") or validated.get("image")
 
         logger.info(
-            f"Chat request received. Session: {session_id}, Stream: {use_stream}"
+            f"Chat request received. Session: {session_id}, Stream: {use_stream}, XRay: {xray_analysis_id}, HasImage: {bool(uploaded_image)}"
         )
         logger.debug(f"Request data: {request.data}")
+
+        # --- Inline X-Ray Analysis logic ---
+        if uploaded_image and not xray_analysis_id:
+            import os
+            import tempfile
+            from django.conf import settings
+
+            suffix: str = os.path.splitext(str(uploaded_image.name))[1] or ".png"
+            with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+                for chunk in uploaded_image.chunks():
+                    tmp.write(chunk)
+                tmp_path = tmp.name
+
+            try:
+                result = await sync_to_async(analyze_xray)(
+                    config_path=settings.VISION_CONFIG_PATH,
+                    image_path=tmp_path,
+                    checkpoint_path=settings.VISION_CHECKPOINT_PATH,
+                )
+
+                import base64
+
+                heatmap_b64 = None
+                heatmap_path: str | None = result.get("heatmap_path")  # type: ignore[assignment]
+                if heatmap_path and os.path.isfile(heatmap_path):
+                    with open(heatmap_path, "rb") as f:
+                        heatmap_b64 = base64.b64encode(f.read()).decode("utf-8")
+
+                # Save the analysis to the database
+                analysis = await sync_to_async(XRayAnalysis.objects.create)(
+                    user=request.user,
+                    image=uploaded_image,
+                    class_probs=result["class_probs"],
+                    pred_label=result["pred_label"],
+                    findings=result["findings"],
+                    embedding=result["embedding"],
+                    heatmap_base64=heatmap_b64,
+                )
+                xray_analysis_id = analysis.pk
+                logger.info(f"Generated new XRayAnalysis ID: {xray_analysis_id}")
+            except Exception as e:
+                logger.exception("X-ray analysis failed during chat request")
+                return Response(
+                    {"error": f"Image analysis failed: {str(e)}"},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                )
+            finally:
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+        # --- End X-Ray Analysis logic ---
 
         # Get session
         try:
@@ -183,10 +238,12 @@ class ChatView(APIView):
 
         if use_stream:
             # Return streaming response
-            return self._streaming_response(chatbot, message, session_id)
+            return self._streaming_response(
+                chatbot, message, session_id, xray_analysis_id
+            )
 
         # Regular response (Async)
-        response_text = await chatbot.aquery(message)
+        response_text = await chatbot.aquery(message, xray_analysis_id=xray_analysis_id)
         response_time_ms = int((time.time() - start_time) * 1000)
 
         response_data = {
@@ -205,14 +262,38 @@ class ChatView(APIView):
         )
 
     def _streaming_response(
-        self, chatbot: ChatbotService, message: str, session_id: UUID
+        self,
+        chatbot: ChatbotService,
+        message: str,
+        session_id: UUID,
+        xray_analysis_id: int | None = None,
     ) -> StreamingHttpResponse:
         """Generate a streaming response."""
 
         async def event_stream():
             try:
+                if xray_analysis_id:
+                    import json
+                    from vision.models import XRayAnalysis
+                    from vision.serializers import XRayAnalysisDisplaySerializer
+
+                    try:
+                        analysis_record = await sync_to_async(XRayAnalysis.objects.get)(
+                            id=xray_analysis_id
+                        )
+                        data = await sync_to_async(
+                            lambda: XRayAnalysisDisplaySerializer(analysis_record).data
+                        )()
+                        yield f"event: metadata\ndata: {json.dumps(data)}\n\n"
+                    except Exception as e:
+                        logger.warning(
+                            f"Failed to fetch XRayAnalysis for streaming metadata: {e}"
+                        )
+
                 chunk_count = 0
-                async for chunk in chatbot.astream_response(message):
+                async for chunk in chatbot.astream_response(
+                    message, xray_analysis_id=xray_analysis_id
+                ):
                     chunk_count += 1
                     logger.info(f"Streaming chunk {chunk_count}: {repr(chunk)}")
                     # Format as Server-Sent Event
@@ -240,7 +321,6 @@ class ChatView(APIView):
         )
         response["Cache-Control"] = "no-cache"
         response["X-Accel-Buffering"] = "no"  # Disable nginx buffering
-        response["Connection"] = "keep-alive"
         response["X-Session-Id"] = str(session_id)
         return response
 

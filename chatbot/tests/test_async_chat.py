@@ -63,7 +63,7 @@ class AsyncStreamingTest(SimpleTestCase):
                 # MockServiceCls(session) returns mock_service
 
                 # Define async generator for astream_response
-                async def mock_astream(question):
+                async def mock_astream(question, **kwargs):
                     yield "Part 1"
                     yield "\nPart 2"
 
@@ -90,3 +90,58 @@ class AsyncStreamingTest(SimpleTestCase):
                 # "data: Part 2\n\n"
                 self.assertIn("data: Part 1", full_text)
                 self.assertIn("data: Part 2", full_text)
+
+    async def test_streaming_response_with_xray_analysis_id(self):
+        """Test that xray_analysis_id is passed through to astream_response."""
+        view = ChatView()
+
+        xray_id = 42
+        data = {
+            "session_id": str(self.session_id),
+            "message": "Phân tích ảnh X-quang này",
+            "stream": True,
+            "xray_analysis_id": xray_id,
+        }
+
+        request = self.factory.post(
+            "/chatbot/chat/", data=data, content_type="application/json"
+        )
+        request.user = self.user
+
+        drf_request = DRFRequest(request)
+        drf_request._full_data = data
+
+        with patch("chatbot.views.chat_views.ChatSession") as MockSessionCls:
+            mock_manager = MagicMock()
+            mock_manager.aget = AsyncMock(return_value=self.session)
+            MockSessionCls.objects = mock_manager
+
+            with patch("chatbot.views.chat_views.ChatbotService") as MockServiceCls:
+                mock_service = MockServiceCls.return_value
+
+                captured_kwargs = {}
+
+                async def mock_astream(question, **kwargs):
+                    captured_kwargs.update(kwargs)
+                    yield "X-ray analysis: COVID detected"
+
+                mock_service.astream_response = mock_astream
+
+                response = await view.post(drf_request)
+
+                self.assertEqual(response.status_code, 200)
+                self.assertTrue(response.streaming)
+
+                # Consume content
+                chunks = []
+                if response.streaming_content:
+                    async for chunk in response.streaming_content:
+                        chunks.append(chunk.decode("utf-8"))
+
+                full_text = "".join(chunks)
+
+                # Verify xray_analysis_id was passed through
+                self.assertEqual(captured_kwargs.get("xray_analysis_id"), xray_id)
+
+                # Verify response content
+                self.assertIn("data: X-ray analysis: COVID detected", full_text)

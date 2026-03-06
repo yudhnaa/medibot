@@ -1,6 +1,7 @@
 from django.conf import settings
 from django.db import models
 from typing_extensions import override
+from pgvector.django import VectorField
 
 
 class XRayAnalysis(models.Model):
@@ -29,6 +30,19 @@ class XRayAnalysis(models.Model):
     findings = models.JSONField(
         verbose_name="Findings",
         help_text="Derived findings from heatmap analysis.",
+    )
+    heatmap_base64 = models.TextField(
+        verbose_name="Heatmap Base64",
+        help_text="Base64 encoded PNG of the Grad-CAM heatmap.",
+        null=True,
+        blank=True,
+    )
+    embedding = VectorField(
+        dimensions=1024,
+        verbose_name="Vector Embedding",
+        help_text="1024-dimensional embedding",
+        null=True,
+        blank=True,
     )
     created_at = models.DateTimeField(auto_now_add=True, verbose_name="Created At")
     updated_at = models.DateTimeField(auto_now=True, verbose_name="Updated At")

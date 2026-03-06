@@ -8,6 +8,7 @@ services:
         command: ./docker-entrypoint.sh -- python manage.py runserver 0.0.0.0:8000
         volumes:
             - .:/usr/src/app/
+            - torch_weights:/root/.cache/torch
         ports:
             - 8000:8000
         environment:
@@ -37,6 +38,7 @@ services:
         command: -A django_template worker --beat --scheduler django -l info -E
         volumes:
             - .:/app
+            - torch_weights:/root/.cache/torch
         environment:
             - BROKER_URL=${BROKER_URL}
             - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND}
@@ -61,3 +63,4 @@ services:
 
 volumes:
     django_template_db:
+    torch_weights:

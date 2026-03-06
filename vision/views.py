@@ -32,6 +32,9 @@ from vision.utils import load_config
 logger = logging.getLogger(__name__)
 
 
+from vision.models import XRayAnalysis
+
+
 class AnalyzeView(APIView):
     """POST /api/v1/vision/analyze/
 
@@ -70,7 +73,18 @@ class AnalyzeView(APIView):
                 with open(heatmap_path, "rb") as f:
                     heatmap_b64 = base64.b64encode(f.read()).decode("utf-8")
 
+            # Save the analysis to the database
+            analysis = XRayAnalysis.objects.create(
+                user=request.user,
+                image=uploaded,
+                class_probs=result["class_probs"],
+                pred_label=result["pred_label"],
+                findings=result["findings"],
+                embedding=result["embedding"],
+            )
+
             response_data = {
+                "id": analysis.id,
                 "class_probs": result["class_probs"],
                 "pred_label": result["pred_label"],
                 "findings": result["findings"],

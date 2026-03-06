@@ -81,3 +81,18 @@ HEADER_SINGLE_DISEASE_SUBTITLE = "(Tổng hợp từ cơ sở dữ liệu y khoa
 HEADER_MULTI_DISEASE_ANALYSIS = "PHÂN TÍCH TRUY VẤN (NER & phủ định):"
 HEADER_MULTI_DISEASE_CANDIDATES = "\nCÁC BỆNH CÓ KHẢ NĂNG:"
 HEADER_PATIENT_INFO = "\nTHÔNG TIN BỆNH NHÂN:\n"
+
+# X-Ray context and messages
+HEADER_XRAY_ANALYSIS_START = (
+    "=== KẾT QUẢ PHÂN TÍCH HÌNH ẢNH X-QUANG TỪ NGƯỜI DÙNG ===\n"
+)
+MSG_XRAY_INSTRUCTION = (
+    "Người dùng đã gửi kèm một ảnh X-quang phổi. "
+    "Hệ thống Vision AI đã phân tích ảnh này và đưa ra kết quả sau. "
+    "Hãy sử dụng thông tin này cùng với triệu chứng của người dùng "
+    "để đưa ra phản hồi chính xác nhất.\n\n"
+)
+HEADER_XRAY_PREDICTION = "- Chẩn đoán dự đoán: {pred_label}\n"
+HEADER_XRAY_PROBABILITIES = "- Xác suất các bệnh lý (top 5): {probs_str}\n"
+HEADER_XRAY_FINDINGS = "- Các phát hiện trên ảnh: {findings_str}\n"
+HEADER_XRAY_ANALYSIS_END = "=== HẾT KẾT QUẢ PHÂN TÍCH X-QUANG ===\n\n"

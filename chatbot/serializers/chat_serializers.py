@@ -82,6 +82,15 @@ class ChatMessageSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ["id", "created_at"]
 
+    def to_representation(self, instance):
+        """Clean metadata before sending to frontend."""
+        ret = super().to_representation(instance)
+        metadata = ret.get("metadata")
+        if isinstance(metadata, dict) and "xray_analysis" in metadata:
+            if isinstance(metadata["xray_analysis"], dict):
+                metadata["xray_analysis"].pop("embedding", None)
+        return ret
+
 
 class ChatInputSerializer(serializers.Serializer):
     """Serializer for chat input."""
@@ -89,6 +98,8 @@ class ChatInputSerializer(serializers.Serializer):
     session_id = serializers.UUIDField(required=True)
     message = serializers.CharField(required=True, max_length=10000)
     stream = serializers.BooleanField(default=False, required=False)
+    xray_analysis_id = serializers.IntegerField(required=False, allow_null=True)
+    image = serializers.ImageField(required=False, allow_null=True)
 
 
 class ChatResponseSerializer(serializers.Serializer):
@@ -99,6 +110,15 @@ class ChatResponseSerializer(serializers.Serializer):
     response_time_ms = serializers.IntegerField()
     metadata = serializers.DictField(required=False)
     is_active = serializers.BooleanField(default=True, read_only=True)
+
+    def to_representation(self, instance):
+        """Clean metadata before sending to frontend."""
+        ret = super().to_representation(instance)
+        metadata = ret.get("metadata")
+        if isinstance(metadata, dict) and "xray_analysis" in metadata:
+            if isinstance(metadata["xray_analysis"], dict):
+                metadata["xray_analysis"].pop("embedding", None)
+        return ret
 
 
 class UserIntakeInputSerializer(serializers.Serializer):

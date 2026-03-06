@@ -1,4 +1,4 @@
-from django.contrib.auth.models import User
+from authentication.models import Customer
 from django.test import TestCase
 
 from faker import Faker
@@ -13,7 +13,7 @@ class TestCalls(TestCase):
         cls.password = fake.password()
         cls.username = fake.profile()["username"]
         cls.email = fake.email()
-        cls.customer = User.objects.create_user(
+        cls.customer = Customer.objects.create_user(
             username=cls.username,
             password=cls.password,
             email=cls.email,
@@ -32,9 +32,10 @@ class TestCalls(TestCase):
         )
 
         self.assertEqual(response.status_code, 201)
-        self.assertIn("username", response.json())
-        self.assertIn("email", response.json())
-        self.assertEqual(response.json().get("username"), user_name)
+        data = response.json().get("data", {})
+        self.assertIn("username", data)
+        self.assertIn("email", data)
+        self.assertEqual(data.get("username"), user_name)
 
     def test_call_login(self):
         data = {"username": TestCalls.username, "password": TestCalls.password}
@@ -43,8 +44,9 @@ class TestCalls(TestCase):
             "/api/v1/auth/login/", data, content_type="application/json"
         )
         self.assertEqual(response.status_code, 200)
-        self.assertIn("access", response.json())
-        self.assertIn("refresh", response.json())
+        data = response.json().get("data", {})
+        self.assertIn("access", data)
+        self.assertIn("refresh", data)
 
     def test_call_refresh_token(self):
         refresh = RefreshToken.for_user(TestCalls.customer)
@@ -57,4 +59,5 @@ class TestCalls(TestCase):
         )
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn("access", response.json())
+        data = response.json().get("data", {})
+        self.assertIn("access", data)

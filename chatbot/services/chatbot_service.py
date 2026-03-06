@@ -25,6 +25,8 @@ from chatbot.models import (
     UserIntake,
 )
 from chatbot.prompts.system_vi import SYSTEM_PROMPT_VI
+from vision.models import XRayAnalysis
+from vision.serializers import XRayAnalysisDisplaySerializer
 from chatbot.services.constants import (
     DEFAULT_DOCS_CACHE_SIZE,
     DEFAULT_DOC_PREVIEW_LENGTH,
@@ -278,15 +280,41 @@ class ChatbotService:
             self._save_message(MessageRole.ASSISTANT, error_msg)
             return error_msg
 
-    async def aquery(self, question: str) -> str:
+    async def aquery(self, question: str, xray_analysis_id: int | None = None) -> str:
         """
         Async process a medical question and return response.
         """
         start_time = time.time()
 
         try:
+            # Prepare metadata
+            user_metadata = {}
+            assistant_metadata = {
+                "audit_id": self._last_audit.get("audit_id"),
+                "mode": self._last_audit.get("mode"),
+            }
+
+            if xray_analysis_id:
+                try:
+                    analysis_record = await sync_to_async(XRayAnalysis.objects.get)(
+                        id=xray_analysis_id
+                    )
+                    serialized_data = await sync_to_async(
+                        lambda: XRayAnalysisDisplaySerializer(analysis_record).data
+                    )()
+                    assistant_metadata["xray_analysis"] = serialized_data
+
+                    if analysis_record.image:
+                        user_metadata["attachment"] = analysis_record.image.url
+                except Exception as e:
+                    logger.warning(
+                        f"Failed to load/serialize XRayAnalysis for metadata: {e}"
+                    )
+
             # Save user message
-            await sync_to_async(self._save_message)(MessageRole.USER, question)
+            await sync_to_async(self._save_message)(
+                MessageRole.USER, question, metadata=user_metadata
+            )
 
             # Update intake
             await sync_to_async(self._apply_analysis_to_intake)(question)
@@ -299,6 +327,7 @@ class ChatbotService:
                 {
                     "question": question,
                     "chat_history": chat_history,
+                    "xray_analysis_id": xray_analysis_id,
                 }
             )
 
@@ -309,10 +338,7 @@ class ChatbotService:
                 MessageRole.ASSISTANT,
                 response,
                 response_time_ms=response_time_ms,
-                metadata={
-                    "audit_id": self._last_audit.get("audit_id"),
-                    "mode": self._last_audit.get("mode"),
-                },
+                metadata=assistant_metadata,
             )
 
             logger.info(f"Query processed in {response_time_ms}ms")
@@ -371,18 +397,42 @@ class ChatbotService:
             self._save_message(MessageRole.ASSISTANT, error_msg)
             yield error_msg
 
-    async def astream_response(self, question: str) -> AsyncGenerator[str, None]:
+    async def astream_response(
+        self, question: str, xray_analysis_id: int | None = None
+    ) -> AsyncGenerator[str, None]:
         """
         Async stream response tokens for a question.
 
         Args:
             question: User's question
+            xray_analysis_id: Optional ID of an X-ray analysis to include in context.
 
         Yields:
             Response text chunks
         """
+        xray_analysis_data = None
+        user_metadata = {}
+        if xray_analysis_id:
+            try:
+                analysis_record = await sync_to_async(XRayAnalysis.objects.get)(
+                    id=xray_analysis_id
+                )
+                # Serialize the record for metadata BUT EXCLUDE embedding
+                xray_analysis_data = await sync_to_async(
+                    lambda: XRayAnalysisDisplaySerializer(analysis_record).data
+                )()
+
+                if analysis_record.image:
+                    user_metadata["attachment"] = analysis_record.image.url
+            except Exception as e:
+                logger.warning(
+                    f"Failed to load/serialize XRayAnalysis for context/metadata: {e}"
+                )
+
         # Save user message (DB op -> async)
-        await sync_to_async(self._save_message)(MessageRole.USER, question)
+        await sync_to_async(self._save_message)(
+            MessageRole.USER, question, metadata=user_metadata
+        )
 
         # Update intake (DB/Analysis -> async)
         await sync_to_async(self._apply_analysis_to_intake)(question)
@@ -398,11 +448,20 @@ class ChatbotService:
                 {
                     "question": question,
                     "chat_history": chat_history,
+                    "xray_analysis_id": xray_analysis_id,
                 }
             ):
                 # StrOutputParser always returns str
                 full_response += chunk
                 yield chunk
+
+            # Prepare metadata for assistant message
+            assistant_metadata = {
+                "audit_id": self._last_audit.get("audit_id"),
+                "mode": self._last_audit.get("mode"),
+            }
+            if xray_analysis_data:
+                assistant_metadata["xray_analysis"] = xray_analysis_data
 
             # Save complete response (DB op -> async)
             response_time_ms = int((time.time() - start_time) * 1000)
@@ -410,6 +469,7 @@ class ChatbotService:
                 MessageRole.ASSISTANT,
                 full_response,
                 response_time_ms=response_time_ms,
+                metadata=assistant_metadata,
             )
 
         except Exception as e:
