@@ -28,8 +28,8 @@ class VectorStoreManagerTestCase(TestCase):
 
         # Configure mock embedding service
         self.mock_embedding_service = MagicMock()
-        self.mock_embedding_service.embed_text.return_value = [0.1] * 1024
-        self.mock_embedding_service.embed_documents.return_value = [[0.1] * 1024]
+        self.mock_embedding_service.embed_text.return_value = [0.1] * 768
+        self.mock_embedding_service.embed_documents.return_value = [[0.1] * 768]
         self.mock_embedding_service.get_provider_name.return_value = "mock"
         self.mock_embedding_class.return_value = self.mock_embedding_service
 
@@ -63,7 +63,7 @@ class VectorStoreManagerTestCase(TestCase):
         self.assertEqual(doc.source, "test_source")
         self.assertEqual(doc.metadata, {"key": "value"})
         self.assertIsNotNone(doc.embedding)
-        self.assertEqual(len(doc.embedding), 1024)
+        self.assertEqual(len(doc.embedding), 768)
 
         # Verify embedding service was called
         self.mock_embedding_service.embed_text.assert_called_once_with(
@@ -74,8 +74,8 @@ class VectorStoreManagerTestCase(TestCase):
         """Test that add_documents creates multiple documents in batch."""
         # Configure mock to return multiple embeddings
         self.mock_embedding_service.embed_documents.return_value = [
-            [0.1] * 1024,
-            [0.2] * 1024,
+            [0.1] * 768,
+            [0.2] * 768,
         ]
 
         documents = [
@@ -114,13 +114,13 @@ class VectorStoreManagerTestCase(TestCase):
         """Test that get_stats returns correct document counts."""
         # Create some documents
         MedicalDocument.objects.create(
-            title="A1", content="c", index_type=IndexType.A, embedding=[0.1] * 1024
+            title="A1", content="c", index_type=IndexType.A, embedding=[0.1] * 768
         )
         MedicalDocument.objects.create(
-            title="B1", content="c", index_type=IndexType.B, embedding=[0.1] * 1024
+            title="B1", content="c", index_type=IndexType.B, embedding=[0.1] * 768
         )
         MedicalDocument.objects.create(
-            title="B2", content="c", index_type=IndexType.B, embedding=[0.1] * 1024
+            title="B2", content="c", index_type=IndexType.B, embedding=[0.1] * 768
         )
 
         stats = self.manager.get_stats()
@@ -134,13 +134,13 @@ class VectorStoreManagerTestCase(TestCase):
     def test_clear_index_deletes_documents(self) -> None:
         """Test that clear_index deletes documents of specific index type."""
         MedicalDocument.objects.create(
-            title="A1", content="c", index_type=IndexType.A, embedding=[0.1] * 1024
+            title="A1", content="c", index_type=IndexType.A, embedding=[0.1] * 768
         )
         MedicalDocument.objects.create(
-            title="B1", content="c", index_type=IndexType.B, embedding=[0.1] * 1024
+            title="B1", content="c", index_type=IndexType.B, embedding=[0.1] * 768
         )
         MedicalDocument.objects.create(
-            title="B2", content="c", index_type=IndexType.B, embedding=[0.1] * 1024
+            title="B2", content="c", index_type=IndexType.B, embedding=[0.1] * 768
         )
 
         deleted = self.manager.clear_index(IndexType.B)
@@ -304,7 +304,7 @@ class VectorStoreManagerSearchTestCase(TestCase):
         self.mock_embedding_class = self.embedding_patcher.start()
 
         self.mock_embedding_service = MagicMock()
-        self.mock_embedding_service.embed_text.return_value = [0.1] * 1024
+        self.mock_embedding_service.embed_text.return_value = [0.1] * 768
         self.mock_embedding_service.get_provider_name.return_value = "mock"
         self.mock_embedding_class.return_value = self.mock_embedding_service
 
@@ -316,14 +316,14 @@ class VectorStoreManagerSearchTestCase(TestCase):
             content="symptoms include high fever",
             section_type=SectionType.SYMPTOM,
             index_type=IndexType.B,
-            embedding=[0.1] * 1024,
+            embedding=[0.1] * 768,
         )
         self.doc2 = MedicalDocument.objects.create(
             title="Cold Disease",
             content="symptoms include runny nose",
             section_type=SectionType.SYMPTOM,
             index_type=IndexType.B,
-            embedding=[0.2] * 1024,
+            embedding=[0.2] * 768,
         )
 
     def tearDown(self) -> None:
@@ -350,7 +350,7 @@ class VectorStoreManagerSearchTestCase(TestCase):
             title="Summary",
             content="disease summary",
             index_type=IndexType.A,
-            embedding=[0.15] * 1024,
+            embedding=[0.15] * 768,
         )
 
         try:

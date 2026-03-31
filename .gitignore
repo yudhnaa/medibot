@@ -70,3 +70,5 @@ tmp/
 # media files
 media/
 outputs/
+
+testing/

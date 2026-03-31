@@ -7,6 +7,8 @@ import logging
 import os
 from typing import override
 
+import numpy as np
+
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from pydantic import SecretStr
 
@@ -65,7 +67,14 @@ class GeminiEmbeddingProvider(EmbeddingProvider):
             List of floats representing the embedding vector
         """
         try:
-            return self.embeddings.embed_query(text)
+            raw_embedding = self.embeddings.embed_query(text)
+            # Matryoshka Representation Learning (MRL) truncation to 768d and L2 normalization
+            truncated = raw_embedding[:768]
+            arr = np.array(truncated, dtype=float)
+            norm = np.linalg.norm(arr)
+            if norm > 0:
+                arr = arr / norm
+            return arr.tolist()
         except Exception as e:
             logger.error(f"Error embedding text with Gemini: {e}")
             raise
@@ -82,7 +91,17 @@ class GeminiEmbeddingProvider(EmbeddingProvider):
             List of embedding vectors
         """
         try:
-            return self.embeddings.embed_documents(texts)
+            raw_embeddings = self.embeddings.embed_documents(texts)
+            # Matryoshka Representation Learning (MRL) truncation to 768d and L2 normalization
+            normalized_embeddings = []
+            for emb in raw_embeddings:
+                truncated = emb[:768]
+                arr = np.array(truncated, dtype=float)
+                norm = np.linalg.norm(arr)
+                if norm > 0:
+                    arr = arr / norm
+                normalized_embeddings.append(arr.tolist())
+            return normalized_embeddings
         except Exception as e:
             logger.error(f"Error embedding documents with Gemini: {e}")
             raise

@@ -228,6 +228,7 @@ class ChatbotService:
 
         return RunnableLambda(get_context)
 
+    # TODO: Remove this method
     def query(self, question: str) -> str:
         """
         Process a medical question and return response.
@@ -350,6 +351,7 @@ class ChatbotService:
             await sync_to_async(self._save_message)(MessageRole.ASSISTANT, error_msg)
             return error_msg
 
+    # TODO: Remove this method
     def stream_response(self, question: str) -> Generator[str, None, None]:
         """
         Stream response tokens for a question.

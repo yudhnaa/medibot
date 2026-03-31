@@ -39,9 +39,12 @@ transformers==4.57.5
 torch==2.9.1
 
 # Vision module dependencies (X-ray classifier)
-torchvision
-torchxrayvision
-scikit-image
-opencv-python
-pyyaml
-scikit-learn
+torchvision==0.24.1
+torchxrayvision==1.4.0
+scikit-image==0.26.0
+opencv-python==4.13.0.92
+pyyaml==6.0.3
+scikit-learn==1.8.0
+
+# Data
+datasets==4.8.4
