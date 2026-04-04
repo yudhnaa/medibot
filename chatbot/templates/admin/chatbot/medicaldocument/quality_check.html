@@ -1,0 +1,280 @@
+{% extends "admin/base_site.html" %}
+{% load static %}
+
+{% block title %}Embedding Quality Check - Django Admin{% endblock %}
+
+{% block extrahead %}
+<style>
+    .stats-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        gap: 15px;
+        margin-bottom: 30px;
+    }
+    
+    .stat-card {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        padding: 20px;
+        border-radius: 5px;
+        text-align: center;
+    }
+    
+    .stat-card.success { background: linear-gradient(135deg, #84fab0 0%, #8fd3f4 100%); color: #000; }
+    .stat-card.warning { background: linear-gradient(135deg, #fa709a 0%, #fee140 100%); color: #000; }
+    .stat-card.error { background: linear-gradient(135deg, #ec0c38 0%, #5b4e2f 100%); }
+    
+    .stat-value {
+        font-size: 32px;
+        font-weight: bold;
+        margin-bottom: 5px;
+    }
+    
+    .stat-label {
+        font-size: 14px;
+        opacity: 0.9;
+    }
+    
+    .check-section {
+        background: #f9f9f9;
+        padding: 20px;
+        border-radius: 5px;
+        margin-bottom: 20px;
+        border-left: 4px solid #417690;
+    }
+    
+    .check-section h3 {
+        margin-top: 0;
+        color: #417690;
+    }
+    
+    .issue-item {
+        background: white;
+        padding: 10px;
+        margin-bottom: 10px;
+        border-radius: 3px;
+        border-left: 3px solid #dc3545;
+    }
+    
+    .issue-item:hover {
+        background: #fff5f5;
+    }
+    
+    .issue-count {
+        display: inline-block;
+        background: #dc3545;
+        color: white;
+        padding: 2px 8px;
+        border-radius: 3px;
+        font-weight: bold;
+        margin-right: 10px;
+    }
+    
+    .sample-list {
+        list-style: none;
+        padding: 0;
+    }
+    
+    .sample-list li {
+        padding: 5px 0;
+        font-size: 13px;
+    }
+    
+    .coverage-bar {
+        width: 100%;
+        height: 20px;
+        background: #ddd;
+        border-radius: 3px;
+        overflow: hidden;
+        margin: 10px 0;
+    }
+    
+    .coverage-fill {
+        height: 100%;
+        background: #28a745;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: white;
+        font-size: 12px;
+        font-weight: bold;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div id="content-main">
+    <h1>Embedding Quality Check</h1>
+    
+    <!-- Summary Statistics -->
+    <div class="stats-grid">
+        <div class="stat-card success">
+            <div class="stat-value">{{ stats.total_documents }}</div>
+            <div class="stat-label">Total Documents</div>
+        </div>
+        <div class="stat-card success">
+            <div class="stat-value">{{ stats.with_embeddings }}</div>
+            <div class="stat-label">With Embeddings</div>
+        </div>
+        <div class="stat-card success">
+            <div class="stat-value">{{ stats.coverage_percent|floatformat:1 }}%</div>
+            <div class="stat-label">Coverage</div>
+            <div class="coverage-bar">
+                <div class="coverage-fill" style="width: {{ stats.coverage_percent }}%;">
+                    {{ stats.coverage_percent|floatformat:0 }}%
+                </div>
+            </div>
+        </div>
+        <div class="stat-card error">
+            <div class="stat-value">{{ stats.missing_embeddings }}</div>
+            <div class="stat-label">Missing Embeddings</div>
+        </div>
+        <div class="stat-card warning">
+            <div class="stat-value">{{ stats.duplicate_groups }}</div>
+            <div class="stat-label">Duplicate Groups</div>
+        </div>
+    </div>
+    
+    <!-- Missing Embeddings -->
+    <div class="check-section">
+        <h3>Missing Embeddings ({{ report.missing_embeddings.total }})</h3>
+        {% if report.missing_embeddings.documents %}
+            <p>{{ report.missing_embeddings.total }} document(s) without embeddings</p>
+            <div style="margin-bottom: 10px;">
+                <a href="/admin/chatbot/medicaldocument/" class="button">Fix Missing Embeddings</a>
+            </div>
+            <details>
+                <summary>Show {{ report.missing_embeddings.documents|length }} document(s)</summary>
+                <ul class="sample-list">
+                    {% for doc in report.missing_embeddings.documents %}
+                    <li>
+                        <a href="/admin/chatbot/medicaldocument/{{ doc.id }}/change/">
+                            {{ doc.title|truncatewords:10 }}
+                        </a>
+                        ({{ doc.section_type }})
+                    </li>
+                    {% endfor %}
+                </ul>
+            </details>
+        {% else %}
+            <p style="color: #28a745;">All documents have embeddings</p>
+        {% endif %}
+    </div>
+    
+    <!-- Duplicate Embeddings -->
+    <div class="check-section">
+        <h3>Duplicate Embeddings ({{ report.duplicate_embeddings.count }} groups)</h3>
+        {% if report.duplicate_embeddings.duplicates %}
+            <p>{{ report.duplicate_embeddings.count }} group(s) of duplicate embeddings found</p>
+            <details>
+                <summary>Show groups</summary>
+                {% for group in report.duplicate_embeddings.duplicates %}
+                <div class="issue-item">
+                    <span class="issue-count">{{ group.group_size }}</span>
+                    {{ group.documents|length }} documents with identical embeddings:
+                    <ul class="sample-list">
+                        {% for doc in group.documents %}
+                        <li>
+                            <a href="/admin/chatbot/medicaldocument/{{ doc.id }}/change/">
+                                {{ doc.title|truncatewords:10 }}
+                            </a>
+                        </li>
+                        {% endfor %}
+                    </ul>
+                </div>
+                {% endfor %}
+            </details>
+        {% else %}
+            <p style="color: #28a745;">No duplicate embeddings detected</p>
+        {% endif %}
+    </div>
+    
+    <!-- Embedding Statistics -->
+    <div class="check-section">
+        <h3>Embedding Statistics</h3>
+        {% if report.embedding_stats.stats %}
+            <table style="width: 100%; font-size: 13px;">
+                <tr>
+                    <td><strong>Total with Embeddings:</strong></td>
+                    <td>{{ report.embedding_stats.total_with_embedding }}</td>
+                </tr>
+                <tr>
+                    <td><strong>Dimensions:</strong></td>
+                    <td>{{ report.embedding_stats.stats.dimensions }}</td>
+                </tr>
+                <tr>
+                    <td><strong>Mean Norm:</strong></td>
+                    <td>{{ report.embedding_stats.stats.mean_norm|floatformat:4 }}</td>
+                </tr>
+                <tr>
+                    <td><strong>Std Norm:</strong></td>
+                    <td>{{ report.embedding_stats.stats.std_norm|floatformat:4 }}</td>
+                </tr>
+                <tr>
+                    <td><strong>Min/Max Norm:</strong></td>
+                    <td>{{ report.embedding_stats.stats.min_norm|floatformat:4 }} / {{ report.embedding_stats.stats.max_norm|floatformat:4 }}</td>
+                </tr>
+                <tr>
+                    <td><strong>Median Norm:</strong></td>
+                    <td>{{ report.embedding_stats.stats.median_norm|floatformat:4 }}</td>
+                </tr>
+            </table>
+        {% else %}
+            <p>No embeddings to analyze</p>
+        {% endif %}
+    </div>
+    
+    <!-- Dimension Check -->
+    <div class="check-section">
+        <h3>Dimension Check</h3>
+        <p>Expected dimension: <strong>{{ report.dimension_check.expected_dimension }}</strong></p>
+        {% if report.dimension_check.mismatches %}
+            <div class="issue-item">
+                <strong>Dimension mismatches found:</strong>
+                <ul class="sample-list">
+                    {% for dim, count in report.dimension_check.mismatches.items %}
+                    <li>{{ dim }} dimensions: {{ count }} document(s)</li>
+                    {% endfor %}
+                </ul>
+            </div>
+        {% else %}
+            <p style="color: #28a745;">All embeddings have correct dimension ({{ report.dimension_check.expected_dimension }})</p>
+        {% endif %}
+    </div>
+    
+    <!-- Stale Embeddings -->
+    <div class="check-section">
+        <h3>Stale Embeddings (> {{ report.stale_embeddings.threshold_days }} days)</h3>
+        <p>{{ report.stale_embeddings.total_stale }} document(s) not re-embedded recently</p>
+        {% if report.stale_embeddings.by_provider %}
+            <p><strong>By Provider:</strong></p>
+            <ul class="sample-list">
+                {% for provider, count in report.stale_embeddings.by_provider.items %}
+                <li>{{ provider }}: {{ count }} document(s)</li>
+                {% endfor %}
+            </ul>
+        {% endif %}
+        {% if report.stale_embeddings.sample_documents %}
+            <details>
+                <summary>Show first 20 stale document(s)</summary>
+                <ul class="sample-list">
+                    {% for doc in report.stale_embeddings.sample_documents %}
+                    <li>
+                        <a href="/admin/chatbot/medicaldocument/{{ doc.id }}/change/">
+                            {{ doc.title|truncatewords:15 }}
+                        </a>
+                        ({{ doc.provider }}, last: 
+                        {% if doc.last_reembedded_at %}
+                            {{ doc.last_reembedded_at|date:"Y-m-d H:i" }}
+                        {% else %}
+                            Never
+                        {% endif %}
+                        )
+                    </li>
+                    {% endfor %}
+                </ul>
+            </details>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

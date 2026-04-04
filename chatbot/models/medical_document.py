@@ -55,6 +55,28 @@ class MedicalDocument(models.Model):
         blank=True,
         verbose_name="Metadata",
     )
+    # NEW FIELDS FOR EMBEDDING TRACKING
+    embedding_provider = models.CharField(
+        max_length=50,
+        default="transformers",
+        verbose_name="Embedding Provider",
+        help_text="Provider used to generate this embedding: transformers, gemini, tei",
+    )
+    last_reembedded_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        verbose_name="Last Re-embedded At",
+        help_text="When this document was last re-embedded",
+    )
+    embedding_job = models.ForeignKey(
+        "EmbeddingJob",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="documents",
+        verbose_name="Embedding Job",
+    )
+
     created_at = models.DateTimeField(auto_now_add=True, verbose_name="Created At")
     updated_at = models.DateTimeField(auto_now=True, verbose_name="Updated At")
 
@@ -66,6 +88,8 @@ class MedicalDocument(models.Model):
             models.Index(fields=["title"]),
             models.Index(fields=["section_type"]),
             models.Index(fields=["index_type"]),
+            models.Index(fields=["embedding_provider"]),
+            models.Index(fields=["-last_reembedded_at"]),
             HnswIndex(
                 name="embedding_hnsw_idx",
                 fields=["embedding"],
@@ -78,3 +102,19 @@ class MedicalDocument(models.Model):
     @override
     def __str__(self) -> str:
         return f"{self.title} ({self.section_type})"
+
+    @property
+    def has_embedding(self):
+        return self.embedding is not None
+
+    @property
+    def embedding_dimension(self):
+        return len(self.embedding) if self.embedding else 0
+
+    @property
+    def embedding_norm(self):
+        if not self.embedding:
+            return None
+        import math
+
+        return math.sqrt(sum(x**2 for x in self.embedding))

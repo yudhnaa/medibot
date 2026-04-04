@@ -8,6 +8,8 @@ from chatbot.models.medical_document import (
 )
 from chatbot.models.user_intake import UserIntake
 from chatbot.models.user_preference import ResponseStyle, UserPreference
+from chatbot.models.embedding_job import EmbeddingJob, EmbeddingJobStatus
+from chatbot.models.embedding_audit_log import EmbeddingAuditLog
 
 __all__ = [
     "ChatSession",
@@ -21,4 +23,7 @@ __all__ = [
     "UserPreference",
     "ResponseStyle",
     "UserIntake",
+    "EmbeddingJob",
+    "EmbeddingJobStatus",
+    "EmbeddingAuditLog",
 ]

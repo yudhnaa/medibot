@@ -5,6 +5,7 @@ import os
 
 from celery import shared_task
 
+from chatbot.models import EmbeddingJobStatus
 from vector_store.services.vector_store_manager import VectorStoreManager
 
 logger = logging.getLogger(__name__)
@@ -18,6 +19,7 @@ def process_csv_upload(
     index_types: list[str],  # Changed to list of index types
     source: str = "admin_upload",
     user_id: int | None = None,
+    job_id: int | None = None,
 ):
     """
     Process uploaded CSV file in background with multiple index types.
@@ -33,6 +35,15 @@ def process_csv_upload(
     Returns:
         dict: Processing result with document count and status
     """
+    job = None
+    if job_id is not None:
+        from chatbot.models import EmbeddingJob
+
+        job = EmbeddingJob.objects.filter(id=job_id).first()
+        if job:
+            job.status = EmbeddingJobStatus.PROCESSING
+            job.save(update_fields=["status"])
+
     try:
         logger.info(
             f"Starting CSV processing: {file_path} with provider={embedding_provider}, index_types={index_types}"
@@ -76,6 +87,20 @@ def process_csv_upload(
             f"Successfully processed {len(total_documents)} total documents from {file_path} with {len(index_types)} index type(s)"
         )
 
+        if job:
+            job.status = EmbeddingJobStatus.COMPLETED
+            job.total_documents = len(total_documents)
+            job.successful_documents = len(total_documents)
+            job.failed_documents = 0
+            job.save(
+                update_fields=[
+                    "status",
+                    "total_documents",
+                    "successful_documents",
+                    "failed_documents",
+                ]
+            )
+
         # Clean up temporary file
         try:
             if os.path.exists(file_path):
@@ -96,6 +121,11 @@ def process_csv_upload(
 
     except Exception as exc:
         logger.error(f"Error processing CSV {file_path}: {exc}", exc_info=True)
+
+        if job:
+            job.status = EmbeddingJobStatus.FAILED
+            job.error_messages = [str(exc)]
+            job.save(update_fields=["status", "error_messages"])
 
         # Clean up file on error
         try:

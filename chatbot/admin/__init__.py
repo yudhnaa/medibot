@@ -1,6 +1,9 @@
-from __future__ import annotations
+"""
+Django admin configuration for chatbot app.
+Registers models and configures admin interfaces.
+"""
 
-from typing import Any, cast, override
+from typing import Any, cast
 
 from django.contrib import admin, messages
 from django.http import HttpRequest
@@ -14,10 +17,16 @@ from chatbot.models import (
     ChatSession,
     MedicalDocument,
     UserPreference,
+    EmbeddingJob,
+    EmbeddingAuditLog,
 )
 from chatbot.forms import CsvUploadForm
 from chatbot.tasks import process_csv_upload
-from chatbot.admin.document_admin import MedicalDocumentAdmin
+from chatbot.admin.document_admin import (
+    MedicalDocumentAdmin,
+    EmbeddingJobAdmin,
+    EmbeddingAuditLogAdmin,
+)
 
 
 @admin.register(ChatSession)
@@ -34,12 +43,10 @@ class ChatMessageAdmin(admin.ModelAdmin):
     list_filter = ["role", "created_at"]
 
 
-# MedicalDocumentAdmin, EmbeddingJobAdmin, EmbeddingAuditLogAdmin imported from document_admin module
-# BUT we need to extend MedicalDocumentAdmin here to add CSV upload functionality
+# MedicalDocumentAdmin with CSV upload support
 class ExtendedMedicalDocumentAdmin(MedicalDocumentAdmin):
     """MedicalDocumentAdmin extended with CSV upload."""
 
-    @override
     def get_urls(self):
         """Add custom URL for CSV upload."""
         urls = super().get_urls()
@@ -57,12 +64,14 @@ class ExtendedMedicalDocumentAdmin(MedicalDocumentAdmin):
         Handle CSV file upload for medical documents.
         Only accessible to superusers.
         """
-        from chatbot.models import EmbeddingJob, EmbeddingJobStatus
+        from chatbot.models import EmbeddingJobStatus
 
-        user = cast(Any, request.user)
+        user_obj = cast(Any, request.user)
+        is_superuser = bool(getattr(user_obj, "is_superuser", False))
+        user_pk = getattr(user_obj, "pk", None)
 
         # Check if user is superuser
-        if not user.is_superuser:
+        if not is_superuser:
             messages.error(
                 request,
                 (
@@ -97,11 +106,9 @@ class ExtendedMedicalDocumentAdmin(MedicalDocumentAdmin):
                     job_type="csv_upload",
                     status=EmbeddingJobStatus.PENDING,
                     provider=embedding_provider,
-                    created_by=user,
+                    created_by=user_obj,
                     notes=f"CSV file: {csv_file.name}",
                 )
-
-                job_obj = cast(Any, job)
 
                 # Trigger Celery task for background processing
                 try:
@@ -110,8 +117,8 @@ class ExtendedMedicalDocumentAdmin(MedicalDocumentAdmin):
                         embedding_provider=embedding_provider,
                         index_types=list(index_types),
                         source="admin_upload",
-                        user_id=user.pk,
-                        job_id=job_obj.pk,
+                        user_id=user_pk,
+                        job_id=job.pk,
                     )
 
                     job.celery_task_id = task.id
@@ -121,7 +128,7 @@ class ExtendedMedicalDocumentAdmin(MedicalDocumentAdmin):
                     messages.info(
                         request,
                         (
-                            f"CSV upload started in background (Job #{job_obj.pk}). "
+                            f"CSV upload started in background (Job #{job.pk}). "
                             f"Processing {csv_file.name} with {embedding_provider} provider "
                             f"for index types: {index_types_str}. "
                             f"This may take several minutes. Check Embedding Jobs for progress."
@@ -157,9 +164,10 @@ class ExtendedMedicalDocumentAdmin(MedicalDocumentAdmin):
         )
 
 
-# Unregister the base MedicalDocumentAdmin and register extended version
-admin.site.unregister(MedicalDocument)
+# Register MedicalDocument with extended admin
 admin.site.register(MedicalDocument, ExtendedMedicalDocumentAdmin)
+admin.site.register(EmbeddingJob, EmbeddingJobAdmin)
+admin.site.register(EmbeddingAuditLog, EmbeddingAuditLogAdmin)
 
 
 @admin.register(ChatbotConfig)
