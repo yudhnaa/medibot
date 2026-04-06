@@ -7,6 +7,7 @@ import logging
 import os
 
 import numpy as np
+from pydantic import SecretStr
 
 from langchain_openai import OpenAIEmbeddings
 from typing_extensions import override
@@ -59,16 +60,14 @@ class OpenRouterEmbeddingProvider(EmbeddingProvider):
         try:
             self.embeddings = OpenAIEmbeddings(
                 model=model,
-                api_key=api_key,
+                api_key=SecretStr(api_key),
                 base_url=resolved_base_url,
             )
         except TypeError:
-            # Backward compatibility for older langchain-openai parameter names.
-            self.embeddings = OpenAIEmbeddings(
-                model=model,
-                openai_api_key=api_key,
-                openai_api_base=resolved_base_url,
+            logger.error(
+                "Failed to initialize OpenRouterEmbeddings. Check if the model and base_url are correct."
             )
+            raise
         logger.info(
             "Initialized OpenRouterEmbeddingProvider with model: %s, base_url: %s",
             model,
