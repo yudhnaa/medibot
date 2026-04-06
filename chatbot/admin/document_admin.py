@@ -24,6 +24,7 @@ from chatbot.forms import (
     VectorSearchForm,
     ReembeddingForm,
 )
+from vector_store.services.embedding_service import EmbeddingService
 from vector_store.services.reembed_service import ReembeddingService
 from vector_store.services.quality_service import QualityService
 from vector_store.services.vector_store_manager import VectorStoreManager
@@ -267,12 +268,11 @@ class MedicalDocumentAdmin(admin.ModelAdmin):
             if form.is_valid():
                 query_text = form.cleaned_data["query_text"]
                 k = form.cleaned_data["k"]
-                provider = form.cleaned_data["embedding_provider"]
                 section_types = form.cleaned_data.get("section_types")
                 min_similarity = form.cleaned_data.get("min_similarity", 0.5)
 
                 try:
-                    manager = VectorStoreManager(embedding_provider=provider)
+                    manager = VectorStoreManager()
                     raw_results = []
                     if section_types:
                         for section in section_types:
@@ -378,10 +378,9 @@ class MedicalDocumentAdmin(admin.ModelAdmin):
             form = ReembeddingForm(request.POST)
             if form.is_valid():
                 reembed_type = form.cleaned_data["reembed_type"]
-                target_provider = form.cleaned_data["target_provider"]
                 section_type = form.cleaned_data.get("section_type")
-                current_provider = form.cleaned_data.get("current_provider")
                 run_async = form.cleaned_data["run_async"]
+                configured_provider = EmbeddingService.resolve_provider()
 
                 try:
                     # Determine job type and create job
@@ -389,19 +388,13 @@ class MedicalDocumentAdmin(admin.ModelAdmin):
                         "selected": "reembed_selected",
                         "section": "reembed_section",
                         "missing": "reembed_missing",
-                        "provider_change": "change_provider",
                     }
 
                     job_type = job_type_map[reembed_type]
 
                     job = ReembeddingService.create_job(
                         job_type=job_type,
-                        provider=target_provider,
-                        old_provider=(
-                            current_provider
-                            if isinstance(current_provider, str)
-                            else None
-                        ),
+                        provider=configured_provider,
                         section_type=(
                             section_type if isinstance(section_type, str) else None
                         ),
@@ -426,20 +419,10 @@ class MedicalDocumentAdmin(admin.ModelAdmin):
                         if reembed_type == "section" and isinstance(section_type, str):
                             ReembeddingService.reembed_by_section(
                                 section_type=section_type,
-                                provider=target_provider,
                                 job=job,
                             )
                         elif reembed_type == "missing":
                             ReembeddingService.reembed_missing(
-                                provider=target_provider,
-                                job=job,
-                            )
-                        elif reembed_type == "provider_change" and isinstance(
-                            current_provider, str
-                        ):
-                            ReembeddingService.change_provider(
-                                old_provider=current_provider,
-                                new_provider=target_provider,
                                 job=job,
                             )
 
@@ -521,10 +504,9 @@ class MedicalDocumentAdmin(admin.ModelAdmin):
             data = json.loads(request.body)
             query_text = data.get("query")
             k = int(data.get("k", 5))
-            provider = data.get("provider", "transformers")
             section_type = data.get("section_type")
 
-            manager = VectorStoreManager(embedding_provider=provider)
+            manager = VectorStoreManager()
             docs = manager.search_similar(
                 query=query_text,
                 k=k,

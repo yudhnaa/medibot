@@ -20,7 +20,7 @@ class ReembeddingService:
     @staticmethod
     def create_job(
         job_type: str,
-        provider: str = "transformers",
+        provider: str | None = None,
         old_provider: str | None = None,
         section_type: str | None = None,
         document_ids: list[int] | None = None,
@@ -32,7 +32,7 @@ class ReembeddingService:
 
         Args:
             job_type: Type of job (reembed_selected, reembed_section, etc.)
-            provider: Target embedding provider
+            provider: Target embedding provider (None to use ChatbotConfig)
             old_provider: Previous provider (for provider changes)
             section_type: Section type filter (for section re-embedding)
             document_ids: List of document IDs to process
@@ -42,10 +42,11 @@ class ReembeddingService:
         Returns:
             EmbeddingJob instance
         """
+        resolved_provider = EmbeddingService.resolve_provider(provider)
         job = EmbeddingJob.objects.create(
             job_type=job_type,
             status=EmbeddingJobStatus.PENDING,
-            provider=provider,
+            provider=resolved_provider,
             old_provider=old_provider,
             section_type=section_type,
             document_ids=document_ids or [],
@@ -59,7 +60,7 @@ class ReembeddingService:
     @transaction.atomic
     def reembed_documents(
         document_ids: list[int],
-        provider: str = "transformers",
+        provider: str | None = None,
         job: EmbeddingJob | None = None,
     ) -> dict[str, Any]:
         """
@@ -67,18 +68,19 @@ class ReembeddingService:
 
         Args:
             document_ids: List of document IDs
-            provider: Embedding provider
+            provider: Embedding provider (None to use ChatbotConfig)
             job: EmbeddingJob to update (optional)
 
         Returns:
             Result dict with success/failure counts
         """
+        resolved_provider = EmbeddingService.resolve_provider(provider)
         if job:
             job.status = EmbeddingJobStatus.PROCESSING
             job.total_documents = len(document_ids)
             job.save()
 
-        embedding_service = EmbeddingService(provider=provider)
+        embedding_service = EmbeddingService(provider=resolved_provider)
 
         successful = 0
         failed = 0
@@ -93,7 +95,7 @@ class ReembeddingService:
 
                 # Update document
                 doc.embedding = embedding
-                doc.embedding_provider = provider
+                doc.embedding_provider = resolved_provider
                 doc.last_reembedded_at = timezone.now()
                 doc.embedding_job = job
                 doc.save()
@@ -128,7 +130,7 @@ class ReembeddingService:
     @transaction.atomic
     def reembed_by_section(
         section_type: str,
-        provider: str = "transformers",
+        provider: str | None = None,
         job: EmbeddingJob | None = None,
     ) -> dict[str, Any]:
         """Re-embed all documents of a specific section type."""
@@ -144,7 +146,7 @@ class ReembeddingService:
     @staticmethod
     @transaction.atomic
     def reembed_missing(
-        provider: str = "transformers",
+        provider: str | None = None,
         job: EmbeddingJob | None = None,
     ) -> dict[str, Any]:
         """Re-embed all documents without embeddings."""

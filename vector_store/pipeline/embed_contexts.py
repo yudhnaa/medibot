@@ -9,10 +9,11 @@ embed_contexts.py — Multi-Index COVID-QA Embedding Pipeline.
 All data is stored in the MedicalDocument table (pgvector, 768d).
 
 Embedding is fully abstracted via EmbeddingService — swap the provider
-(gemini / tei / transformers) without touching pipeline logic:
+(gemini / openrouter / tei / transformers) without touching pipeline logic:
 
     from vector_store.pipeline.embed_contexts import embed_contexts
     embed_contexts(provider="gemini")       # default
+    embed_contexts(provider="openrouter")
     embed_contexts(provider="transformers")
     embed_contexts(provider="tei")
 
@@ -49,7 +50,10 @@ from vector_store.pipeline.config import (
     RETRY_WAIT_MAX,
     RETRY_WAIT_MIN,
 )
-from vector_store.pipeline.load_covid_qa import get_unique_contexts, load_covid_qa_dataset
+from vector_store.pipeline.load_covid_qa import (
+    get_unique_contexts,
+    load_covid_qa_dataset,
+)
 from vector_store.services.embedding_service import EmbeddingService
 
 from chatbot.models import MedicalDocument
@@ -551,7 +555,7 @@ def embed_contexts(
 
     Args:
         num_docs:         Number of articles to process (default: NUM_DOCS_TO_PROCESS)
-        provider:         Embedding provider override — "gemini", "tei", "transformers".
+        provider:         Embedding provider override — "gemini", "openrouter", "tei", "transformers".
                           Defaults to EMBEDDING_PROVIDER from ChatbotConfig.
         **provider_kwargs: Additional kwargs forwarded to EmbeddingService / provider
 
@@ -570,7 +574,9 @@ def embed_contexts(
     logger.info("=" * 60)
     logger.info("COVID-QA Multi-Index Embedding Pipeline")
     logger.info(f"Processing {n} articles | Provider: {active_provider}")
-    logger.info(f"Dimensions: {EMBEDDING_DIMENSIONS} | Chunk: {CHUNK_SIZE}/{CHUNK_OVERLAP}")
+    logger.info(
+        f"Dimensions: {EMBEDDING_DIMENSIONS} | Chunk: {CHUNK_SIZE}/{CHUNK_OVERLAP}"
+    )
     logger.info("=" * 60)
 
     # Load unique contexts
@@ -596,10 +602,14 @@ def embed_contexts(
         return {"index_c": 0, "index_a": 0, "index_b": 0}
 
     # Stage 2: Index A
-    index_a_count = stage_2_index_a(contexts, disease_to_contexts, llm, embedding_service)
+    index_a_count = stage_2_index_a(
+        contexts, disease_to_contexts, llm, embedding_service
+    )
 
     # Stage 3: Index B
-    index_b_count = stage_3_index_b(contexts, disease_to_contexts, llm, embedding_service)
+    index_b_count = stage_3_index_b(
+        contexts, disease_to_contexts, llm, embedding_service
+    )
 
     elapsed = time.time() - start_time
     stats = {
@@ -643,7 +653,7 @@ if __name__ == "__main__":
         "--provider",
         type=str,
         default=None,
-        choices=["gemini", "tei", "transformers"],
+        choices=["gemini", "openrouter", "tei", "transformers"],
         help=f"Embedding provider to use (default from ChatbotConfig: {EMBEDDING_PROVIDER})",
     )
     parser.add_argument(

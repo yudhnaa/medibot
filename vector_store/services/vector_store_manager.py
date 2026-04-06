@@ -14,7 +14,6 @@ from django.db import transaction
 import pandas as pd
 
 from chatbot.models import IndexType, MedicalDocument, SectionType
-from vector_store.services.constants import EMBEDDING_PROVIDER_TRANSFORMERS
 from vector_store.services.embedding_service import EmbeddingService
 
 logger = logging.getLogger(__name__)
@@ -28,20 +27,21 @@ class VectorStoreManager:
 
     def __init__(
         self,
-        embedding_provider: str = EMBEDDING_PROVIDER_TRANSFORMERS,
+        embedding_provider: str | None = None,
         batch_size: int = 100,
     ):
         """
         Initialize the Vector Store Manager.
 
         Args:
-            embedding_provider: Provider for embeddings ('gemini', 'tei', 'transformers')
+            embedding_provider: Provider override (None to use ChatbotConfig)
             batch_size: Batch size for bulk operations
         """
         self.embedding_service = EmbeddingService(provider=embedding_provider)
         self.batch_size = batch_size
+        self.embedding_provider = self.embedding_service.get_provider_name()
         logger.info(
-            f"VectorStoreManager initialized with provider: {embedding_provider}"
+            f"VectorStoreManager initialized with provider: {self.embedding_provider}"
         )
 
     # -------------------------
@@ -77,6 +77,7 @@ class VectorStoreManager:
             title=title,
             content=content,
             embedding=embedding,
+            embedding_provider=self.embedding_provider,
             section_type=section_type,
             index_type=index_type,
             source=source,
@@ -114,6 +115,7 @@ class VectorStoreManager:
                         title=doc_data.get("title", ""),
                         content=doc_data["content"],
                         embedding=embedding,
+                        embedding_provider=self.embedding_provider,
                         section_type=doc_data.get("section_type", SectionType.GENERAL),
                         index_type=doc_data.get("index_type", IndexType.B),
                         source=doc_data.get("source", ""),

@@ -5,13 +5,20 @@ Main service for generating text embeddings using different providers.
 
 import logging
 
+from chatbot.models import ChatbotConfig
+
 from vector_store.services.constants import (
+    DEFAULT_EMBEDDING_PROVIDER,
     EMBEDDING_PROVIDER_GEMINI,
+    EMBEDDING_PROVIDER_OPENROUTER,
     EMBEDDING_PROVIDER_TEI,
     EMBEDDING_PROVIDER_TRANSFORMERS,
 )
 from vector_store.services.providers.embedding_interface import EmbeddingProvider
 from vector_store.services.providers.gemini_provider import GeminiEmbeddingProvider
+from vector_store.services.providers.openrouter_provider import (
+    OpenRouterEmbeddingProvider,
+)
 from vector_store.services.providers.tei_provider import TEIEmbeddingProvider
 from vector_store.services.providers.transformers_provider import (
     TransformersEmbeddingProvider,
@@ -23,25 +30,49 @@ logger = logging.getLogger(__name__)
 class EmbeddingService:
     """
     Service for generating text embeddings.
-    Supports multiple providers: gemini, tei, transformers.
+    Supports multiple providers: gemini, openrouter, tei, transformers.
     """
 
     PROVIDERS = {
         EMBEDDING_PROVIDER_GEMINI: GeminiEmbeddingProvider,
+        EMBEDDING_PROVIDER_OPENROUTER: OpenRouterEmbeddingProvider,
         EMBEDDING_PROVIDER_TEI: TEIEmbeddingProvider,
         EMBEDDING_PROVIDER_TRANSFORMERS: TransformersEmbeddingProvider,
     }
 
-    def __init__(
-        self, provider: str = EMBEDDING_PROVIDER_TRANSFORMERS, **kwargs
-    ):  # pyright: ignore[reportUnknownParameterType]
+    @classmethod
+    def resolve_provider(cls, provider: str | None = None) -> str:
+        """Resolve embedding provider from explicit input or ChatbotConfig."""
+        if provider:
+            resolved = provider
+        else:
+            config_provider = ChatbotConfig.get_config(
+                "EMBEDDING_PROVIDER", DEFAULT_EMBEDDING_PROVIDER
+            )
+            resolved = (
+                config_provider
+                if isinstance(config_provider, str)
+                else DEFAULT_EMBEDDING_PROVIDER
+            )
+
+        if resolved not in cls.PROVIDERS:
+            logger.warning(
+                "Invalid EMBEDDING_PROVIDER '%s', falling back to '%s'",
+                resolved,
+                DEFAULT_EMBEDDING_PROVIDER,
+            )
+            return DEFAULT_EMBEDDING_PROVIDER
+        return resolved
+
+    def __init__(self, provider: str | None = None, **kwargs):  # pyright: ignore[reportUnknownParameterType]
         """
         Initialize embedding service with specified provider.
 
         Args:
-            provider: Provider name ('gemini' or 'tei')
+            provider: Provider name override (None to use ChatbotConfig.EMBEDDING_PROVIDER)
             **kwargs: Additional arguments passed to provider initialization
         """
+        provider = self.resolve_provider(provider)
         if provider not in self.PROVIDERS:
             raise ValueError(
                 f"Unknown provider: {provider}. Available: {list(self.PROVIDERS.keys())}"

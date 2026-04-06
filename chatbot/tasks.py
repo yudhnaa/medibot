@@ -5,6 +5,7 @@ import os
 
 from celery import shared_task
 
+from vector_store.services.embedding_service import EmbeddingService
 from chatbot.models import EmbeddingJobStatus
 from vector_store.services.vector_store_manager import VectorStoreManager
 
@@ -15,8 +16,8 @@ logger = logging.getLogger(__name__)
 def process_csv_upload(
     self,
     file_path: str,
-    embedding_provider: str,
     index_types: list[str],  # Changed to list of index types
+    embedding_provider: str | None = None,
     source: str = "admin_upload",
     user_id: int | None = None,
     job_id: int | None = None,
@@ -27,7 +28,7 @@ def process_csv_upload(
     Args:
         self: Celery task instance (for retries)
         file_path: Path to uploaded CSV file
-        embedding_provider: Embedding provider to use (gemini/tei/transformers)
+        embedding_provider: Deprecated provider override (None to use ChatbotConfig)
         index_types: List of index types to create (e.g., ['A', 'B', 'C'])
         source: Source identifier for tracking
         user_id: User ID who initiated upload (for notifications)
@@ -45,12 +46,13 @@ def process_csv_upload(
             job.save(update_fields=["status"])
 
     try:
+        resolved_provider = EmbeddingService.resolve_provider(embedding_provider)
         logger.info(
-            f"Starting CSV processing: {file_path} with provider={embedding_provider}, index_types={index_types}"
+            f"Starting CSV processing: {file_path} with provider={resolved_provider}, index_types={index_types}"
         )
 
-        # Initialize VectorStoreManager with selected provider
-        manager = VectorStoreManager(embedding_provider=embedding_provider)
+        # Initialize VectorStoreManager with resolved provider
+        manager = VectorStoreManager(embedding_provider=resolved_provider)
 
         total_documents = []
 

@@ -9,13 +9,8 @@ These are used by the seed_config management command.
 DEFAULT_RAG_CONFIG: dict[str, float | int] = {
     "RAG_THRESH_C": 0.75,
     "RAG_B_TOPK": 20,
-    "RAG_MERGED_LIMIT": 40,
-    "RAG_MERGE_WEIGHT_ENTITIES": 0.5,
-    "RAG_MERGE_WEIGHT_QUERY": 0.5,
     "RAG_TITLE_TOP_M": 5,
     "RAG_FINAL_TITLES": 5,
-    "RAG_PENALTY_ALPHA": 0.5,
-    "RAG_NEG_SYM_SIM_THRESH": 0.75,
 }
 
 # =============================================================================
@@ -24,34 +19,24 @@ DEFAULT_RAG_CONFIG: dict[str, float | int] = {
 DEFAULT_MODEL_CONFIG: dict[str, str | float | bool | int] = {
     "IS_USE_PAID_GOOGLE_GEMINI_API_KEY": False,
     "LLM_MODEL": "gemini-2.5-flash",
-    "EMBEDDING_PROVIDER": "gemini",  # Active embedding provider: gemini | tei | transformers
+    "EMBEDDING_PROVIDER": "openrouter",  # Active embedding provider: gemini | tei | transformers | openrouter
     "GEMINI_EMBEDDING_MODEL": "models/gemini-embedding-001",
     "TRANSFORMERS_EMBEDDING_MODEL": "Qwen/Qwen3-Embedding-0.6B",
+    "OPENROUTER_EMBEDDING_MODEL": "text-embedding-3-small",
     "TEMPERATURE": 0,
-    "EMBEDDINGS_NORMALIZED": True,
     "VECTOR_DIMENSIONS": 768,
 }
 
 # =============================================================================
 # Rate Limits Configuration
 # =============================================================================
-DEFAULT_RATE_LIMITS: dict[str, bool | int | None] = {
-    "EMBEDDING_RATE_LIMIT_ENABLE": True,
-    "EMBEDDING_RPM": 100,
-    "EMBEDDING_TPM": 30000,
-    "EMBEDDING_RPD": 1000,
-    "PAID_EMBEDDING_RPM": 3000,
-    "PAID_EMBEDDING_TPM": 1000000,
-    "PAID_EMBEDDING_RPD": None,
-}
+DEFAULT_RATE_LIMITS: dict[str, bool | int | None] = {}
 
 # =============================================================================
 # Feature Flags
 # =============================================================================
 DEFAULT_FEATURE_FLAGS: dict[str, bool] = {
     "VNCORENLP_ENABLED": True,
-    "MEDICAL_DISCLAIMER_ENABLED": True,
-    "CHAT_HISTORY_ENABLED": True,
 }
 
 # =============================================================================
@@ -60,7 +45,6 @@ DEFAULT_FEATURE_FLAGS: dict[str, bool] = {
 DEFAULT_PROCESSING_CONFIG: dict[str, int] = {
     "CHUNK_SIZE": 1000,
     "CHUNK_OVERLAP": 200,
-    "BATCH_SIZE": 100,
 }
 
 # =============================================================================

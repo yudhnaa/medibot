@@ -18,6 +18,7 @@ from chatbot.models import (
 from chatbot.forms import CsvUploadForm
 from chatbot.tasks import process_csv_upload
 from chatbot.admin.document_admin import MedicalDocumentAdmin
+from vector_store.services.embedding_service import EmbeddingService
 
 
 @admin.register(ChatSession)
@@ -77,8 +78,8 @@ class ExtendedMedicalDocumentAdmin(MedicalDocumentAdmin):
             if form.is_valid():
                 # Get form data
                 csv_file = form.cleaned_data["csv_file"]
-                embedding_provider = form.cleaned_data["embedding_provider"]
                 index_types = form.cleaned_data["index_types"]  # Now returns a list
+                embedding_provider = EmbeddingService.resolve_provider()
 
                 # Save file to temporary location using absolute path
                 from django.conf import settings
@@ -107,7 +108,6 @@ class ExtendedMedicalDocumentAdmin(MedicalDocumentAdmin):
                 try:
                     task = process_csv_upload.delay(  # pyright: ignore[reportCallIssue]
                         file_path=file_path,
-                        embedding_provider=embedding_provider,
                         index_types=list(index_types),
                         source="admin_upload",
                         user_id=user.pk,

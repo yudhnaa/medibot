@@ -154,26 +154,9 @@
                 {% endif %}
             </div>
             
-            <div class="form-group">
-                <label for="{{ form.target_provider.id_for_label }}">{{ form.target_provider.label }}</label>
-                {{ form.target_provider }}
-                {% if form.target_provider.errors %}
-                    <ul class="errorlist" style="margin-top: 5px;">
-                        {% for error in form.target_provider.errors %}
-                            <li>{{ error }}</li>
-                        {% endfor %}
-                    </ul>
-                {% endif %}
-            </div>
-            
             <div class="form-group" style="display: none;" id="section-type-group">
                 <label for="{{ form.section_type.id_for_label }}">{{ form.section_type.label }}</label>
                 {{ form.section_type }}
-            </div>
-            
-            <div class="form-group" style="display: none;" id="current-provider-group">
-                <label for="{{ form.current_provider.id_for_label }}">{{ form.current_provider.label }}</label>
-                {{ form.current_provider }}
             </div>
             
             <div class="form-group">
@@ -189,7 +172,7 @@
             </div>
             
             <div class="warning-box">
-                <strong>Important:</strong> Re-embedding will generate new embeddings for the selected documents. This operation may take a long time depending on the number of documents and the selected provider.
+                <strong>Important:</strong> Re-embedding will generate new embeddings for the selected documents. This operation may take a long time depending on the number of documents and the configured provider.
             </div>
             
             <div class="checkbox-group">
@@ -279,20 +262,14 @@
 document.addEventListener('DOMContentLoaded', function() {
     const reembedTypeSelect = document.getElementById('id_reembed_type');
     const sectionTypeGroup = document.getElementById('section-type-group');
-    const currentProviderGroup = document.getElementById('current-provider-group');
     
     function updateFormVisibility() {
         const value = reembedTypeSelect.value;
         
         if (value === 'section') {
             sectionTypeGroup.style.display = 'block';
-            currentProviderGroup.style.display = 'none';
-        } else if (value === 'provider_change') {
-            currentProviderGroup.style.display = 'block';
-            sectionTypeGroup.style.display = 'none';
         } else {
             sectionTypeGroup.style.display = 'none';
-            currentProviderGroup.style.display = 'none';
         }
     }
     

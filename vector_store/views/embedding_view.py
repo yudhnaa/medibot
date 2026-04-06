@@ -7,7 +7,6 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from vector_store.serializers import EmbedDocumentsSerializer, EmbedTextSerializer
-from vector_store.services.constants import EMBEDDING_PROVIDER_GEMINI
 from vector_store.services.embedding_service import EmbeddingService
 
 
@@ -20,10 +19,10 @@ class EmbedTextView(APIView):
 
         validated_data = cast(dict[str, Any], serializer.validated_data)
         text = validated_data["text"]
-        provider = validated_data.get("provider", EMBEDDING_PROVIDER_GEMINI)
 
-        embedding_service = EmbeddingService(provider=provider)
+        embedding_service = EmbeddingService()
         embedding = embedding_service.embed_text(text)
+        provider = embedding_service.get_provider_name()
 
         return Response(
             {"embedding": embedding, "provider": provider},
@@ -40,10 +39,10 @@ class EmbedDocumentsView(APIView):
 
         validated_data = cast(dict[str, Any], serializer.validated_data)
         texts = validated_data["texts"]
-        provider = validated_data.get("provider", EMBEDDING_PROVIDER_GEMINI)
 
-        embedding_service = EmbeddingService(provider=provider)
+        embedding_service = EmbeddingService()
         embeddings = embedding_service.embed_documents(texts)
+        provider = embedding_service.get_provider_name()
 
         return Response(
             {"embeddings": embeddings, "count": len(embeddings), "provider": provider},

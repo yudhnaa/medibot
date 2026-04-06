@@ -3,22 +3,11 @@
 from django import forms
 from django.contrib.admin.widgets import FilteredSelectMultiple
 
-from chatbot.models import ChatbotConfig, IndexType, MedicalDocument, SectionType
-from vector_store.services.constants import (
-    EMBEDDING_PROVIDER_GEMINI,
-    EMBEDDING_PROVIDER_TEI,
-    EMBEDDING_PROVIDER_TRANSFORMERS,
-)
+from chatbot.models import IndexType, MedicalDocument, SectionType
 
 
 class CsvUploadForm(forms.Form):
     """Form for uploading CSV files to embed into vector database."""
-
-    PROVIDER_CHOICES = [
-        (EMBEDDING_PROVIDER_TRANSFORMERS, "Transformers (Local)"),
-        (EMBEDDING_PROVIDER_TEI, "TEI (Text Embeddings Inference)"),
-        (EMBEDDING_PROVIDER_GEMINI, "Google Gemini"),
-    ]
 
     csv_file = forms.FileField(
         label="CSV File",
@@ -27,13 +16,6 @@ class CsvUploadForm(forms.Form):
             "Example: processed_data/test_dataset/test_dataset.csv"
         ),
         widget=forms.FileInput(attrs={"accept": ".csv"}),
-    )
-
-    embedding_provider = forms.ChoiceField(
-        label="Embedding Provider",
-        choices=PROVIDER_CHOICES,
-        initial=EMBEDDING_PROVIDER_TRANSFORMERS,
-        help_text="Select the embedding model provider to use for document vectorization.",
     )
 
     index_types = forms.MultipleChoiceField(
@@ -73,17 +55,6 @@ class CsvUploadForm(forms.Form):
 
         return csv_file
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        provider = str(
-            ChatbotConfig.get_config(
-                "EMBEDDING_PROVIDER", EMBEDDING_PROVIDER_TRANSFORMERS
-            )
-        )
-        valid = {choice[0] for choice in self.PROVIDER_CHOICES}
-        if provider in valid:
-            self.fields["embedding_provider"].initial = provider
-
 
 class DocumentEditForm(forms.ModelForm):
     """Form for editing document fields with preview."""
@@ -110,20 +81,7 @@ class DocumentBulkActionForm(forms.Form):
         ("change_index", "Change Index Type"),
     ]
 
-    PROVIDER_CHOICES = [
-        (EMBEDDING_PROVIDER_TRANSFORMERS, "Transformers (Local)"),
-        (EMBEDDING_PROVIDER_GEMINI, "Gemini (Google API)"),
-        (EMBEDDING_PROVIDER_TEI, "TEI (Self-hosted)"),
-    ]
-
     action = forms.ChoiceField(choices=ACTION_CHOICES, label="Action")
-    embedding_provider = forms.ChoiceField(
-        choices=PROVIDER_CHOICES,
-        label="Embedding Provider",
-        required=False,
-        initial=EMBEDDING_PROVIDER_TRANSFORMERS,
-        help_text="Only applies to re-embedding action",
-    )
     new_section_type = forms.ChoiceField(
         choices=SectionType.choices,
         label="New Section Type",
@@ -151,26 +109,9 @@ class DocumentBulkActionForm(forms.Form):
 
         return cleaned_data
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        provider = str(
-            ChatbotConfig.get_config(
-                "EMBEDDING_PROVIDER", EMBEDDING_PROVIDER_TRANSFORMERS
-            )
-        )
-        valid = {choice[0] for choice in self.PROVIDER_CHOICES}
-        if provider in valid:
-            self.fields["embedding_provider"].initial = provider
-
 
 class VectorSearchForm(forms.Form):
     """Form for vector similarity search."""
-
-    PROVIDER_CHOICES = [
-        (EMBEDDING_PROVIDER_TRANSFORMERS, "Transformers (Local)"),
-        (EMBEDDING_PROVIDER_GEMINI, "Gemini (Google API)"),
-        (EMBEDDING_PROVIDER_TEI, "TEI (Self-hosted)"),
-    ]
 
     query_text = forms.CharField(
         label="Search Query",
@@ -197,22 +138,6 @@ class VectorSearchForm(forms.Form):
         required=False,
         help_text="Filter results by minimum cosine similarity",
     )
-    embedding_provider = forms.ChoiceField(
-        choices=PROVIDER_CHOICES,
-        initial=EMBEDDING_PROVIDER_TRANSFORMERS,
-        label="Use Provider",
-    )
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        provider = str(
-            ChatbotConfig.get_config(
-                "EMBEDDING_PROVIDER", EMBEDDING_PROVIDER_TRANSFORMERS
-            )
-        )
-        valid = {choice[0] for choice in self.PROVIDER_CHOICES}
-        if provider in valid:
-            self.fields["embedding_provider"].initial = provider
 
 
 class ReembeddingForm(forms.Form):
@@ -222,35 +147,17 @@ class ReembeddingForm(forms.Form):
         ("selected", "Re-embed Selected Documents"),
         ("section", "Re-embed by Section Type"),
         ("missing", "Re-embed Missing Embeddings"),
-        ("provider_change", "Change Embedding Provider"),
-    ]
-
-    PROVIDER_CHOICES = [
-        (EMBEDDING_PROVIDER_TRANSFORMERS, "Transformers (Local)"),
-        (EMBEDDING_PROVIDER_GEMINI, "Gemini (Google API)"),
-        (EMBEDDING_PROVIDER_TEI, "TEI (Self-hosted)"),
     ]
 
     reembed_type = forms.ChoiceField(
         choices=REEMBED_TYPE_CHOICES,
         label="Re-embedding Type",
     )
-    target_provider = forms.ChoiceField(
-        choices=PROVIDER_CHOICES,
-        label="Target Embedding Provider",
-        initial=EMBEDDING_PROVIDER_TRANSFORMERS,
-    )
     section_type = forms.ChoiceField(
         choices=SectionType.choices,
         label="Section Type",
         required=False,
         help_text="Only applies to 'by section' re-embedding",
-    )
-    current_provider = forms.ChoiceField(
-        choices=PROVIDER_CHOICES,
-        label="Current Provider",
-        required=False,
-        help_text="Only applies to provider change",
     )
     batch_size = forms.IntegerField(
         initial=100,
@@ -273,14 +180,3 @@ class ReembeddingForm(forms.Form):
         if not cleaned_data.get("confirm"):
             raise forms.ValidationError("You must confirm to start re-embedding.")
         return cleaned_data
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        provider = str(
-            ChatbotConfig.get_config(
-                "EMBEDDING_PROVIDER", EMBEDDING_PROVIDER_TRANSFORMERS
-            )
-        )
-        valid = {choice[0] for choice in self.PROVIDER_CHOICES}
-        if provider in valid:
-            self.fields["target_provider"].initial = provider

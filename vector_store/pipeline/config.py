@@ -47,23 +47,24 @@ if not GOOGLE_API_KEY:
 # ============================================================================
 # Import after Django setup so the ORM is available.
 from chatbot.models import ChatbotConfig  # noqa: E402
+from vector_store.services.constants import DEFAULT_EMBEDDING_PROVIDER  # noqa: E402
 
 # Embedding vector size — must match VectorField(dimensions=?) in MedicalDocument.
 EMBEDDING_DIMENSIONS: int = int(
-    ChatbotConfig.get_config("VECTOR_DIMENSIONS", 768)  # ty:ignore[invalid-argument-type]
+    ChatbotConfig.get_config("VECTOR_DIMENSIONS", 768)  # ty:ignore[invalid-argument-type] # type: ignore
 )
 
 # Text splitting settings.
 CHUNK_SIZE: int = int(
-    ChatbotConfig.get_config("CHUNK_SIZE", 1000)  # ty:ignore[invalid-argument-type]
+    ChatbotConfig.get_config("CHUNK_SIZE", 1000)  # ty:ignore[invalid-argument-type] # type: ignore
 )
 CHUNK_OVERLAP: int = int(
-    ChatbotConfig.get_config("CHUNK_OVERLAP", 200)  # ty:ignore[invalid-argument-type]
+    ChatbotConfig.get_config("CHUNK_OVERLAP", 200)  # ty:ignore[invalid-argument-type] # type: ignore
 )
 
 # Default embedding provider — which backend to use when embed_contexts() is called
 EMBEDDING_PROVIDER: str = str(
-    ChatbotConfig.get_config("EMBEDDING_PROVIDER", "gemini")  # type: ignore[arg-type]
+    ChatbotConfig.get_config("EMBEDDING_PROVIDER", DEFAULT_EMBEDDING_PROVIDER)  # type: ignore[arg-type]
 )
 
 # ============================================================================
