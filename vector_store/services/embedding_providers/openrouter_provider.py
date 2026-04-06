@@ -19,7 +19,9 @@ from vector_store.services.constants import (
     OPENROUTER_API_KEY_ENV_NAME,
     OPENROUTER_BASE_URL_ENV_NAME,
 )
-from vector_store.services.providers.embedding_interface import EmbeddingProvider
+from vector_store.services.embedding_providers.embedding_interface import (
+    EmbeddingProvider,
+)
 
 logger = logging.getLogger(__name__)
 

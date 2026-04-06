@@ -16,7 +16,9 @@ from vector_store.services.constants import (
     DEFAULT_TRANSFORMERS_INSTRUCTION,
     DEFAULT_TRANSFORMERS_MODEL,
 )
-from vector_store.services.providers.embedding_interface import EmbeddingProvider
+from vector_store.services.embedding_providers.embedding_interface import (
+    EmbeddingProvider,
+)
 
 logger = logging.getLogger(__name__)
 

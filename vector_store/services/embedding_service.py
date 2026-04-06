@@ -14,13 +14,17 @@ from vector_store.services.constants import (
     EMBEDDING_PROVIDER_TEI,
     EMBEDDING_PROVIDER_TRANSFORMERS,
 )
-from vector_store.services.providers.embedding_interface import EmbeddingProvider
-from vector_store.services.providers.gemini_provider import GeminiEmbeddingProvider
-from vector_store.services.providers.openrouter_provider import (
+from vector_store.services.embedding_providers.embedding_interface import (
+    EmbeddingProvider,
+)
+from vector_store.services.embedding_providers.gemini_provider import (
+    GeminiEmbeddingProvider,
+)
+from vector_store.services.embedding_providers.openrouter_provider import (
     OpenRouterEmbeddingProvider,
 )
-from vector_store.services.providers.tei_provider import TEIEmbeddingProvider
-from vector_store.services.providers.transformers_provider import (
+from vector_store.services.embedding_providers.tei_provider import TEIEmbeddingProvider
+from vector_store.services.embedding_providers.transformers_provider import (
     TransformersEmbeddingProvider,
 )
 

@@ -12,7 +12,9 @@ from vector_store.services.constants import (
     TEI_EMBEDDING_ENDPOINT_SUFFIX,
     TEI_ENDPOINT_ENV_NAME,
 )
-from vector_store.services.providers.embedding_interface import EmbeddingProvider
+from vector_store.services.embedding_providers.embedding_interface import (
+    EmbeddingProvider,
+)
 
 logger = logging.getLogger(__name__)
 
