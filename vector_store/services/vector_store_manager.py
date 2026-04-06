@@ -4,9 +4,7 @@ Service for managing vector storage operations using pgvector (PostgreSQL).
 Integrates with EmbeddingService and MedicalDocument model.
 """
 
-import ast
 import logging
-import re
 from typing import Any
 
 from django.db import transaction
@@ -15,6 +13,9 @@ import pandas as pd
 
 from chatbot.models import IndexType, MedicalDocument, SectionType
 from vector_store.services.embedding_service import EmbeddingService
+from vector_store.services.embedding_docs_pipeline.csv_pipeline import (
+    CSVEmbeddingPipeline,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +44,10 @@ class VectorStoreManager:
         logger.info(
             f"VectorStoreManager initialized with provider: {self.embedding_provider}"
         )
+
+    def _csv_pipeline(self) -> CSVEmbeddingPipeline:
+        """Create a CSV pipeline instance using the same provider as the manager."""
+        return CSVEmbeddingPipeline(self.embedding_provider)
 
     # -------------------------
     # Document Operations
@@ -191,129 +196,31 @@ class VectorStoreManager:
 
     def _safe_parse_list(self, value: Any) -> list[str]:
         """Safely parse a Python list serialized as a string."""
-        if not value:
-            return []
-        if not isinstance(value, str):
-            return []
-        try:
-            parsed = ast.literal_eval(value)
-            if isinstance(parsed, list):
-                return [
-                    str(x).strip() for x in parsed if isinstance(x, (str, int, float))
-                ]
-            return []
-        except Exception:
-            return [s.strip() for s in value.split(",") if s.strip()]
+        return self._csv_pipeline()._safe_parse_list(value)
 
     def _split_sentences(self, text: str) -> list[str]:
         """Simple sentence splitter for Vietnamese text."""
-        if not text:
-            return []
-        text = " ".join(str(text).strip().split())
-        parts = re.split(r"([.!?]+)\s+", text)
-        sentences: list[str] = []
-        for i in range(0, len(parts), 2):
-            sent = parts[i]
-            punct = parts[i + 1] if i + 1 < len(parts) else ""
-            full = (sent + punct).strip()
-            if full:
-                sentences.append(full)
-        return sentences
+        return self._csv_pipeline()._split_sentences(text)
 
     def create_document_content(self, section: str, row: pd.Series) -> str | None:
         """Create content for a specific section of the medical CSV row."""
-        if section not in row:
-            return None
-        val = row[section]
-        # Check for NaN/empty - use explicit bool conversion for scalar check
-        try:
-            is_na = (
-                bool(pd.isna(val))
-                if not hasattr(val, "__len__") or isinstance(val, str)
-                else False
-            )
-            if is_na:
-                return None
-        except (TypeError, ValueError):
-            pass
-        if not str(val).strip():
-            return None
-
-        try:
-            if section != "general":
-                items = self._safe_parse_list(val)
-                content = ", ".join(item.strip() for item in items)
-                return content if content else None
-            else:
-                content = str(val).strip()
-                return content if content else None
-        except Exception as e:
-            logger.warning(f"Failed to parse section {section}: {e}")
-            return None
+        return self._csv_pipeline().create_document_content(section, row)
 
     def _extract_items_from_value(self, val: Any, k: int = 3) -> list[str]:
         """Extract up to k items from a cell value (list string or comma-separated)."""
-        if val is None or (isinstance(val, float) and pd.isna(val)):
-            return []
-        s = str(val).strip()
-        if not s or s.lower() in {"[]", "none", "null", "nan"}:
-            return []
-        return self._parse_items_string(s, k)
+        return self._csv_pipeline()._extract_items_from_value(val, k)
 
     def _parse_items_string(self, s: str, k: int) -> list[str]:
         """Parse a string that may be a Python list literal or comma-separated values."""
-        try:
-            if s.startswith("[") and s.endswith("]"):
-                obj = ast.literal_eval(s)
-                if isinstance(obj, list):
-                    return [str(x).strip() for x in obj[:k] if str(x).strip()]
-        except Exception:
-            pass
-        items = []
-        for part in re.split(r"[,;•·\n]+", s):
-            item = part.strip(" \t-•·")
-            if item and len(items) < k:
-                items.append(item)
-        return items[:k]
+        return self._csv_pipeline()._parse_items_string(s, k)
 
     def _build_summary_parts(self, row: pd.Series) -> list[str]:
         """Build the list of summary parts from row data."""
-        parts = []
-        title = str(row.get("title", "")).strip()
-        general = str(row.get("general", "")).strip()
-
-        if title:
-            parts.append(title)
-
-        general_sents = self._split_sentences(general)
-        if general_sents:
-            parts.append(general_sents[0])
-
-        sections = [
-            ("symptom", "triệu chứng"),
-            ("aetiologies", "nguyên nhân"),
-            ("risk", "yếu tố nguy cơ"),
-            ("diagnose_and_treaty", "chẩn đoán và điều trị"),
-            ("living_and_preventive", "sinh hoạt và phòng ngừa"),
-        ]
-        for section, section_vn in sections:
-            items = self._extract_items_from_value(row.get(section), k=3)
-            if items:
-                parts.append(f"{section_vn}: {', '.join(items)}")
-
-        return parts
+        return self._csv_pipeline()._build_summary_parts(row)
 
     def _build_index_a_summary(self, row: pd.Series) -> str | None:
         """Construct disease-level summary for Index A."""
-        title = str(row.get("title", "")).strip()
-        general = str(row.get("general", "")).strip()
-
-        if not title and not general:
-            return None
-
-        parts = self._build_summary_parts(row)
-        summary = "\n".join(parts).strip()
-        return summary if summary else None
+        return self._csv_pipeline().build_index_a_summary(row)
 
     def process_csv_to_documents(
         self,
@@ -332,86 +239,11 @@ class VectorStoreManager:
         Returns:
             List of document dictionaries ready for add_documents()
         """
-        documents: list[dict[str, Any]] = []
-        df = pd.read_csv(csv_path)
-
-        if index_type == "A":
-            # Index A: disease-level summary
-            for idx, row in df.iterrows():
-                content = self._build_index_a_summary(row)
-                if content:
-                    documents.append(
-                        {
-                            "content": content.lower(),
-                            "title": str(row.get("title", "")).strip().lower(),
-                            "section_type": SectionType.GENERAL,
-                            "index_type": IndexType.A,
-                            "source": source.lower(),
-                            "metadata": {
-                                "row_index": idx,
-                                "url": str(row.get("url", "")).lower(),
-                            },
-                        }
-                    )
-
-        elif index_type == "C":
-            # Index C: title-only
-            for idx, row in df.iterrows():
-                title = str(row.get("title", "")).strip()
-                if title:
-                    documents.append(
-                        {
-                            "content": title.lower(),
-                            "title": title.lower(),
-                            "section_type": SectionType.GENERAL,
-                            "index_type": IndexType.C,
-                            "source": source.lower(),
-                            "metadata": {
-                                "row_index": idx,
-                                "url": str(row.get("url", "")).lower(),
-                            },
-                        }
-                    )
-
-        else:
-            # Index B: per-section documents
-            sections = [
-                "symptom",
-                "aetiologies",
-                "diagnose_and_treaty",
-                "risk",
-                "living_and_preventive",
-                "general",
-            ]
-            section_map = {
-                "symptom": SectionType.SYMPTOM,
-                "aetiologies": SectionType.AETIOLOGIES,
-                "diagnose_and_treaty": SectionType.DIAGNOSE_AND_TREATY,
-                "risk": SectionType.RISK,
-                "living_and_preventive": SectionType.LIVING_AND_PREVENTIVE,
-                "general": SectionType.GENERAL,
-            }
-
-            for idx, row in df.iterrows():
-                for section in sections:
-                    content = self.create_document_content(section, row)
-                    if content:
-                        documents.append(
-                            {
-                                "content": content.strip().lower(),
-                                "title": str(row.get("title", "")).strip().lower(),
-                                "section_type": section_map.get(
-                                    section, SectionType.GENERAL
-                                ),
-                                "index_type": IndexType.B,
-                                "source": source.lower(),
-                                "metadata": {
-                                    "row_index": idx,
-                                    "url": str(row.get("url", "")).lower(),
-                                },
-                            }
-                        )
-
+        documents = self._csv_pipeline().build_documents_from_csv(
+            csv_path=csv_path,
+            source=source,
+            index_type=index_type,
+        )
         logger.info(f"Processed {len(documents)} documents from {csv_path}")
         return documents
 
