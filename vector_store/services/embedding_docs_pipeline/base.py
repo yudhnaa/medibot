@@ -6,7 +6,9 @@ import json
 import logging
 import time
 from abc import ABC, abstractmethod
+from typing import Any
 
+from django.core.exceptions import SynchronousOnlyOperation
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from pydantic import SecretStr
@@ -19,11 +21,13 @@ from tenacity import (
 from tqdm import tqdm
 
 from chatbot.models import MedicalDocument
+from chatbot.models.chatbot_config import ChatbotConfig
 from chatbot.models.medical_document import IndexType, SectionType
 from vector_store.services.embedding_docs_pipeline.constants import (
     CHUNK_OVERLAP,
     CHUNK_SIZE,
     DOCUMENT_SOURCE_TAG,
+    EMBEDDING_DIMENSIONS,
     EMBEDDING_PROVIDER,
     EMBEDDING_SLEEP_SECONDS,
     GOOGLE_API_KEY,
@@ -50,12 +54,39 @@ class BaseEmbeddingPipeline(ABC):
         embedding_provider: str | None = None,
         **provider_kwargs,
     ) -> None:
-        self.embedding_provider = embedding_provider or EMBEDDING_PROVIDER
+        self.embedding_dimensions = int(
+            self.get_runtime_config("VECTOR_DIMENSIONS", EMBEDDING_DIMENSIONS)
+        )
+        self.chunk_size = int(self.get_runtime_config("CHUNK_SIZE", CHUNK_SIZE))
+        self.chunk_overlap = int(
+            self.get_runtime_config("CHUNK_OVERLAP", CHUNK_OVERLAP)
+        )
+        self.embedding_provider = embedding_provider or str(
+            self.get_runtime_config("EMBEDDING_PROVIDER", EMBEDDING_PROVIDER)
+        )
         self.provider_kwargs = provider_kwargs
         self.embedding_service = self.create_embedding_service(
             self.embedding_provider, **provider_kwargs
         )
         self.llm = self.create_llm()
+
+    def get_runtime_config(self, key: str, default: Any) -> Any:
+        """Read config from DB at runtime with safe fallback for async startup."""
+        try:
+            return ChatbotConfig.get_config(key, default)
+        except SynchronousOnlyOperation:
+            logger.warning(
+                "Skipping DB config lookup for %s in async context; using default.",
+                key,
+            )
+            return default
+        except Exception as exc:
+            logger.warning(
+                "Failed to load config %s from DB (%s); using default.",
+                key,
+                exc,
+            )
+            return default
 
     def create_llm(self) -> ChatGoogleGenerativeAI:
         """Create LLM instance for extraction tasks."""
@@ -501,8 +532,8 @@ class BaseEmbeddingPipeline(ABC):
         logger.info("%s", "=" * 60)
 
         splitter = RecursiveCharacterTextSplitter(
-            chunk_size=CHUNK_SIZE,
-            chunk_overlap=CHUNK_OVERLAP,
+            chunk_size=self.chunk_size,
+            chunk_overlap=self.chunk_overlap,
             separators=["\n\n", "\n", ". ", ", ", " ", ""],
         )
 

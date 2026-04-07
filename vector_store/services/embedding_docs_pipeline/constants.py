@@ -5,7 +5,6 @@ Shared constants for the COVID-QA embedding pipeline.
 import os
 from typing import cast
 
-from chatbot.models import ChatbotConfig
 from chatbot.models.medical_document import SectionType
 from django.conf import settings
 from vector_store.services.constants import DEFAULT_EMBEDDING_PROVIDER
@@ -144,13 +143,11 @@ DOCUMENT_SOURCE_TAG: str = "covid_qa_deepset"
 
 GOOGLE_API_KEY = cast(str, getattr(settings, "GOOGLE_API_KEY", ""))
 
-EMBEDDING_DIMENSIONS: int = cast(
-    int, ChatbotConfig.get_config("VECTOR_DIMENSIONS", 768)
-)
-CHUNK_SIZE: int = cast(int, ChatbotConfig.get_config("CHUNK_SIZE", 1000))
-CHUNK_OVERLAP: int = cast(int, ChatbotConfig.get_config("CHUNK_OVERLAP", 200))
+EMBEDDING_DIMENSIONS: int = cast(int, getattr(settings, "VECTOR_DIMENSIONS", 768))
+CHUNK_SIZE: int = cast(int, getattr(settings, "CHUNK_SIZE", 1000))
+CHUNK_OVERLAP: int = cast(int, getattr(settings, "CHUNK_OVERLAP", 200))
 EMBEDDING_PROVIDER: str = str(
-    ChatbotConfig.get_config("EMBEDDING_PROVIDER", DEFAULT_EMBEDDING_PROVIDER)
+    getattr(settings, "EMBEDDING_PROVIDER", DEFAULT_EMBEDDING_PROVIDER)
 )
 
 SECTION_TYPE_MAP = {

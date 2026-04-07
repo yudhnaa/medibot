@@ -149,4 +149,4 @@ if __name__ == "__main__":
         print(f"  Q: {qa[0]['question']}")
         print(f"  A: {qa[0]['answer']}")
 
-    print("\n✅ Dataset inspection complete!")
+    print("\nDataset inspection complete!")
