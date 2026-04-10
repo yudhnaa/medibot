@@ -28,15 +28,25 @@ from chatbot.prompts.system_vi import SYSTEM_PROMPT_VI
 from vision.models import XRayAnalysis
 from vision.serializers import XRayAnalysisDisplaySerializer
 from chatbot.services.constants import (
+    DEFAULT_RAG_A_ANSWER_MIN,
+    DEFAULT_RAG_A_EVIDENCE_MIN,
+    DEFAULT_RAG_A_TOPK,
+    DEFAULT_RAG_B_TOPK_ENRICH,
+    DEFAULT_RAG_B_TOPK_FALLBACK,
+    DEFAULT_RAG_C_HIGH,
+    DEFAULT_RAG_C_LOW,
+    DEFAULT_RAG_C_MARGIN,
+    DEFAULT_RAG_C_TOPK,
     DEFAULT_DOCS_CACHE_SIZE,
     DEFAULT_DOC_PREVIEW_LENGTH,
     DEFAULT_INDEX_B_K,
     DEFAULT_RAG_B_TOPK,
     DEFAULT_RAG_FINAL_TITLES,
-    DEFAULT_RAG_THRESH_C,
     DEFAULT_RAG_TITLE_TOP_M,
     DEFAULT_SECTION_ITEMS_LIMIT,
     DEFAULT_SINGLE_DISEASE_DOCS_K,
+    HEADER_EVIDENCE_BLOCK,
+    HEADER_FAQ_MATCH,
     HEADER_MULTI_DISEASE_ANALYSIS,
     HEADER_MULTI_DISEASE_CANDIDATES,
     HEADER_PATIENT_INFO,
@@ -180,23 +190,47 @@ class ChatbotService:
 
         try:
             analysis = await sync_to_async(self._analyze_query)(question)
+            intent_info = self._detect_query_intent(question, analysis)
+            analysis["intent"] = intent_info.get("primary")
+            analysis["intent_confidence"] = intent_info.get("confidence")
+            analysis["intent_secondary"] = intent_info.get("secondary", [])
 
-            gate = await sync_to_async(self._gate_with_index_c)(question)
+            gate = await sync_to_async(self._gate_with_index_c)(
+                question,
+                cast(str, analysis.get("intent", "")),
+            )
 
             if gate.get("go_single") and gate.get("title"):
                 title = gate.get("title", "")
-                docs = await sync_to_async(self._fetch_docs_for_title)(
-                    title, index="B", k=DEFAULT_SINGLE_DISEASE_DOCS_K
+                faq_hit = await sync_to_async(self._faq_retrieval_index_a)(
+                    question, gate, analysis
                 )
-                context = self._build_single_disease_context(title, docs)
+                evidence_docs = await sync_to_async(self._evidence_retrieval_index_b)(
+                    question,
+                    gate,
+                    analysis,
+                    faq_hit=faq_hit,
+                )
+                if faq_hit.get("accepted"):
+                    context = self._build_faq_context(title, faq_hit, evidence_docs)
+                else:
+                    docs = evidence_docs or await sync_to_async(self._fetch_docs_for_title)(
+                        title, index="B", k=DEFAULT_SINGLE_DISEASE_DOCS_K
+                    )
+                    context = self._build_single_disease_context(title, docs)
+                    evidence_docs = docs
 
-                self._last_docs_cache = docs[:DEFAULT_DOCS_CACHE_SIZE]
+                self._last_docs_cache = evidence_docs[:DEFAULT_DOCS_CACHE_SIZE]
                 self._last_audit = {
                     "audit_id": audit_id,
                     "ts": time.time(),
-                    "mode": "single-disease",
+                    "mode": "single-disease-cab",
                     "title": title,
-                    "doc_count": len(docs),
+                    "intent": gate.get("intent", ""),
+                    "router_score": gate.get("top_score", 0.0),
+                    "route_margin": gate.get("route_margin", 0.0),
+                    "faq_score": faq_hit.get("score", 0.0),
+                    "doc_count": len(evidence_docs),
                 }
             else:
                 tier_result = await sync_to_async(self._multi_disease_retrieval)(analysis)
@@ -594,50 +628,151 @@ class ChatbotService:
                         seen.add(syn)
         return out
 
-    def _gate_with_index_c(
-        self, question: str, threshold: float | None = None
+    def _detect_query_intent(
+        self, question: str, analysis: dict[str, Any]
     ) -> dict[str, Any]:
-        """Index-C gate to decide single vs multi-disease mode."""
-        config_thresh_raw = ChatbotConfig.get_config(
-            "RAG_THRESH_C", DEFAULT_RAG_THRESH_C
+        """Infer primary/secondary intent from question and extracted entities."""
+        text = str(question or "").lower()
+        positives = analysis.get("positives", {}) or {}
+
+        intent_rules: dict[str, list[str]] = {
+            "symptom": ["triệu chứng", "dấu hiệu", "symptom", "biểu hiện"],
+            "cause_transmission": ["nguyên nhân", "lây", "transmission", "etiolog", "cause"],
+            "risk_factor": ["nguy cơ", "risk", "rủi ro", "risk factor"],
+            "diagnosis_treatment": [
+                "chẩn đoán",
+                "điều trị",
+                "thuốc",
+                "xét nghiệm",
+                "diagnos",
+                "treatment",
+                "therapy",
+            ],
+            "prevention_lifestyle": [
+                "phòng ngừa",
+                "phòng bệnh",
+                "vaccine",
+                "prevent",
+                "lifestyle",
+            ],
+            "prognosis_complication": ["biến chứng", "tiên lượng", "prognosis", "complication"],
+            "epidemiology": ["dịch tễ", "prevalence", "incidence", "outbreak", "pandemic"],
+            "definition_overview": ["là gì", "what is", "định nghĩa", "overview"],
+        }
+
+        score_by_intent: dict[str, float] = {intent: 0.0 for intent in intent_rules}
+        for intent, keywords in intent_rules.items():
+            if any(keyword in text for keyword in keywords):
+                score_by_intent[intent] += 1.0
+
+        if positives.get("SYMPTOM"):
+            score_by_intent["symptom"] += 0.5
+        if positives.get("ETIOLOGY"):
+            score_by_intent["cause_transmission"] += 0.5
+        if positives.get("RISK"):
+            score_by_intent["risk_factor"] += 0.5
+
+        ranked = sorted(score_by_intent.items(), key=lambda kv: kv[1], reverse=True)
+        primary, primary_score = ranked[0]
+        secondary = [intent for intent, score in ranked[1:] if score > 0.0][:2]
+        confidence = 0.9 if primary_score >= 1.5 else (0.7 if primary_score >= 1.0 else 0.55)
+        if primary_score <= 0.0:
+            primary = "other_medical"
+            confidence = 0.5
+            secondary = []
+
+        return {
+            "primary": primary,
+            "secondary": secondary,
+            "confidence": confidence,
+        }
+
+    def _gate_with_index_c(
+        self,
+        question: str,
+        query_intent: str | None = None,
+        threshold: float | None = None,
+    ) -> dict[str, Any]:
+        """Index-C router/gate with top-k + margin for disease+intent."""
+        c_topk = int(ChatbotConfig.get_config("RAG_C_TOPK", DEFAULT_RAG_C_TOPK))
+        c_high = float(
+            ChatbotConfig.get_config(
+                "RAG_C_HIGH",
+                threshold if threshold is not None else DEFAULT_RAG_C_HIGH,
+            )
         )
-        config_thresh = (
-            float(cast(float, config_thresh_raw))
-            if config_thresh_raw is not None
-            else DEFAULT_RAG_THRESH_C
-        )
-        thresh = threshold if threshold is not None else config_thresh
+        c_low = float(ChatbotConfig.get_config("RAG_C_LOW", DEFAULT_RAG_C_LOW))
+        c_margin = float(ChatbotConfig.get_config("RAG_C_MARGIN", DEFAULT_RAG_C_MARGIN))
+        query_intent = (query_intent or "").strip().lower()
 
         result: dict[str, Any] = {
             "go_single": False,
-            "reason": "no_index_c",
+            "reason": "no_index_c_candidates",
             "top_score": 0.0,
             "title": "",
+            "intent": query_intent or "other_medical",
+            "route_margin": 0.0,
+            "gate_level": "low",
         }
 
         try:
-            docs = self.vector_manager.search_similar(question, k=1, index_type="C")
+            query_text = question.strip()
+            if query_intent:
+                query_text = f"{question.strip()} | {query_intent}"
+
+            docs = self.vector_manager.search_similar(
+                query_text, k=max(2, c_topk), index_type="C"
+            )
             if not docs:
                 result["reason"] = "no_candidates"
                 return result
 
-            doc = docs[0]
-            distance = getattr(doc, "distance", 1.0)
-            score = 1.0 - (distance / 2.0)
-            title = (doc.title or doc.content or "").strip().lower()
+            scored: list[tuple[Any, float, str, str]] = []
+            for doc in docs:
+                distance = float(getattr(doc, "distance", 1.0))
+                score = 1.0 - (distance / 2.0)
+                metadata = getattr(doc, "metadata", {}) or {}
+                title = str(
+                    metadata.get("canonical_title")
+                    or doc.title
+                    or doc.content
+                    or ""
+                ).strip().lower()
+                intent = str(metadata.get("primary_intent") or "").strip().lower()
+                scored.append((doc, score, title, intent))
 
-            result["top_score"] = float(score)
-            result["title"] = title
-
-            if float(score) >= thresh:
-                result["go_single"] = True
-                result["reason"] = f"threshold_{thresh}"
-                logger.info(
-                    f"Gate PASSED: score={score:.3f} >= {thresh}, title='{title}'"
+            if query_intent:
+                scored = sorted(
+                    scored,
+                    key=lambda item: (
+                        1 if item[3] == query_intent else 0,
+                        item[1],
+                    ),
+                    reverse=True,
                 )
             else:
-                result["reason"] = f"below_{thresh}"
-                logger.info(f"Gate FAILED: score={score:.3f} < {thresh}")
+                scored = sorted(scored, key=lambda item: item[1], reverse=True)
+
+            top_doc, top_score, top_title, top_intent = scored[0]
+            second_score = scored[1][1] if len(scored) > 1 else 0.0
+            route_margin = top_score - second_score
+
+            result["top_score"] = float(top_score)
+            result["title"] = top_title
+            result["intent"] = top_intent or query_intent or "other_medical"
+            result["route_margin"] = float(route_margin)
+
+            if float(top_score) >= c_high and route_margin >= c_margin:
+                result["go_single"] = True
+                result["reason"] = "high_confidence_route"
+                result["gate_level"] = "high"
+            elif float(top_score) >= c_low:
+                result["go_single"] = True
+                result["reason"] = "medium_confidence_route"
+                result["gate_level"] = "medium"
+            else:
+                result["reason"] = "low_confidence_route"
+                result["gate_level"] = "low"
 
         except Exception as ex:
             logger.warning(f"Gate error: {ex}")
@@ -645,15 +780,180 @@ class ChatbotService:
 
         return result
 
+    def _faq_retrieval_index_a(
+        self,
+        question: str,
+        gate: dict[str, Any],
+        analysis: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Retrieve best FAQ hit from Index A using disease+intent-aware filters."""
+        title = str(gate.get("title", "")).strip().lower()
+        intent = str(gate.get("intent", "")).strip().lower()
+        if not title:
+            return {"accepted": False, "score": 0.0}
+
+        a_topk = int(ChatbotConfig.get_config("RAG_A_TOPK", DEFAULT_RAG_A_TOPK))
+        answer_min = float(
+            ChatbotConfig.get_config("RAG_A_ANSWER_MIN", DEFAULT_RAG_A_ANSWER_MIN)
+        )
+        evidence_min = float(
+            ChatbotConfig.get_config("RAG_A_EVIDENCE_MIN", DEFAULT_RAG_A_EVIDENCE_MIN)
+        )
+
+        metadata_filters: dict[str, Any] = {"canonical_title": title}
+        if intent:
+            metadata_filters["primary_intent"] = [intent, "other_medical"]
+
+        docs = self.vector_manager.search_similar(
+            question,
+            k=a_topk,
+            index_type="A",
+            metadata_filters=metadata_filters,
+        )
+        if not docs:
+            return {
+                "accepted": False,
+                "score": 0.0,
+                "reason": "no_faq_candidates",
+            }
+
+        best: dict[str, Any] = {"accepted": False, "score": 0.0}
+        for doc in docs:
+            metadata = getattr(doc, "metadata", {}) or {}
+            distance = float(getattr(doc, "distance", 1.0))
+            score = 1.0 - (distance / 2.0)
+            if intent and str(metadata.get("primary_intent", "")).lower() == intent:
+                score += 0.03
+
+            answer_text = str(metadata.get("answer_text", "")).strip()
+            if len(answer_text) < 20:
+                score -= 0.02
+
+            if score > best["score"]:
+                best = {
+                    "accepted": score >= evidence_min and bool(answer_text),
+                    "score": float(score),
+                    "direct_answer": score >= answer_min and bool(answer_text),
+                    "need_evidence": score < answer_min,
+                    "question": doc.content,
+                    "answer": answer_text,
+                    "qa_id": metadata.get("qa_id"),
+                    "context_id": metadata.get("context_id"),
+                    "article_id": metadata.get("article_id"),
+                    "intent": metadata.get("primary_intent", intent),
+                    "title": title,
+                }
+
+        return best
+
+    def _evidence_retrieval_index_b(
+        self,
+        question: str,
+        gate: dict[str, Any],
+        analysis: dict[str, Any],
+        faq_hit: dict[str, Any] | None = None,
+    ) -> list[Document]:
+        """Retrieve evidence chunks from Index B for fallback or enrichment."""
+        title = str(gate.get("title", "")).strip().lower()
+        intent = str(gate.get("intent", "")).strip().lower()
+        positives = analysis.get("positives", {}) or {}
+
+        if faq_hit and faq_hit.get("accepted"):
+            top_k = int(ChatbotConfig.get_config("RAG_B_TOPK_ENRICH", DEFAULT_RAG_B_TOPK_ENRICH))
+        else:
+            top_k = int(
+                ChatbotConfig.get_config("RAG_B_TOPK_FALLBACK", DEFAULT_RAG_B_TOPK_FALLBACK)
+            )
+
+        query_terms: list[str] = [question.strip()]
+        if title:
+            query_terms.append(title)
+        if intent:
+            query_terms.append(intent)
+        for label in ["SYMPTOM", "ETIOLOGY", "RISK"]:
+            query_terms.extend(positives.get(label, []) or [])
+        query_text = ", ".join(term for term in query_terms if str(term).strip())
+
+        metadata_filters: dict[str, Any] = {}
+        if title:
+            metadata_filters["canonical_title"] = title
+        if intent:
+            metadata_filters["intent_hints"] = [intent, "other_medical"]
+
+        docs = self.vector_manager.search_similar(
+            query_text,
+            k=top_k,
+            index_type="B",
+            metadata_filters=metadata_filters or None,
+        )
+
+        out_docs: list[Document] = []
+        for doc in docs:
+            metadata = getattr(doc, "metadata", {}) or {}
+            out_docs.append(
+                Document(
+                    page_content=doc.content,
+                    metadata={
+                        "title": doc.title,
+                        "section": doc.section_type,
+                        "source": doc.source,
+                        "score": 1.0 - (float(getattr(doc, "distance", 1.0)) / 2.0),
+                        "context_id": metadata.get("context_id"),
+                        "article_id": metadata.get("article_id"),
+                        "evidence_id": metadata.get("evidence_id"),
+                    },
+                )
+            )
+        return out_docs
+
+    def _build_faq_context(
+        self,
+        title: str,
+        faq_hit: dict[str, Any],
+        evidence_docs: list[Document],
+    ) -> str:
+        """Build context that combines FAQ payload and optional evidence snippets."""
+        lines = [
+            HEADER_SINGLE_DISEASE.format(title=title),
+            HEADER_SINGLE_DISEASE_SUBTITLE,
+            f"- {HEADER_FAQ_MATCH}:",
+            f"  Câu hỏi: {faq_hit.get('question', '')}",
+            f"  Trả lời: {faq_hit.get('answer', '')}",
+            "",
+        ]
+
+        if evidence_docs:
+            lines.append(f"- {HEADER_EVIDENCE_BLOCK}:")
+            for idx, doc in enumerate(evidence_docs[:DEFAULT_SECTION_ITEMS_LIMIT], start=1):
+                section = str(doc.metadata.get("section", "")).strip()
+                snippet = re.sub(r"\s+", " ", doc.page_content).strip()
+                lines.append(f"  {idx}. [{section}] {snippet}")
+            lines.append("")
+
+        lines.append(MSG_CONTEXT_HINT_SINGLE)
+        return "\n".join(lines)
+
     def _fetch_docs_for_title(
         self, title: str, index: str = "B", k: int = DEFAULT_INDEX_B_K
     ) -> list[Document]:
         """Fetch documents for a disease title."""
         try:
-            docs = self.vector_manager.search_similar(title, k=k, index_type=index)
-            # Filter by title
+            normalized_title = title.strip().lower()
+            docs = self.vector_manager.search_similar(
+                title,
+                k=k,
+                index_type=index,
+                metadata_filters={"canonical_title": normalized_title},
+            )
+            if not docs:
+                docs = self.vector_manager.search_similar(title, k=k, index_type=index)
+
             filtered_docs = [
-                d for d in docs if (d.title or "").lower() == title.strip().lower()
+                d
+                for d in docs
+                if (d.title or "").lower() == normalized_title
+                or str((getattr(d, "metadata", {}) or {}).get("canonical_title", "")).lower()
+                == normalized_title
             ]
             return [
                 Document(
@@ -662,6 +962,10 @@ class ChatbotService:
                         "title": d.title,
                         "section": d.section_type,
                         "source": d.source,
+                        "score": 1.0 - (float(getattr(d, "distance", 1.0)) / 2.0),
+                        "evidence_id": (getattr(d, "metadata", {}) or {}).get(
+                            "evidence_id"
+                        ),
                     },
                 )
                 for d in filtered_docs

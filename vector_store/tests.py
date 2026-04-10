@@ -190,6 +190,32 @@ class VectorStoreManagerTestCase(TestCase):
         self.assertEqual(len(sentences), 3)
         self.assertIn("Đây là câu một.", sentences[0])
 
+    def test_matches_metadata_filters_supports_scalar_and_list(self) -> None:
+        """Metadata filters should match case-insensitive scalar/list values."""
+        metadata = {
+            "canonical_title": "covid-19",
+            "intent_hints": ["symptom", "risk_factor"],
+            "primary_intent": "symptom",
+        }
+        self.assertTrue(
+            self.manager._matches_metadata_filters(
+                metadata,
+                {"canonical_title": "COVID-19", "primary_intent": "symptom"},
+            )
+        )
+        self.assertTrue(
+            self.manager._matches_metadata_filters(
+                metadata,
+                {"intent_hints": "risk_factor"},
+            )
+        )
+        self.assertFalse(
+            self.manager._matches_metadata_filters(
+                metadata,
+                {"intent_hints": "diagnosis_treatment"},
+            )
+        )
+
     def test_process_csv_to_documents_index_b(self) -> None:
         """Test CSV processing for Index B (per-section documents)."""
         # Create a temporary CSV file

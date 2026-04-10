@@ -49,6 +49,35 @@ class VectorStoreManager:
         """Create a CSV pipeline instance using the same provider as the manager."""
         return CSVEmbeddingPipeline(self.embedding_provider)
 
+    def _metadata_value_matches(self, actual: Any, expected: Any) -> bool:
+        """Match a metadata value with case-insensitive scalar/list semantics."""
+        if isinstance(expected, (list, tuple, set)):
+            expected_values = {str(item).strip().lower() for item in expected if item is not None}
+            if not expected_values:
+                return False
+            if isinstance(actual, list):
+                actual_values = {str(item).strip().lower() for item in actual if item is not None}
+                return bool(actual_values.intersection(expected_values))
+            return str(actual).strip().lower() in expected_values
+
+        expected_norm = str(expected).strip().lower()
+        if isinstance(actual, list):
+            return expected_norm in {
+                str(item).strip().lower() for item in actual if item is not None
+            }
+        return str(actual).strip().lower() == expected_norm
+
+    def _matches_metadata_filters(
+        self, metadata: dict[str, Any], metadata_filters: dict[str, Any]
+    ) -> bool:
+        """Return True if metadata satisfies all requested filter keys."""
+        for key, expected in metadata_filters.items():
+            if key not in metadata:
+                return False
+            if not self._metadata_value_matches(metadata.get(key), expected):
+                return False
+        return True
+
     # -------------------------
     # Document Operations
     # -------------------------
@@ -145,6 +174,8 @@ class VectorStoreManager:
         k: int = 5,
         index_type: str | None = None,
         section_type: str | None = None,
+        metadata_filters: dict[str, Any] | None = None,
+        filter_oversample_factor: int = 5,
     ) -> list[MedicalDocument]:
         """
         Search for similar documents using cosine similarity.
@@ -154,6 +185,8 @@ class VectorStoreManager:
             k: Number of results to return
             index_type: Filter by index type (A, B, C)
             section_type: Filter by section type
+            metadata_filters: Optional metadata exact-match filters
+            filter_oversample_factor: Oversampling factor before metadata filtering
 
         Returns:
             List of similar MedicalDocument instances
@@ -174,7 +207,10 @@ class VectorStoreManager:
             params.append(section_type)
 
         where_clause = " AND ".join(conditions)
-        params.append(k)
+        sql_limit = k
+        if metadata_filters:
+            sql_limit = max(k, k * max(1, filter_oversample_factor))
+        params.append(sql_limit)
 
         # Use raw SQL for pgvector cosine distance
         sql = f"""
@@ -187,8 +223,18 @@ class VectorStoreManager:
         """
 
         results = list(MedicalDocument.objects.raw(sql, params))
-        logger.info(f"Found {len(results)} similar documents for query")
-        logger.info(f"Results: {[doc.content for doc in results]}")
+        if metadata_filters:
+            results = [
+                doc
+                for doc in results
+                if self._matches_metadata_filters(
+                    getattr(doc, "metadata", {}) or {},
+                    metadata_filters,
+                )
+            ][:k]
+
+        logger.info("Found %s similar documents for query", len(results))
+        logger.info("Results: %s", [doc.content for doc in results])
         return results
 
     # -------------------------

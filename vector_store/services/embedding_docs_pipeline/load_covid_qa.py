@@ -13,6 +13,7 @@ Run directly to inspect dataset statistics:
 
 import hashlib
 import logging
+from typing import Any
 
 from datasets import load_dataset
 
@@ -132,7 +133,7 @@ def get_unique_contexts(dataset) -> dict[str, str]:
 def get_qa_pairs_for_contexts(
     dataset,
     selected_context_ids: set[str],
-) -> list[dict[str, str]]:
+) -> list[dict[str, Any]]:
     """
     Retrieve all Q&A pairs belonging to the selected contexts.
 
@@ -141,9 +142,9 @@ def get_qa_pairs_for_contexts(
         selected_context_ids: Set of context_ids that were embedded
 
     Returns:
-        List of dicts with keys: context_id, question, answer
+        List of dicts with keys: context_id, question, answer, answer_start
     """
-    qa_pairs: list[dict[str, str]] = []
+    qa_pairs: list[dict[str, Any]] = []
 
     for sample in dataset:
         context_text = sample["context"]
@@ -158,14 +159,23 @@ def get_qa_pairs_for_contexts(
         # answers structure: {"text": [...], "answer_start": [...]}
         if answers and answers["text"]:
             answer_text = answers["text"][0]
+            answer_start = (
+                int(answers["answer_start"][0])
+                if answers.get("answer_start")
+                and len(answers["answer_start"]) > 0
+                and answers["answer_start"][0] is not None
+                else None
+            )
         else:
             answer_text = ""
+            answer_start = None
 
         qa_pairs.append(
             {
                 "context_id": context_id,
                 "question": question,
                 "answer": answer_text,
+                "answer_start": answer_start,
             }
         )
 

@@ -3,8 +3,10 @@ Base classes and shared logic for the embedding pipelines.
 """
 
 import json
+import hashlib
 import logging
 import os
+import re
 import time
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
@@ -93,6 +95,8 @@ class BaseEmbeddingPipeline(ABC):
         self.llm = self.create_llm()
         self.extraction_dataset_output_path = EXTRACTION_DATASET_OUTPUT_PATH
         self.extraction_records: dict[str, dict[str, Any]] = {}
+        self._qa_pairs_by_context: dict[str, list[dict[str, Any]]] = {}
+        self._index_c_count: int = 0
 
     def get_runtime_config(self, key: str, default: Any) -> Any:
         """Read config from DB at runtime with safe fallback for async startup."""
@@ -172,6 +176,10 @@ class BaseEmbeddingPipeline(ABC):
     ) -> list[dict]:
         """Load source contexts for the pipeline."""
 
+    def load_qa_pairs(self, contexts: list[dict]) -> list[dict[str, Any]]:
+        """Load QA pairs for provided contexts. Subclasses can override."""
+        return []
+
     def _initialize_extraction_records(self, contexts: list[dict]) -> None:
         """Initialize per-article extraction records for dataset export."""
         records: dict[str, dict[str, Any]] = {}
@@ -187,9 +195,10 @@ class BaseEmbeddingPipeline(ABC):
                 "llm_model": self.llm_model,
                 "stage_1": {
                     "diseases": [],
+                    "route_units": [],
                 },
                 "stage_2": {
-                    "summaries": {},
+                    "faqs": [],
                 },
                 "stage_3": {
                     "sections": {},
@@ -232,6 +241,135 @@ class BaseEmbeddingPipeline(ABC):
             mapping[context_id] = str(ctx.get("article_id") or context_id)
         return mapping
 
+    def _group_qa_pairs_by_context(
+        self, qa_pairs: list[dict[str, Any]]
+    ) -> dict[str, list[dict[str, Any]]]:
+        """Group QA rows by context_id."""
+        grouped: dict[str, list[dict[str, Any]]] = {}
+        for qa in qa_pairs:
+            context_id = str(qa.get("context_id", "")).strip()
+            if not context_id:
+                continue
+            grouped.setdefault(context_id, []).append(qa)
+        return grouped
+
+    def _normalize_text(self, text: str) -> str:
+        """Normalize free text for deterministic storage and hashing."""
+        lowered = str(text or "").strip().lower()
+        lowered = lowered.replace("covid 19", "covid-19")
+        lowered = re.sub(r"\s+", " ", lowered)
+        return lowered
+
+    def _build_qa_id(self, context_id: str, question: str, answer: str) -> str:
+        """Build deterministic QA ID from context/question/answer."""
+        payload = "|".join(
+            [
+                self._normalize_text(context_id),
+                self._normalize_text(question),
+                self._normalize_text(answer),
+            ]
+        )
+        return hashlib.md5(payload.encode("utf-8")).hexdigest()[:16]
+
+    def _infer_intent(self, question: str, answer: str = "") -> str:
+        """Infer a coarse intent label from QA text."""
+        text = f"{question} {answer}".lower()
+
+        rules = [
+            (
+                "symptom",
+                [
+                    "triệu chứng",
+                    "dấu hiệu",
+                    "symptom",
+                    "manifestation",
+                    "biểu hiện",
+                ],
+            ),
+            (
+                "cause_transmission",
+                [
+                    "nguyên nhân",
+                    "lây",
+                    "transmission",
+                    "cause",
+                    "etiolog",
+                    "pathogenesis",
+                ],
+            ),
+            (
+                "risk_factor",
+                [
+                    "yếu tố nguy cơ",
+                    "nguy cơ",
+                    "risk factor",
+                    "susceptible",
+                    "vulnerable",
+                ],
+            ),
+            (
+                "diagnosis_treatment",
+                [
+                    "chẩn đoán",
+                    "điều trị",
+                    "thuốc",
+                    "xét nghiệm",
+                    "treatment",
+                    "diagnos",
+                    "therapy",
+                    "manage",
+                ],
+            ),
+            (
+                "prevention_lifestyle",
+                [
+                    "phòng ngừa",
+                    "phòng bệnh",
+                    "prevent",
+                    "lifestyle",
+                    "hygiene",
+                    "mask",
+                    "vaccine",
+                ],
+            ),
+            (
+                "prognosis_complication",
+                [
+                    "biến chứng",
+                    "tiên lượng",
+                    "prognosis",
+                    "complication",
+                    "mortality",
+                ],
+            ),
+            (
+                "epidemiology",
+                [
+                    "dịch tễ",
+                    "tỷ lệ",
+                    "prevalence",
+                    "incidence",
+                    "outbreak",
+                    "pandemic",
+                ],
+            ),
+            (
+                "definition_overview",
+                [
+                    "là gì",
+                    "what is",
+                    "định nghĩa",
+                    "overview",
+                    "general",
+                ],
+            ),
+        ]
+
+        for intent, keywords in rules:
+            if any(keyword in text for keyword in keywords):
+                return intent
+        return "other_medical"
+
     def _build_context_aliases(
         self, disease_to_contexts: dict[str, set[str]]
     ) -> dict[str, list[str]]:
@@ -272,6 +410,32 @@ class BaseEmbeddingPipeline(ABC):
             cleaned,
             key=lambda alias: (self._canonical_title_score(alias), len(alias), alias),
         )
+
+    def _build_route_text(
+        self,
+        canonical_title: str,
+        aliases: list[str],
+        intent: str,
+        sample_questions: list[str],
+    ) -> str:
+        """Compose route unit text for Index C embedding."""
+        deduped_aliases = sorted(
+            {
+                self._normalize_text(alias)
+                for alias in aliases
+                if self._normalize_text(alias) and self._normalize_text(alias) != canonical_title
+            }
+        )
+        question_block = " | ".join(
+            [self._normalize_text(question) for question in sample_questions[:3] if question]
+        )
+        alias_block = ", ".join(deduped_aliases)
+        parts = [canonical_title, intent]
+        if alias_block:
+            parts.append(f"aliases: {alias_block}")
+        if question_block:
+            parts.append(f"query_examples: {question_block}")
+        return " | ".join(parts)
 
     def extract_diseases_from_context(self, context_text: str) -> list[str]:
         """Extract disease/syndrome/pathogen names from a single article."""
@@ -560,6 +724,8 @@ class BaseEmbeddingPipeline(ABC):
             return {"index_c": 0, "index_a": 0, "index_b": 0}
 
         self._initialize_extraction_records(contexts)
+        qa_pairs = self.load_qa_pairs(contexts)
+        self._qa_pairs_by_context = self._group_qa_pairs_by_context(qa_pairs)
         if clear_existing:
             clear_covid_qa_documents()
 
@@ -574,6 +740,8 @@ class BaseEmbeddingPipeline(ABC):
                 "index_b": 0,
                 "extraction_dataset_path": extraction_path,
             }
+        if self._index_c_count == 0:
+            self._index_c_count = len(disease_to_contexts)
 
         index_a_count = self.stage_2_index_a(contexts, disease_to_contexts)
         index_b_count = self.stage_3_index_b(contexts, disease_to_contexts)
@@ -581,17 +749,17 @@ class BaseEmbeddingPipeline(ABC):
 
         return {
             "articles": len(contexts),
-            "index_c": len(disease_to_contexts),
+            "index_c": self._index_c_count,
             "index_a": index_a_count,
             "index_b": index_b_count,
-            "total": len(disease_to_contexts) + index_a_count + index_b_count,
+            "total": self._index_c_count + index_a_count + index_b_count,
             "extraction_dataset_path": extraction_path,
         }
 
     def stage_1_index_c(self, contexts: list[dict]) -> dict[str, set[str]]:
-        """Stage 1: Extract disease names and populate Index C."""
+        """Stage 1: Extract diseases, build route units, and populate Index C."""
         logger.info("%s", "=" * 60)
-        logger.info("STAGE 1: Index C — Disease Name Extraction")
+        logger.info("STAGE 1: Index C — Router Units (Disease + Intent)")
         logger.info("%s", "=" * 60)
 
         disease_to_contexts: dict[str, set[str]] = {}
@@ -619,6 +787,7 @@ class BaseEmbeddingPipeline(ABC):
 
         if not disease_to_contexts:
             logger.warning("No diseases extracted. Pipeline cannot continue.")
+            self._index_c_count = 0
             return {}
 
         logger.info(
@@ -626,30 +795,117 @@ class BaseEmbeddingPipeline(ABC):
             f"{list(disease_to_contexts.keys())}"
         )
 
-        disease_names = list(disease_to_contexts.keys())
-        embeddings = self.embed_documents(disease_names)
+        context_aliases = self._build_context_aliases(disease_to_contexts)
+        route_units: dict[str, dict[str, Any]] = {}
 
-        for disease_name, embedding in zip(disease_names, embeddings):
+        for context_id, aliases in context_aliases.items():
+            canonical_title = self._select_canonical_title(aliases)
+            if not canonical_title:
+                continue
+
+            qa_pairs = self._qa_pairs_by_context.get(context_id, [])
+            intents = {
+                self._infer_intent(
+                    str(qa.get("question", "")),
+                    str(qa.get("answer", "")),
+                )
+                for qa in qa_pairs
+                if str(qa.get("question", "")).strip()
+            }
+            if not intents:
+                intents = {"other_medical"}
+
+            sample_questions = [
+                str(qa.get("question", "")).strip()
+                for qa in qa_pairs
+                if str(qa.get("question", "")).strip()
+            ]
+
+            article_id = context_to_article.get(context_id, context_id)
+            for intent in intents:
+                route_unit_id = f"{canonical_title}|{intent}"
+                route_unit = route_units.setdefault(
+                    route_unit_id,
+                    {
+                        "canonical_title": canonical_title,
+                        "aliases": set(),
+                        "intent": intent,
+                        "context_ids": set(),
+                        "article_ids": set(),
+                        "questions": [],
+                    },
+                )
+                route_unit["aliases"].update(aliases)
+                route_unit["context_ids"].add(context_id)
+                route_unit["article_ids"].add(article_id)
+                route_unit["questions"].extend(sample_questions[:3])
+
+                if article_id in self.extraction_records:
+                    route_item = {
+                        "route_unit_id": route_unit_id,
+                        "canonical_title": canonical_title,
+                        "intent": intent,
+                    }
+                    stage_1_route_units = self.extraction_records[article_id]["stage_1"][
+                        "route_units"
+                    ]
+                    if route_item not in stage_1_route_units:
+                        stage_1_route_units.append(route_item)
+
+        route_payloads: list[dict[str, Any]] = []
+        for route_unit_id, unit in route_units.items():
+            canonical_title = str(unit["canonical_title"])
+            aliases = sorted({str(alias) for alias in unit["aliases"] if str(alias).strip()})
+            intent = str(unit["intent"])
+            questions = [
+                self._normalize_text(question)
+                for question in unit["questions"]
+                if self._normalize_text(question)
+            ]
+            route_text = self._build_route_text(
+                canonical_title=canonical_title,
+                aliases=aliases,
+                intent=intent,
+                sample_questions=questions,
+            )
+            route_payloads.append(
+                {
+                    "route_unit_id": route_unit_id,
+                    "title": canonical_title,
+                    "content": route_text,
+                    "metadata": {
+                        "dataset": COVID_QA_DATASET_NAME,
+                        "canonical_title": canonical_title,
+                        "title_aliases": aliases,
+                        "primary_intent": intent,
+                        "intent_variants": [intent],
+                        "source_context_ids": sorted(
+                            {str(context_id) for context_id in unit["context_ids"]}
+                        ),
+                        "source_article_ids": sorted(
+                            {str(article_id) for article_id in unit["article_ids"]}
+                        ),
+                        "route_unit_id": route_unit_id,
+                    },
+                }
+            )
+
+        embeddings = self.embed_documents(
+            [str(payload["content"]).lower() for payload in route_payloads]
+        )
+        for payload, embedding in zip(route_payloads, embeddings):
             MedicalDocument.objects.create(
-                title=disease_name,
-                content=disease_name,
+                title=str(payload["title"]),
+                content=str(payload["content"]).lower(),
                 embedding=embedding,
                 section_type=SectionType.GENERAL,
                 index_type=IndexType.C,
                 source=DOCUMENT_SOURCE_TAG,
-                metadata={
-                    "dataset": COVID_QA_DATASET_NAME,
-                    "source_contexts": list(disease_to_contexts[disease_name]),
-                    "source_article_ids": sorted(
-                        {
-                            context_to_article.get(context_id, context_id)
-                            for context_id in disease_to_contexts[disease_name]
-                        }
-                    ),
-                },
+                metadata=payload["metadata"],
             )
 
-        logger.info(f"Index C: {len(disease_names)} disease entries stored")
+        self._index_c_count = len(route_payloads)
+        logger.info("Index C: %s route entries stored", self._index_c_count)
         return disease_to_contexts
 
     def stage_2_index_a(
@@ -657,89 +913,152 @@ class BaseEmbeddingPipeline(ABC):
         contexts: list[dict],
         disease_to_contexts: dict[str, set[str]],
     ) -> int:
-        """Stage 2: Extract structured summaries and populate Index A."""
+        """Stage 2: Build FAQ question vectors and answer payloads in Index A."""
         logger.info("%s", "=" * 60)
-        logger.info("STAGE 2: Index A — Structured Summary Extraction")
+        logger.info("STAGE 2: Index A — FAQ Question Embedding")
         logger.info("%s", "=" * 60)
 
         ctx_lookup = {str(ctx["context_id"]): ctx for ctx in contexts if ctx.get("context_id")}
-        count = 0
         context_aliases = self._build_context_aliases(disease_to_contexts)
+        count = 0
+        qa_seen: set[str] = set()
 
-        for context_id, aliases in tqdm(
-            context_aliases.items(), desc="Stage 2: Building summaries"
-        ):
+        for context_id, aliases in tqdm(context_aliases.items(), desc="Stage 2: Building FAQs"):
             ctx_data = ctx_lookup.get(context_id)
             if not ctx_data:
-                continue
-
-            context_text = str(ctx_data.get("context", ""))
-            if not context_text.strip():
                 continue
 
             canonical_title = self._select_canonical_title(aliases)
             if not canonical_title:
                 continue
 
-            text = context_text[:8000] if len(context_text) > 8000 else context_text
             article_id = str(ctx_data.get("article_id") or context_id)
-            prompt = PROMPT_EXTRACT_SUMMARY.format(
-                disease_name=canonical_title, text=text
-            )
-
-            try:
-                response = self._llm_invoke(self.llm, prompt)
-                summary_data = self._parse_json_response(response)
-                if not isinstance(summary_data, dict):
-                    logger.warning(
-                        "Non-dict summary for %s: %s",
-                        canonical_title,
-                        type(summary_data),
+            qa_pairs = self._qa_pairs_by_context.get(context_id, [])
+            if not qa_pairs:
+                # Keep compatibility for contexts without extracted QA pairs.
+                context_text = str(ctx_data.get("context", ""))
+                if not context_text.strip():
+                    continue
+                try:
+                    text = context_text[:8000] if len(context_text) > 8000 else context_text
+                    prompt = PROMPT_EXTRACT_SUMMARY.format(
+                        disease_name=canonical_title, text=text
                     )
+                    response = self._llm_invoke(self.llm, prompt)
+                    summary_data = self._parse_json_response(response)
+                    if not isinstance(summary_data, dict):
+                        continue
+                    summary_data["disease_name"] = canonical_title
+                    summary_text = self.build_summary_text(summary_data)
+                    if not summary_text.strip():
+                        continue
+
+                    embedding = self.embed_documents([summary_text.lower()])[0]
+
+                    MedicalDocument.objects.create(
+                        title=canonical_title,
+                        content=summary_text.lower(),
+                        embedding=embedding,
+                        section_type=SectionType.GENERAL,
+                        index_type=IndexType.A,
+                        source=DOCUMENT_SOURCE_TAG,
+                        metadata={
+                            "context_id": context_id,
+                            "article_id": article_id,
+                            "canonical_title": canonical_title,
+                            "title_aliases": aliases,
+                            "primary_intent": "definition_overview",
+                            "secondary_intents": [],
+                            "answer_text": summary_text.strip(),
+                            "qa_id": self._build_qa_id(
+                                context_id, canonical_title, summary_text
+                            ),
+                            "dataset": COVID_QA_DATASET_NAME,
+                        },
+                    )
+                    if article_id in self.extraction_records:
+                        stage_2 = self.extraction_records[article_id]["stage_2"]
+                        stage_2["canonical_title"] = canonical_title
+                        stage_2["aliases"] = aliases
+                        stage_2["faqs"].append(
+                            {
+                                "qa_id": self._build_qa_id(
+                                    context_id, canonical_title, summary_text
+                                ),
+                                "question": canonical_title,
+                                "intent": "definition_overview",
+                            }
+                        )
+                    count += 1
+                except Exception as exc:
+                    logger.warning(
+                        "Summary fallback failed for %s (context %s): %s",
+                        canonical_title,
+                        context_id,
+                        exc,
+                    )
+                continue
+
+            docs_to_create: list[dict[str, Any]] = []
+            for qa in qa_pairs:
+                question = self._normalize_text(str(qa.get("question", "")))
+                answer = str(qa.get("answer", "")).strip()
+                if not question or not answer:
                     continue
 
-                summary_data["disease_name"] = canonical_title
-
-                summary_text = self.build_summary_text(summary_data)
-                if not summary_text.strip():
+                qa_id = self._build_qa_id(context_id, question, answer)
+                if qa_id in qa_seen:
                     continue
+                qa_seen.add(qa_id)
 
-                embedding = self.embed_documents([summary_text.lower()])[0]
+                intent = self._infer_intent(question, answer)
+                metadata = {
+                    "qa_id": qa_id,
+                    "context_id": context_id,
+                    "article_id": article_id,
+                    "canonical_title": canonical_title,
+                    "title_aliases": aliases,
+                    "primary_intent": intent,
+                    "secondary_intents": [],
+                    "answer_text": answer,
+                    "answer_start": qa.get("answer_start"),
+                    "dataset": COVID_QA_DATASET_NAME,
+                }
+                docs_to_create.append(
+                    {
+                        "title": canonical_title,
+                        "content": question,
+                        "metadata": metadata,
+                    }
+                )
 
+                if article_id in self.extraction_records:
+                    self.extraction_records[article_id]["stage_2"]["faqs"].append(
+                        {
+                            "qa_id": qa_id,
+                            "question": question,
+                            "intent": intent,
+                        }
+                    )
+
+            if not docs_to_create:
+                continue
+
+            embeddings = self.embed_documents([d["content"] for d in docs_to_create])
+            for payload, embedding in zip(docs_to_create, embeddings):
                 MedicalDocument.objects.create(
-                    title=canonical_title,
-                    content=summary_text.lower(),
+                    title=payload["title"],
+                    content=payload["content"],
                     embedding=embedding,
                     section_type=SectionType.GENERAL,
                     index_type=IndexType.A,
                     source=DOCUMENT_SOURCE_TAG,
-                    metadata={
-                        "context_id": context_id,
-                        "article_id": article_id,
-                        "canonical_title": canonical_title,
-                        "title_aliases": aliases,
-                        "dataset": COVID_QA_DATASET_NAME,
-                    },
+                    metadata=payload["metadata"],
                 )
-                if article_id in self.extraction_records:
-                    stage_2 = self.extraction_records[article_id]["stage_2"]
-                    stage_2["canonical_title"] = canonical_title
-                    stage_2["aliases"] = aliases
-                    summaries = stage_2["summaries"]
-                    summaries[canonical_title] = summary_data
                 count += 1
-
-            except Exception as e:
-                logger.warning(
-                    "Summary extraction failed for %s (context %s): %s",
-                    canonical_title,
-                    context_id,
-                    e,
-                )
-
             time.sleep(EMBEDDING_SLEEP_SECONDS)
 
-        logger.info(f"Index A: {count} summary entries stored")
+        logger.info("Index A: %s FAQ entries stored", count)
         return count
 
     def stage_3_index_b(
@@ -777,6 +1096,17 @@ class BaseEmbeddingPipeline(ABC):
             if not canonical_title:
                 continue
 
+            qa_pairs = self._qa_pairs_by_context.get(context_id, [])
+            intent_hints = sorted(
+                {
+                    self._infer_intent(
+                        str(qa.get("question", "")),
+                        str(qa.get("answer", "")),
+                    )
+                    for qa in qa_pairs
+                }
+            )
+
             try:
                 sections = self.classify_sections(context_text)
                 if article_id in self.extraction_records:
@@ -809,6 +1139,7 @@ class BaseEmbeddingPipeline(ABC):
                     continue
 
                 for i, (chunk_text, embedding) in enumerate(zip(chunks_lower, embeddings)):
+                    evidence_id = f"{context_id}:{section_key}:{i}"
                     MedicalDocument.objects.create(
                         title=canonical_title,
                         content=chunk_text,
@@ -822,9 +1153,11 @@ class BaseEmbeddingPipeline(ABC):
                             "disease": canonical_title,
                             "canonical_title": canonical_title,
                             "title_aliases": aliases,
+                            "evidence_id": evidence_id,
                             "section": section_key,
                             "chunk_index": i,
                             "total_chunks": len(chunks),
+                            "intent_hints": intent_hints,
                             "dataset": COVID_QA_DATASET_NAME,
                         },
                     )
