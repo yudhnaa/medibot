@@ -11,12 +11,29 @@ from vector_store.services.embedding_docs_pipeline.covidqa_pipeline import (
 
 def embed_contexts(
     num_docs: int | None = None,
+    start_article: int = 1,
+    clear_existing: bool = True,
     provider: str | None = None,
+    llm_provider: str | None = None,
+    llm_model: str | None = None,
+    llm_base_url: str | None = None,
+    llm_api_key: str | None = None,
     **provider_kwargs,
 ) -> dict:
     """Run the default COVID-QA embedding pipeline."""
-    pipeline = COVIDQAEmbeddingPipeline(provider, **provider_kwargs)
-    stats = pipeline.run(num_docs=num_docs)
+    pipeline = COVIDQAEmbeddingPipeline(
+        provider,
+        llm_provider=llm_provider,
+        llm_model=llm_model,
+        llm_base_url=llm_base_url,
+        llm_api_key=llm_api_key,
+        **provider_kwargs,
+    )
+    stats = pipeline.run(
+        num_docs=num_docs,
+        start_article=start_article,
+        clear_existing=clear_existing,
+    )
     return stats
 
 

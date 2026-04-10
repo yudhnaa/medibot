@@ -1,0 +1,136 @@
+{% extends "admin/base_site.html" %}
+{% load i18n static %}
+
+{% block extrahead %}
+    {{ block.super }}
+    <style>
+        .embed-form {
+            max-width: 600px;
+            margin: 20px auto;
+            padding: 20px;
+            background: #f8f9fa;
+            border-radius: 5px;
+        }
+        .form-row {
+            margin-bottom: 20px;
+        }
+        .form-row label {
+            display: block;
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+        .form-row input[type="number"] {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+        }
+        .helptext {
+            display: block;
+            margin-top: 5px;
+            font-size: 12px;
+            color: #666;
+        }
+        .errorlist {
+            list-style: none;
+            padding: 0;
+            color: #ba2121;
+            margin: 5px 0;
+        }
+        .submit-row {
+            margin-top: 20px;
+            padding: 10px 0;
+            border-top: 1px solid #ddd;
+        }
+        .submit-row input[type="submit"],
+        .submit-row a {
+            padding: 10px 20px;
+            margin-right: 10px;
+            text-decoration: none;
+            border-radius: 4px;
+        }
+        .submit-row input[type="submit"] {
+            background-color: #417690;
+            color: white;
+            border: none;
+            cursor: pointer;
+        }
+        .submit-row input[type="submit"]:hover {
+            background-color: #205067;
+        }
+        .submit-row a {
+            background-color: #f8f9fa;
+            color: #333;
+            border: 1px solid #ccc;
+        }
+        .instructions {
+            background: #e7f3fe;
+            border-left: 4px solid #2196F3;
+            padding: 15px;
+            margin-bottom: 20px;
+        }
+        .instructions h3 {
+            margin-top: 0;
+        }
+        .instructions ul {
+            margin: 10px 0;
+            padding-left: 20px;
+        }
+    </style>
+{% endblock %}
+
+{% block breadcrumbs %}
+<div class="breadcrumbs">
+    <a href="{% url 'admin:index' %}">{% trans 'Home' %}</a>
+    &rsaquo; <a href="{% url 'admin:chatbot_medicaldocument_changelist' %}">{% trans 'Medical Documents' %}</a>
+    &rsaquo; {% trans 'Embed covid_qa_deepset' %}
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="embed-form">
+    <h1>{% trans "Embed covid_qa_deepset Articles" %}</h1>
+
+    <div class="instructions">
+        <h3>{% trans "Instructions" %}</h3>
+        <ul>
+            <li>{% trans "This runs the 3-stage embedding pipeline on covid_qa_deepset." %}</li>
+            <li>{% trans "Select start article and number of articles (range within 1-147)." %}</li>
+            <li>{% trans "The job runs in background via Celery." %}</li>
+            <li>{% trans "Ensure Celery worker is running." %}</li>
+        </ul>
+    </div>
+
+    <form method="post">
+        {% csrf_token %}
+
+        {% if form.errors %}
+            <div class="errornote">
+                {% trans "Please correct the errors below." %}
+            </div>
+        {% endif %}
+
+        {% for field in form %}
+            <div class="form-row">
+                {{ field.label_tag }}
+                {{ field }}
+                {% if field.help_text %}
+                    <span class="helptext">{{ field.help_text }}</span>
+                {% endif %}
+                {% if field.errors %}
+                    <ul class="errorlist">
+                        {% for error in field.errors %}
+                            <li>{{ error }}</li>
+                        {% endfor %}
+                    </ul>
+                {% endif %}
+            </div>
+        {% endfor %}
+
+        <div class="submit-row">
+            <input type="submit" value="{% trans 'Start Embedding' %}" />
+            <a href="{% url 'admin:chatbot_medicaldocument_changelist' %}">{% trans 'Cancel' %}</a>
+        </div>
+    </form>
+</div>
+{% endblock %}

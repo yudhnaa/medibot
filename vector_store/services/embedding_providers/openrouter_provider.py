@@ -15,7 +15,7 @@ from typing_extensions import override
 from chatbot.models import ChatbotConfig
 from vector_store.services.constants import (
     DEFAULT_OPENROUTER_BASE_URL,
-    DEFAULT_OPENROUTER_EMBEDDING_MODEL,
+    DEFAULT_OPENROUTER_MODEL,
     OPENROUTER_API_KEY_ENV_NAME,
     OPENROUTER_BASE_URL_ENV_NAME,
 )
@@ -38,23 +38,34 @@ class OpenRouterEmbeddingProvider(EmbeddingProvider):
             base_url: OpenRouter API base URL
         """
         if not model:
-            model_name = ChatbotConfig.get_config("OPENROUTER_EMBEDDING_MODEL")
-            if isinstance(model_name, str):
-                model = model_name
+            model_name = ChatbotConfig.get_config("EMBEDDING_MODEL")
+            if isinstance(model_name, str) and model_name.strip():
+                model = model_name.strip()
             else:
                 logger.warning(
-                    "OPENROUTER_EMBEDDING_MODEL not found in config, using default."
+                    "EMBEDDING_MODEL not found in config, using provider default."
                 )
-                model = DEFAULT_OPENROUTER_EMBEDDING_MODEL
+                model = DEFAULT_OPENROUTER_MODEL
 
-        api_key = os.getenv(OPENROUTER_API_KEY_ENV_NAME)
+        api_key_raw = ChatbotConfig.get_config(OPENROUTER_API_KEY_ENV_NAME, None)
+        api_key = (
+            api_key_raw.strip()
+            if isinstance(api_key_raw, str) and api_key_raw.strip()
+            else os.getenv(OPENROUTER_API_KEY_ENV_NAME)
+        )
         if not api_key:
             raise ValueError(
                 f"{OPENROUTER_API_KEY_ENV_NAME} environment variable is required"
             )
 
+        db_base_url = ChatbotConfig.get_config("OPENROUTER_BASE_URL", None)
         resolved_base_url = (
             base_url
+            or (
+                db_base_url.strip()
+                if isinstance(db_base_url, str) and db_base_url.strip()
+                else None
+            )
             or os.getenv(OPENROUTER_BASE_URL_ENV_NAME)
             or DEFAULT_OPENROUTER_BASE_URL
         )

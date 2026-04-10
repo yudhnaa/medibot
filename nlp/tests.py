@@ -5,7 +5,7 @@ Tests NER, negation detection, text normalization, and the integrator.
 
 from unittest.mock import MagicMock, patch
 
-from django.test import TestCase
+from django.test import TestCase, override_settings
 
 from typing_extensions import override
 
@@ -14,6 +14,8 @@ from nlp.services.negation_detector import (
     NegationCue,
     VietnameseNegationDetector,
 )
+from nlp.services.medical_ner import MedicalNER
+from nlp.services.runtime import get_shared_integrator, reset_nlp_runtime_cache
 from nlp.services.text_normalizer import TextNormalizer
 
 
@@ -371,3 +373,70 @@ class FormatOutputJsonTests(TestCase):
         output = format_output_json(result)
 
         self.assertIn("Bệnh nhân đau đầu", output)
+
+
+class MedicalNERRuntimeTests(TestCase):
+    """Tests for local tokenizer loading and NLP runtime caching."""
+
+    def tearDown(self) -> None:
+        MedicalNER.clear_cache()
+        reset_nlp_runtime_cache()
+
+    @override_settings(MEDICAL_NER_TOKENIZER_PATH="/tmp/local-tokenizer")
+    @patch("nlp.services.medical_ner.RobertaForTokenClassification.from_pretrained")
+    @patch("nlp.services.medical_ner.PhobertTokenizerFast.from_pretrained")
+    def test_medical_ner_loads_local_tokenizer(
+        self,
+        mock_tokenizer_loader: MagicMock,
+        mock_model_loader: MagicMock,
+    ) -> None:
+        """Tokenizer must be loaded from local vendor files only."""
+        mock_tokenizer_loader.return_value = MagicMock(all_special_tokens=[])
+        mock_model = MagicMock()
+        mock_model.config.id2label = {0: "O"}
+        mock_model_loader.return_value = mock_model
+
+        MedicalNER(model_path="/tmp/local-model")
+
+        mock_tokenizer_loader.assert_called_once_with(
+            "/tmp/local-tokenizer",
+            local_files_only=True,
+        )
+
+    @override_settings(MEDICAL_NER_TOKENIZER_PATH="/tmp/local-tokenizer")
+    @patch("nlp.services.medical_ner.RobertaForTokenClassification.from_pretrained")
+    @patch("nlp.services.medical_ner.PhobertTokenizerFast.from_pretrained")
+    def test_medical_ner_reuses_cached_runtime(
+        self,
+        mock_tokenizer_loader: MagicMock,
+        mock_model_loader: MagicMock,
+    ) -> None:
+        """Repeated wrapper creation should reuse the same model/tokenizer."""
+        mock_tokenizer_loader.return_value = MagicMock(all_special_tokens=[])
+        mock_model = MagicMock()
+        mock_model.config.id2label = {0: "O"}
+        mock_model_loader.return_value = mock_model
+
+        first = MedicalNER(model_path="/tmp/local-model")
+        second = MedicalNER(model_path="/tmp/local-model")
+
+        self.assertIs(first.model, second.model)
+        self.assertIs(first.tokenizer, second.tokenizer)
+        mock_tokenizer_loader.assert_called_once()
+        mock_model_loader.assert_called_once()
+
+    @patch("nlp.services.runtime.NERNegationIntegrator")
+    def test_get_shared_integrator_reuses_singleton(
+        self,
+        mock_integrator_cls: MagicMock,
+    ) -> None:
+        """Shared NLP integrator should initialize once per process."""
+        reset_nlp_runtime_cache()
+        mock_integrator = MagicMock()
+        mock_integrator_cls.return_value = mock_integrator
+
+        first = get_shared_integrator()
+        second = get_shared_integrator()
+
+        self.assertIs(first, second)
+        mock_integrator_cls.assert_called_once_with(enable_text_normalization=True)

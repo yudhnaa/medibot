@@ -42,6 +42,11 @@ from chatbot.services.constants import (
     HEADER_PATIENT_INFO,
     HEADER_SINGLE_DISEASE,
     HEADER_SINGLE_DISEASE_SUBTITLE,
+    HEADER_XRAY_ANALYSIS_END,
+    HEADER_XRAY_ANALYSIS_START,
+    HEADER_XRAY_FINDINGS,
+    HEADER_XRAY_PREDICTION,
+    HEADER_XRAY_PROBABILITIES,
     LABEL_ALIASES,
     MSG_ANALYSIS_ERROR,
     MSG_CONTEXT_HINT_MULTI,
@@ -49,12 +54,14 @@ from chatbot.services.constants import (
     MSG_NO_DOCS_FOR_TITLE,
     MSG_PROCESSING_ERROR,
     MSG_STREAMING_ERROR,
+    MSG_XRAY_INSTRUCTION,
     SECTION_HEADERS,
     SECTION_ORDER,
     SYNONYM_MAP,
+    XRAY_RESPIRATORY_DOMAIN_CONTEXT_VI,
 )
 from chatbot.services.gemini_manager import get_gemini_manager
-from nlp.services import NERNegationIntegrator
+from nlp.services.runtime import get_shared_integrator
 from vector_store.services import VectorStoreManager
 
 logger = logging.getLogger(__name__)
@@ -92,10 +99,10 @@ class ChatbotService:
 
     def _init_managers(self) -> None:
         """Initialize API and vector managers."""
-        self.gemini_manager = get_gemini_manager()
+        self.llm_manager = get_gemini_manager()
         self.vector_manager = VectorStoreManager()
-        self.llm = self.gemini_manager.create_llm()
-        self.integrator = NERNegationIntegrator(enable_text_normalization=True)
+        self.llm = self.llm_manager.create_llm()
+        self.integrator = get_shared_integrator()
         logger.info(f"ChatbotService initialized for session: {self.session_id}")
 
     def _setup_chain(self) -> None:
@@ -164,69 +171,65 @@ class ChatbotService:
 
     def _create_context_function(self):
         """Create the context-building function for RAG."""
+        return RunnableLambda(self._build_context)
 
-        async def get_context(inputs: dict[str, Any]) -> str:
-            question = inputs.get("question") or ""
-            audit_id = str(uuid.uuid4())
+    async def _build_context(self, inputs: dict[str, Any]) -> str:
+        """Build the final RAG context for the active request."""
+        question = inputs.get("question") or ""
+        audit_id = str(uuid.uuid4())
 
-            try:
-                # Step 1: Analyze query with NER + negation (CPU bound, fast enough to keep sync or wrap if needed)
-                # analysis = self._analyze_query(question)
-                # Providing it wraps non-async DB? NERNegationIntegrator usually just NLP.
-                # If it accesses DB, wrap it. Let's wrap to be safe if we are unsure, though overhead.
-                # Assuming _analyze_query is CPU only for now based on code (regex/spacy).
-                analysis = await sync_to_async(self._analyze_query)(question)
+        try:
+            analysis = await sync_to_async(self._analyze_query)(question)
 
-                # Step 2: Gate for single disease (Uses VectorStore -> DB)
-                gate = await sync_to_async(self._gate_with_index_c)(question)
+            gate = await sync_to_async(self._gate_with_index_c)(question)
 
-                if gate.get("go_single") and gate.get("title"):
-                    title = gate.get("title", "")
-                    # DB Call
-                    docs = await sync_to_async(self._fetch_docs_for_title)(
-                        title, index="B", k=DEFAULT_SINGLE_DISEASE_DOCS_K
-                    )
-                    context = self._build_single_disease_context(title, docs)
+            if gate.get("go_single") and gate.get("title"):
+                title = gate.get("title", "")
+                docs = await sync_to_async(self._fetch_docs_for_title)(
+                    title, index="B", k=DEFAULT_SINGLE_DISEASE_DOCS_K
+                )
+                context = self._build_single_disease_context(title, docs)
 
-                    # Cache documents
-                    self._last_docs_cache = docs[:DEFAULT_DOCS_CACHE_SIZE]
-                    self._last_audit = {
-                        "audit_id": audit_id,
-                        "ts": time.time(),
-                        "mode": "single-disease",
-                        "title": title,
-                        "doc_count": len(docs),
-                    }
-                else:
-                    # Multi-disease retrieval (Uses VectorStore -> DB)
-                    tier_result = await sync_to_async(self._multi_disease_retrieval)(
-                        analysis
-                    )
-                    context = self._build_multi_disease_context(
-                        question, analysis, tier_result
-                    )
-                    self._last_audit = {
-                        "audit_id": audit_id,
-                        "ts": time.time(),
-                        "mode": "multi-disease",
-                        "candidates": [
-                            c.get("title")
-                            for c in tier_result.get("candidates", [])[:5]
-                        ],
-                    }
+                self._last_docs_cache = docs[:DEFAULT_DOCS_CACHE_SIZE]
+                self._last_audit = {
+                    "audit_id": audit_id,
+                    "ts": time.time(),
+                    "mode": "single-disease",
+                    "title": title,
+                    "doc_count": len(docs),
+                }
+            else:
+                tier_result = await sync_to_async(self._multi_disease_retrieval)(analysis)
+                context = self._build_multi_disease_context(question, analysis, tier_result)
+                self._last_audit = {
+                    "audit_id": audit_id,
+                    "ts": time.time(),
+                    "mode": "multi-disease",
+                    "candidates": [
+                        c.get("title") for c in tier_result.get("candidates", [])[:5]
+                    ],
+                }
 
-                self._last_query_text = question
+            self._last_query_text = question
 
-            except Exception as ex:
-                logger.warning(f"Context build error: {ex}")
-                context = MSG_ANALYSIS_ERROR
-                self._last_query_text = question
+        except Exception as ex:
+            logger.warning(f"Context build error: {ex}")
+            context = MSG_ANALYSIS_ERROR
+            self._last_query_text = question
 
-            # Append intake context
-            intake_ctx = await sync_to_async(self._get_intake_context)()
-            return context + ("\n" + intake_ctx if intake_ctx else "")
+        xray_context = str(inputs.get("xray_context") or "")
+        if not xray_context and inputs.get("xray_analysis_id"):
+            xray_context = await sync_to_async(self._get_xray_context_by_id)(
+                inputs["xray_analysis_id"]
+            )
 
-        return RunnableLambda(get_context)
+        intake_ctx = await sync_to_async(self._get_intake_context)()
+        context_parts = [context]
+        if xray_context:
+            context_parts.append(xray_context)
+        if intake_ctx:
+            context_parts.append(intake_ctx)
+        return "\n".join(part for part in context_parts if part)
 
     # TODO: Remove this method
     def query(self, question: str) -> str:
@@ -288,29 +291,10 @@ class ChatbotService:
         start_time = time.time()
 
         try:
-            # Prepare metadata
-            user_metadata = {}
-            assistant_metadata = {
-                "audit_id": self._last_audit.get("audit_id"),
-                "mode": self._last_audit.get("mode"),
-            }
-
-            if xray_analysis_id:
-                try:
-                    analysis_record = await sync_to_async(XRayAnalysis.objects.get)(
-                        id=xray_analysis_id
-                    )
-                    serialized_data = await sync_to_async(
-                        lambda: XRayAnalysisDisplaySerializer(analysis_record).data
-                    )()
-                    assistant_metadata["xray_analysis"] = serialized_data
-
-                    if analysis_record.image:
-                        user_metadata["attachment"] = analysis_record.image.url
-                except Exception as e:
-                    logger.warning(
-                        f"Failed to load/serialize XRayAnalysis for metadata: {e}"
-                    )
+            xray_payload = await sync_to_async(self._get_xray_analysis_payload)(
+                xray_analysis_id
+            )
+            user_metadata = dict(xray_payload["user_metadata"])
 
             # Save user message
             await sync_to_async(self._save_message)(
@@ -329,10 +313,17 @@ class ChatbotService:
                     "question": question,
                     "chat_history": chat_history,
                     "xray_analysis_id": xray_analysis_id,
+                    "xray_context": xray_payload["context"],
                 }
             )
 
             response_time_ms = int((time.time() - start_time) * 1000)
+            assistant_metadata = {
+                "audit_id": self._last_audit.get("audit_id"),
+                "mode": self._last_audit.get("mode"),
+            }
+            if xray_payload["serialized"] is not None:
+                assistant_metadata["xray_analysis"] = xray_payload["serialized"]
 
             # Save assistant message
             await sync_to_async(self._save_message)(
@@ -412,24 +403,10 @@ class ChatbotService:
         Yields:
             Response text chunks
         """
-        xray_analysis_data = None
-        user_metadata = {}
-        if xray_analysis_id:
-            try:
-                analysis_record = await sync_to_async(XRayAnalysis.objects.get)(
-                    id=xray_analysis_id
-                )
-                # Serialize the record for metadata BUT EXCLUDE embedding
-                xray_analysis_data = await sync_to_async(
-                    lambda: XRayAnalysisDisplaySerializer(analysis_record).data
-                )()
-
-                if analysis_record.image:
-                    user_metadata["attachment"] = analysis_record.image.url
-            except Exception as e:
-                logger.warning(
-                    f"Failed to load/serialize XRayAnalysis for context/metadata: {e}"
-                )
+        xray_payload = await sync_to_async(self._get_xray_analysis_payload)(
+            xray_analysis_id
+        )
+        user_metadata = dict(xray_payload["user_metadata"])
 
         # Save user message (DB op -> async)
         await sync_to_async(self._save_message)(
@@ -451,6 +428,7 @@ class ChatbotService:
                     "question": question,
                     "chat_history": chat_history,
                     "xray_analysis_id": xray_analysis_id,
+                    "xray_context": xray_payload["context"],
                 }
             ):
                 # StrOutputParser always returns str
@@ -462,8 +440,8 @@ class ChatbotService:
                 "audit_id": self._last_audit.get("audit_id"),
                 "mode": self._last_audit.get("mode"),
             }
-            if xray_analysis_data:
-                assistant_metadata["xray_analysis"] = xray_analysis_data
+            if xray_payload["serialized"] is not None:
+                assistant_metadata["xray_analysis"] = xray_payload["serialized"]
 
             # Save complete response (DB op -> async)
             response_time_ms = int((time.time() - start_time) * 1000)
@@ -479,6 +457,79 @@ class ChatbotService:
             error_msg = MSG_STREAMING_ERROR.format(error=str(e))
             await sync_to_async(self._save_message)(MessageRole.ASSISTANT, error_msg)
             yield error_msg
+
+    def _serialize_xray_analysis(
+        self, analysis_record: XRayAnalysis
+    ) -> dict[str, Any]:
+        """Serialize X-ray analysis for message metadata."""
+        return cast(
+            dict[str, Any],
+            XRayAnalysisDisplaySerializer(analysis_record).data,
+        )
+
+    def _build_xray_context(self, analysis_record: XRayAnalysis) -> str:
+        """Build the prompt context block for a stored X-ray analysis."""
+        class_probs = analysis_record.class_probs
+        probs = class_probs if isinstance(class_probs, dict) else {}
+        top_probs = sorted(
+            probs.items(),
+            key=lambda item: float(item[1]),
+            reverse=True,
+        )[:5]
+        probs_str = (
+            ", ".join(f"{label}: {float(score):.3f}" for label, score in top_probs)
+            if top_probs
+            else "Không có dữ liệu"
+        )
+
+        findings = analysis_record.findings
+        findings_list = findings if isinstance(findings, list) else []
+        findings_str = (
+            ", ".join(str(item) for item in findings_list if str(item).strip())
+            or "Không có phát hiện nổi bật"
+        )
+
+        return "".join(
+            [
+                HEADER_XRAY_ANALYSIS_START,
+                XRAY_RESPIRATORY_DOMAIN_CONTEXT_VI,
+                MSG_XRAY_INSTRUCTION,
+                HEADER_XRAY_PREDICTION.format(pred_label=analysis_record.pred_label),
+                HEADER_XRAY_PROBABILITIES.format(probs_str=probs_str),
+                HEADER_XRAY_FINDINGS.format(findings_str=findings_str),
+                HEADER_XRAY_ANALYSIS_END,
+            ]
+        )
+
+    def _get_xray_analysis_payload(self, xray_analysis_id: int | None) -> dict[str, Any]:
+        """Load X-ray metadata/context once for the current request."""
+        payload: dict[str, Any] = {
+            "context": "",
+            "serialized": None,
+            "user_metadata": {},
+        }
+        if not xray_analysis_id:
+            return payload
+
+        try:
+            analysis_record = XRayAnalysis.objects.get(id=xray_analysis_id)
+        except XRayAnalysis.DoesNotExist:
+            logger.warning("XRayAnalysis not found for id=%s", xray_analysis_id)
+            return payload
+        except Exception as exc:
+            logger.warning("Failed to load XRayAnalysis id=%s: %s", xray_analysis_id, exc)
+            return payload
+
+        payload["context"] = self._build_xray_context(analysis_record)
+        payload["serialized"] = self._serialize_xray_analysis(analysis_record)
+        if analysis_record.image:
+            payload["user_metadata"] = {"attachment": analysis_record.image.url}
+        return payload
+
+    def _get_xray_context_by_id(self, xray_analysis_id: int | None) -> str:
+        """Resolve X-ray context from an analysis id."""
+        payload = self._get_xray_analysis_payload(xray_analysis_id)
+        return cast(str, payload["context"])
 
     # ---------------------------
     # RAG Helper Methods

@@ -3,6 +3,7 @@ Medical Named Entity Recognition using PhoBERT-based model.
 Identifies medical entities (diseases, drugs, tests, etc.) in Vietnamese text.
 """
 
+import threading
 from typing import Any
 
 from django.conf import settings
@@ -10,7 +11,11 @@ from django.conf import settings
 import torch
 from transformers import RobertaForTokenClassification
 
-from nlp.services.constants import MEDICAL_NER_MODEL_PATH, NER_LABEL_MAPPING
+from nlp.services.constants import (
+    MEDICAL_NER_MODEL_PATH,
+    MEDICAL_NER_TOKENIZER_PATH,
+    NER_LABEL_MAPPING,
+)
 from nlp.services.libs.VietMed_NER.tokenizer.tokenization_phobert_fast import (
     PhobertTokenizerFast,
 )
@@ -22,12 +27,23 @@ logger = get_logger(__name__)
 class MedicalNER:
     """Medical Named Entity Recognition model wrapper."""
 
-    def __init__(self, model_path: str | None = None) -> None:
+    _TOKENIZER_CACHE: PhobertTokenizerFast | None = None
+    _MODEL_CACHE: RobertaForTokenClassification | None = None
+    _LABEL_MAP_CACHE: dict[int, str] = {}
+    _CACHE_SIGNATURE: tuple[str, str] | None = None
+    _CACHE_LOCK = threading.Lock()
+
+    def __init__(
+        self,
+        model_path: str | None = None,
+        tokenizer_path: str | None = None,
+    ) -> None:
         """
         Initialize the medical NER model.
 
         Args:
             model_path: Path to the NER model directory. If None, uses default path.
+            tokenizer_path: Path to the PhoBERT tokenizer assets. If None, uses default.
         """
         if model_path is None:
             model_path = getattr(
@@ -35,32 +51,75 @@ class MedicalNER:
                 "MEDICAL_NER_MODEL_PATH",
                 MEDICAL_NER_MODEL_PATH,
             )
+        if tokenizer_path is None:
+            tokenizer_path = getattr(
+                settings,
+                "MEDICAL_NER_TOKENIZER_PATH",
+                MEDICAL_NER_TOKENIZER_PATH,
+            )
 
         self.model_path = model_path
+        self.tokenizer_path = tokenizer_path
         self.tokenizer: PhobertTokenizerFast | None = None
         self.model: RobertaForTokenClassification | None = None
         self.label_map: dict[int, str] = {}
         self._load_model()
 
+    @classmethod
+    def clear_cache(cls) -> None:
+        """Clear process-wide model/tokenizer cache for tests or reloads."""
+        cls._TOKENIZER_CACHE = None
+        cls._MODEL_CACHE = None
+        cls._LABEL_MAP_CACHE = {}
+        cls._CACHE_SIGNATURE = None
+
     def _load_model(self) -> None:
         """Load model and tokenizer."""
-        try:
-            self.tokenizer = PhobertTokenizerFast.from_pretrained(
-                "vinai/phobert-base-v2"
-            )
-            self.model = RobertaForTokenClassification.from_pretrained(self.model_path)
-            self.model.eval()
+        cache_signature = (self.model_path, self.tokenizer_path)
+        if self.__class__._CACHE_SIGNATURE == cache_signature:
+            self._apply_cached_components()
+            return
 
-            config = self.model.config
-            if config.id2label:
-                self.label_map = {int(k): v for k, v in config.id2label.items()}
+        with self.__class__._CACHE_LOCK:
+            if self.__class__._CACHE_SIGNATURE == cache_signature:
+                self._apply_cached_components()
+                return
 
-            logger.info("Model NER loaded successfully from: %s", self.model_path)
-            logger.debug("Using PhobertTokenizerFast with offset mapping support")
+            try:
+                tokenizer = PhobertTokenizerFast.from_pretrained(
+                    self.tokenizer_path,
+                    local_files_only=True,
+                )
+                model = RobertaForTokenClassification.from_pretrained(self.model_path)
+                model.eval()
 
-        except Exception as e:
-            logger.error("Failed to load NER model: %s", e)
-            raise
+                config = model.config
+                label_map: dict[int, str] = {}
+                if config.id2label:
+                    label_map = {int(k): v for k, v in config.id2label.items()}
+
+                self.__class__._TOKENIZER_CACHE = tokenizer
+                self.__class__._MODEL_CACHE = model
+                self.__class__._LABEL_MAP_CACHE = label_map
+                self.__class__._CACHE_SIGNATURE = cache_signature
+                self._apply_cached_components()
+
+                logger.info(
+                    "Medical NER runtime loaded from model=%s tokenizer=%s",
+                    self.model_path,
+                    self.tokenizer_path,
+                )
+                logger.debug("Using local PhobertTokenizerFast with offset mapping")
+
+            except Exception as e:
+                logger.error("Failed to load NER model: %s", e)
+                raise
+
+    def _apply_cached_components(self) -> None:
+        """Attach cached tokenizer/model instances to the wrapper."""
+        self.tokenizer = self.__class__._TOKENIZER_CACHE
+        self.model = self.__class__._MODEL_CACHE
+        self.label_map = dict(self.__class__._LABEL_MAP_CACHE)
 
     def _create_begin_entity(
         self,

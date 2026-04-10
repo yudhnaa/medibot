@@ -86,6 +86,12 @@ HEADER_PATIENT_INFO = "\nTHÔNG TIN BỆNH NHÂN:\n"
 HEADER_XRAY_ANALYSIS_START = (
     "=== KẾT QUẢ PHÂN TÍCH HÌNH ẢNH X-QUANG TỪ NGƯỜI DÙNG ===\n"
 )
+XRAY_RESPIRATORY_DOMAIN_CONTEXT_VI = (
+    "NGỮ CẢNH MIỀN: Đây là ca tư vấn y tế hô hấp/phổi có ảnh X-quang ngực. "
+    "Ưu tiên giải thích trong bối cảnh COVID-19, viêm phổi, tổn thương phổi và "
+    "triệu chứng hô hấp. Nếu tài liệu truy hồi không liên quan bệnh người hoặc "
+    "không thuộc ngữ cảnh hô hấp/phổi thì không dùng để kết luận.\n"
+)
 MSG_XRAY_INSTRUCTION = (
     "Người dùng đã gửi kèm một ảnh X-quang phổi. "
     "Hệ thống Vision AI đã phân tích ảnh này và đưa ra kết quả sau. "

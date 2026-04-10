@@ -21,14 +21,14 @@ django.setup()
 
 from chatbot.models import ChatbotConfig  # noqa: E402
 from django.conf import settings  # noqa: E402
-from vector_store.services.constants import DEFAULT_EMBEDDING_PROVIDER  # noqa: E402
+from vector_store.services.constants import (  # noqa: E402
+    DEFAULT_EMBEDDING_PROVIDER,
+    DEFAULT_OPENROUTER_BASE_URL,
+)
 
-GOOGLE_API_KEY = cast(str, getattr(settings, "GOOGLE_API_KEY", ""))
-if not GOOGLE_API_KEY:
-    raise EnvironmentError(
-        "GOOGLE_API_KEY is not set. "
-        "Please add it to your .env file or export it as an environment variable."
-    )
+GOOGLE_API_KEY = cast(
+    str, ChatbotConfig.get_config("GOOGLE_API_KEY", getattr(settings, "GOOGLE_API_KEY", ""))
+)
 
 # DB-driven settings (read from ChatbotConfig)
 EMBEDDING_DIMENSIONS: int = cast(
@@ -38,6 +38,11 @@ CHUNK_SIZE: int = cast(int, ChatbotConfig.get_config("CHUNK_SIZE", 1000))
 CHUNK_OVERLAP: int = cast(int, ChatbotConfig.get_config("CHUNK_OVERLAP", 200))
 EMBEDDING_PROVIDER: str = str(
     ChatbotConfig.get_config("EMBEDDING_PROVIDER", DEFAULT_EMBEDDING_PROVIDER)
+)
+LLM_PROVIDER: str = str(ChatbotConfig.get_config("LLM_PROVIDER", "gemini"))
+LLM_MODEL: str = str(ChatbotConfig.get_config("LLM_MODEL", "gemini-2.5-flash"))
+OPENROUTER_BASE_URL: str = str(
+    ChatbotConfig.get_config("OPENROUTER_BASE_URL", DEFAULT_OPENROUTER_BASE_URL)
 )
 
 # Database settings for LangChain PGVector

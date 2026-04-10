@@ -71,6 +71,24 @@ VISION_CONFIG_PATH = os.path.join(
 VISION_CHECKPOINT_PATH = os.path.join(
     os.path.dirname(BASE_DIR), "vision", "checkpoints", "best.pt"
 )
+MEDICAL_NER_TOKENIZER_PATH = os.path.join(
+    os.path.dirname(BASE_DIR),
+    "nlp",
+    "services",
+    "libs",
+    "VietMed_NER",
+    "phobert-base-v2-tokenizer",
+)
+ENABLE_STARTUP_WARMUP = os.getenv("ENABLE_STARTUP_WARMUP", "True").lower() in (
+    "true",
+    "1",
+    "yes",
+)
+ENABLE_SQL_DEBUG_LOGGING = os.getenv("ENABLE_SQL_DEBUG_LOGGING", "False").lower() in (
+    "true",
+    "1",
+    "yes",
+)
 
 # Custom User Model
 AUTH_USER_MODEL = "authentication.Customer"

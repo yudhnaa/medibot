@@ -188,6 +188,7 @@ class VectorStoreManager:
 
         results = list(MedicalDocument.objects.raw(sql, params))
         logger.info(f"Found {len(results)} similar documents for query")
+        logger.info(f"Results: {[doc.content for doc in results]}")
         return results
 
     # -------------------------

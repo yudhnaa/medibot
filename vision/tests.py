@@ -10,7 +10,13 @@ import torch
 from django.test import TestCase
 
 from vision.utils import load_config, get_device, compute_metrics
-from vision.services.vision_service import derive_findings, load_image, overlay_heatmap
+from vision.services.vision_service import (
+    clear_vision_runtime_cache,
+    derive_findings,
+    get_vision_runtime,
+    load_image,
+    overlay_heatmap,
+)
 
 
 class GetDeviceTests(TestCase):
@@ -64,6 +70,52 @@ class LoadConfigTests(TestCase):
         self.assertEqual(cfg["model"]["num_classes"], 4)
         self.assertEqual(cfg["model"]["embedding_dim"], 1024)
         self.assertIn("weights", cfg["model"])
+
+
+class VisionRuntimeCacheTests(TestCase):
+    """Tests for process-wide vision runtime caching."""
+
+    def tearDown(self) -> None:
+        clear_vision_runtime_cache()
+
+    @patch("vision.services.vision_service.XRayPreprocess")
+    @patch("vision.services.vision_service.torch.load")
+    @patch("vision.services.vision_service.build_model")
+    @patch("vision.services.vision_service.get_device")
+    @patch("vision.services.vision_service.load_config")
+    def test_get_vision_runtime_reuses_cached_bundle(
+        self,
+        mock_load_config: MagicMock,
+        mock_get_device: MagicMock,
+        mock_build_model: MagicMock,
+        mock_torch_load: MagicMock,
+        mock_preprocess_cls: MagicMock,
+    ) -> None:
+        """Model/checkpoint/preprocess should load once per process."""
+        clear_vision_runtime_cache()
+        mock_load_config.return_value = {
+            "model": {"device": "cpu", "num_classes": 4, "weights": "test"},
+            "data": {"img_size": 224},
+        }
+        mock_get_device.return_value = torch.device("cpu")
+        mock_model = MagicMock()
+        mock_model.to.return_value = mock_model
+        mock_build_model.return_value = mock_model
+        mock_torch_load.return_value = {"model_state": {"weight": 1}}
+        mock_preprocess = MagicMock()
+        mock_preprocess_cls.return_value = mock_preprocess
+
+        first = get_vision_runtime("/tmp/config.yaml", "/tmp/checkpoint.pt")
+        second = get_vision_runtime("/tmp/config.yaml", "/tmp/checkpoint.pt")
+
+        self.assertIs(first, second)
+        mock_load_config.assert_called_once_with("/tmp/config.yaml")
+        mock_build_model.assert_called_once_with(4, "test")
+        mock_torch_load.assert_called_once_with(
+            "/tmp/checkpoint.pt",
+            map_location=torch.device("cpu"),
+        )
+        mock_preprocess_cls.assert_called_once_with(224, augment=False)
 
 
 class DeriveFindingsTests(TestCase):

@@ -1,5 +1,6 @@
 # pylint: disable=wildcard-import,unused-wildcard-import
 from .base import *  # noqa: F401,F403
+from utils.logger import get_logging_config
 
 ALLOWED_HOSTS = ["localhost", "127.0.0.1"]
 
@@ -40,33 +41,9 @@ if DEBUG:
             "debug_toolbar.middleware.DebugToolbarMiddleware",
         )
 
-# Logging
-LOGGING = {
-    "version": 1,
-    "disable_existing_loggers": False,
-    "formatters": {
-        "standard": {
-            "format": "[%(asctime)s] %(levelname)s [%(name)s:%(lineno)s] %(message)s",
-            "datefmt": "%d/%b/%Y %H:%M:%S",
-        },
-    },
-    "handlers": {
-        "console": {
-            "level": "INFO",
-            "class": "logging.StreamHandler",
-            "formatter": "standard",
-        },
-    },
-    "loggers": {
-        "django": {
-            "handlers": ["console"],
-            "propagate": True,
-            "level": "INFO",
-        },
-        "chatbot": {
-            "handlers": ["console"],
-            "propagate": True,
-            "level": "DEBUG",
-        },
-    },
-}
+LOGGING = get_logging_config(
+    log_level=os.getenv("LOG_LEVEL", "DEBUG"),
+    enable_colors=True,
+    enable_django_debug=DEBUG,
+    enable_sql_debug=ENABLE_SQL_DEBUG_LOGGING,
+)

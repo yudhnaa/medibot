@@ -56,6 +56,45 @@ class CsvUploadForm(forms.Form):
         return csv_file
 
 
+class CovidQAEmbedForm(forms.Form):
+    """Form for triggering covid_qa_deepset embedding from admin."""
+
+    num_articles = forms.IntegerField(
+        label="Number of Articles",
+        initial=147,
+        min_value=1,
+        max_value=147,
+        help_text="Select how many unique covid_qa_deepset articles to embed (1-147).",
+    )
+    start_article = forms.IntegerField(
+        label="Start Article",
+        initial=1,
+        min_value=1,
+        max_value=147,
+        help_text=(
+            "1-based article index to start from. "
+            "Example: start=10, num=5 -> embed articles 10-14."
+        ),
+    )
+
+    def clean(self):
+        cleaned_data = super().clean() or {}
+        num_articles = cleaned_data.get("num_articles")
+        start_article = cleaned_data.get("start_article")
+
+        if num_articles is None or start_article is None:
+            return cleaned_data
+
+        if start_article + num_articles - 1 > 147:
+            raise forms.ValidationError(
+                (
+                    "Requested range exceeds available 147 unique articles. "
+                    "Please reduce Number of Articles or Start Article."
+                )
+            )
+        return cleaned_data
+
+
 class DocumentEditForm(forms.ModelForm):
     """Form for editing document fields with preview."""
 

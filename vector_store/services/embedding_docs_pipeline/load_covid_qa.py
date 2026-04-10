@@ -16,10 +16,9 @@ import logging
 
 from datasets import load_dataset
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-)
+COVID_QA_DATASET_NAME = "deepset/covid_qa_deepset"
+ARTICLE_ID_PREFIX = "covidqa"
+
 logger = logging.getLogger(__name__)
 
 
@@ -44,10 +43,71 @@ def load_covid_qa_dataset():
     Returns:
         Dataset object (split 'train')
     """
-    logger.info("Loading dataset 'deepset/covid_qa_deepset' from Hugging Face...")
-    dataset = load_dataset("deepset/covid_qa_deepset", split="train")
+    logger.info("Loading dataset '%s' from Hugging Face...", COVID_QA_DATASET_NAME)
+    dataset = load_dataset(COVID_QA_DATASET_NAME, split="train")
     logger.info(f"Loaded successfully! Total samples: {len(dataset)}")
     return dataset
+
+
+def get_unique_context_records(
+    dataset,
+    limit: int | None = None,
+    start_article: int = 1,
+) -> list[dict[str, str]]:
+    """
+    Extract unique contexts and assign deterministic article IDs.
+
+    Supports selecting a contiguous window by 1-based article index:
+    - start_article: first unique article number to include (default 1)
+    - limit: maximum number of unique articles to return
+
+    Returns:
+        List of dicts with keys: article_id, context_id, context
+    """
+    if start_article < 1:
+        raise ValueError("start_article must be >= 1")
+    if limit is not None and limit < 1:
+        raise ValueError("limit must be >= 1 when provided")
+
+    seen_context_ids: set[str] = set()
+    selected: list[tuple[int, str, str]] = []
+    unique_ordinal = 0
+    end_article = None if limit is None else start_article + limit - 1
+
+    for sample in dataset:
+        context_text = sample["context"]
+        context_id = _generate_context_id(context_text)
+        if context_id in seen_context_ids:
+            continue
+
+        seen_context_ids.add(context_id)
+        unique_ordinal += 1
+
+        if unique_ordinal < start_article:
+            continue
+        if end_article is not None and unique_ordinal > end_article:
+            break
+
+        selected.append((unique_ordinal, context_id, context_text))
+
+    records: list[dict[str, str]] = []
+    for ordinal, context_id, context_text in selected:
+        width = max(3, len(str(ordinal)))
+        records.append(
+            {
+                "article_id": f"{ARTICLE_ID_PREFIX}-{ordinal:0{width}d}",
+                "context_id": context_id,
+                "context": context_text,
+            }
+        )
+
+    logger.info(
+        "Prepared %s unique article records (start_article=%s, limit=%s)",
+        len(records),
+        start_article,
+        limit,
+    )
+    return records
 
 
 def get_unique_contexts(dataset) -> dict[str, str]:
@@ -63,16 +123,9 @@ def get_unique_contexts(dataset) -> dict[str, str]:
     Returns:
         Dict mapping context_id → context_text (unique articles only)
     """
-    unique_contexts: dict[str, str] = {}
-
-    for sample in dataset:
-        context_text = sample["context"]
-        context_id = _generate_context_id(context_text)
-
-        if context_id not in unique_contexts:
-            unique_contexts[context_id] = context_text
-
-    logger.info(f"Found {len(unique_contexts)} unique articles (contexts)")
+    records = get_unique_context_records(dataset)
+    unique_contexts = {record["context_id"]: record["context"] for record in records}
+    logger.info("Found %s unique articles (contexts)", len(unique_contexts))
     return unique_contexts
 
 

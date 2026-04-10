@@ -1,6 +1,7 @@
 import logging
 import os
-from typing import Optional
+import threading
+from typing import Any, Optional
 
 import cv2
 import numpy as np
@@ -14,6 +15,10 @@ from vision.explain.gradcam import GradCAM
 from vision.explain.lung_mask import LungMasker, resize_mask
 
 logger = logging.getLogger(__name__)
+
+_VISION_RUNTIME: dict[str, Any] | None = None
+_VISION_RUNTIME_SIGNATURE: tuple[str, str | None] | None = None
+_VISION_RUNTIME_LOCK = threading.Lock()
 
 
 def load_image(path):
@@ -70,6 +75,75 @@ def derive_findings(heatmap, cfg, mask=None):
     return findings
 
 
+def _build_vision_runtime(
+    config_path: str,
+    checkpoint_path: Optional[str] = None,
+) -> dict[str, Any]:
+    """Load the shared vision inference runtime once per process."""
+    cfg = load_config(config_path)
+    device = get_device(cfg["model"]["device"])
+
+    model = build_model(cfg["model"]["num_classes"], cfg["model"]["weights"]).to(device)
+    if checkpoint_path:
+        checkpoint = torch.load(checkpoint_path, map_location=device)
+        state_dict = checkpoint.get("model_state", checkpoint)
+        model.load_state_dict(state_dict)
+    model.eval()
+
+    preprocess = XRayPreprocess(cfg["data"]["img_size"], augment=False)
+    logger.info(
+        "Vision runtime initialized (device=%s, checkpoint=%s)",
+        device,
+        bool(checkpoint_path),
+    )
+    return {
+        "cfg": cfg,
+        "device": device,
+        "model": model,
+        "preprocess": preprocess,
+    }
+
+
+def get_vision_runtime(
+    config_path: str,
+    checkpoint_path: Optional[str] = None,
+) -> dict[str, Any]:
+    """Return the shared vision inference runtime."""
+    global _VISION_RUNTIME, _VISION_RUNTIME_SIGNATURE
+
+    signature = (config_path, checkpoint_path)
+    if _VISION_RUNTIME is not None and _VISION_RUNTIME_SIGNATURE == signature:
+        return _VISION_RUNTIME
+
+    with _VISION_RUNTIME_LOCK:
+        if _VISION_RUNTIME is None or _VISION_RUNTIME_SIGNATURE != signature:
+            _VISION_RUNTIME = _build_vision_runtime(config_path, checkpoint_path)
+            _VISION_RUNTIME_SIGNATURE = signature
+
+    return _VISION_RUNTIME
+
+
+def warmup_vision_runtime(
+    config_path: str,
+    checkpoint_path: Optional[str] = None,
+) -> bool:
+    """Warm the shared vision runtime for lower first-request latency."""
+    try:
+        get_vision_runtime(config_path, checkpoint_path)
+        return True
+    except Exception as exc:
+        logger.warning("Vision warmup failed: %s", exc)
+        return False
+
+
+def clear_vision_runtime_cache() -> None:
+    """Clear the shared vision runtime for tests."""
+    global _VISION_RUNTIME, _VISION_RUNTIME_SIGNATURE
+    with _VISION_RUNTIME_LOCK:
+        _VISION_RUNTIME = None
+        _VISION_RUNTIME_SIGNATURE = None
+
+
 def analyze_xray(
     config_path: str, image_path: str, checkpoint_path: Optional[str] = None
 ):
@@ -78,16 +152,12 @@ def analyze_xray(
 
     Returns dict with: class_probs, pred_label, findings, heatmap_path, mask_path, embedding
     """
-    cfg = load_config(config_path)
-    device = get_device(cfg["model"]["device"])
+    runtime = get_vision_runtime(config_path, checkpoint_path)
+    cfg = runtime["cfg"]
+    device = runtime["device"]
+    model = runtime["model"]
+    pre = runtime["preprocess"]
 
-    model = build_model(cfg["model"]["num_classes"], cfg["model"]["weights"]).to(device)
-    if checkpoint_path:
-        checkpoint = torch.load(checkpoint_path, map_location=device)
-        model.load_state_dict(checkpoint["model_state"])
-    model.eval()
-
-    pre = XRayPreprocess(cfg["data"]["img_size"], augment=False)
     raw = load_image(image_path)
     img = pre(raw).unsqueeze(0).to(device)
 

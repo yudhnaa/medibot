@@ -3,6 +3,7 @@ Tests for VectorStoreManager
 Tests document storage, search, and CSV processing with mocked embeddings.
 """
 
+import json
 import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -12,6 +13,12 @@ from django.test import TestCase
 import pandas as pd
 
 from chatbot.models import IndexType, MedicalDocument, SectionType
+from vector_store.services.embedding_docs_pipeline.covidqa_pipeline import (
+    COVIDQAEmbeddingPipeline,
+)
+from vector_store.services.embedding_docs_pipeline.load_covid_qa import (
+    get_unique_context_records,
+)
 from vector_store.services.vector_store_manager import VectorStoreManager
 
 
@@ -364,3 +371,257 @@ class VectorStoreManagerSearchTestCase(TestCase):
             if "vector" in str(e).lower():
                 self.skipTest("pgvector extension not available")
             raise
+
+
+class COVIDQAEmbeddingPipelineTestCase(TestCase):
+    """Tests for COVID-QA embedding pipeline utilities and metadata."""
+
+    def test_get_unique_context_records_assigns_stable_article_ids(self) -> None:
+        dataset_samples = [
+            {"context": "Article A", "question": "q1", "answers": {"text": ["a1"]}},
+            {"context": "Article A", "question": "q2", "answers": {"text": ["a2"]}},
+            {"context": "Article B", "question": "q3", "answers": {"text": ["a3"]}},
+        ]
+
+        records = get_unique_context_records(dataset_samples)
+
+        self.assertEqual(len(records), 2)
+        self.assertEqual(records[0]["article_id"], "covidqa-001")
+        self.assertEqual(records[1]["article_id"], "covidqa-002")
+        self.assertIn("context_id", records[0])
+        self.assertEqual(records[0]["context"], "Article A")
+
+    def test_get_unique_context_records_supports_window_selection(self) -> None:
+        dataset_samples = [
+            {"context": "Article A", "question": "q1", "answers": {"text": ["a1"]}},
+            {"context": "Article A", "question": "q2", "answers": {"text": ["a2"]}},
+            {"context": "Article B", "question": "q3", "answers": {"text": ["a3"]}},
+            {"context": "Article C", "question": "q4", "answers": {"text": ["a4"]}},
+        ]
+
+        records = get_unique_context_records(dataset_samples, limit=1, start_article=2)
+
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0]["article_id"], "covidqa-002")
+        self.assertEqual(records[0]["context"], "Article B")
+
+    def test_create_llm_with_openrouter_uses_langchain_chatopenai(self) -> None:
+        with patch(
+            "vector_store.services.embedding_docs_pipeline.base.EmbeddingService"
+        ) as mock_embedding_service, patch(
+            "vector_store.services.embedding_docs_pipeline.base.ChatOpenAI"
+        ) as mock_chat_openai, patch.dict(
+            "os.environ",
+            {"OPENROUTER_API_KEY": "test-openrouter-key"},
+            clear=False,
+        ):
+            mock_embedding_service.return_value = MagicMock()
+            mock_chat_openai.return_value = MagicMock()
+
+            COVIDQAEmbeddingPipeline(
+                embedding_provider="transformers",
+                llm_provider="openrouter",
+                llm_model="openai/gpt-4.1-mini",
+            )
+
+            self.assertTrue(mock_chat_openai.called)
+            kwargs = mock_chat_openai.call_args.kwargs
+            self.assertEqual(kwargs["model"], "openai/gpt-4.1-mini")
+
+    def test_stage_1_index_c_stores_article_ids_in_metadata(self) -> None:
+        with patch(
+            "vector_store.services.embedding_docs_pipeline.base.EmbeddingService"
+        ) as mock_embedding_service, patch(
+            "vector_store.services.embedding_docs_pipeline.base.ChatGoogleGenerativeAI"
+        ) as mock_chat_gemini, patch(
+            "vector_store.services.embedding_docs_pipeline.base.time.sleep",
+            return_value=None,
+        ):
+            mock_embedding = MagicMock()
+            mock_embedding.embed_documents.return_value = [[0.1] * 768]
+            mock_embedding_service.return_value = mock_embedding
+            mock_chat_gemini.return_value = MagicMock()
+
+            pipeline = COVIDQAEmbeddingPipeline(embedding_provider="transformers")
+            pipeline._initialize_extraction_records(
+                [
+                    {
+                        "article_id": "covidqa-001",
+                        "context_id": "ctx-001",
+                        "context": "COVID-19 causes fever",
+                    }
+                ]
+            )
+            with patch.object(
+                pipeline,
+                "extract_diseases_from_context",
+                return_value=["COVID-19"],
+            ):
+                disease_to_contexts = pipeline.stage_1_index_c(
+                    [
+                        {
+                            "article_id": "covidqa-001",
+                            "context_id": "ctx-001",
+                            "context": "COVID-19 causes fever",
+                        }
+                    ]
+                )
+
+            self.assertIn("covid-19", disease_to_contexts)
+            doc = MedicalDocument.objects.get(index_type=IndexType.C)
+            self.assertEqual(doc.metadata["source_article_ids"], ["covidqa-001"])
+
+    def test_run_persists_extraction_dataset_file(self) -> None:
+        with patch(
+            "vector_store.services.embedding_docs_pipeline.base.EmbeddingService"
+        ) as mock_embedding_service, patch(
+            "vector_store.services.embedding_docs_pipeline.base.ChatGoogleGenerativeAI"
+        ) as mock_chat_gemini:
+            mock_embedding_service.return_value = MagicMock()
+            mock_chat_gemini.return_value = MagicMock()
+
+            pipeline = COVIDQAEmbeddingPipeline(embedding_provider="transformers")
+
+            with tempfile.TemporaryDirectory() as tmpdir:
+                output_path = Path(tmpdir) / "extraction_dataset.json"
+                pipeline.extraction_dataset_output_path = str(output_path)
+
+                contexts = [
+                    {
+                        "article_id": "covidqa-001",
+                        "context_id": "ctx-001",
+                        "context": "Sample article context",
+                    }
+                ]
+                with patch.object(
+                    pipeline, "load_contexts", return_value=contexts
+                ), patch.object(
+                    pipeline, "stage_1_index_c", return_value={"covid-19": {"ctx-001"}}
+                ), patch.object(
+                    pipeline, "stage_2_index_a", return_value=1
+                ), patch.object(
+                    pipeline, "stage_3_index_b", return_value=2
+                ):
+                    stats = pipeline.run(num_docs=1)
+
+                self.assertEqual(stats["articles"], 1)
+                self.assertEqual(stats["extraction_dataset_path"], str(output_path))
+                self.assertTrue(output_path.exists())
+
+                payload = json.loads(output_path.read_text(encoding="utf-8"))
+                self.assertEqual(payload["article_count"], 1)
+                self.assertEqual(payload["articles"][0]["article_id"], "covidqa-001")
+
+    def test_stage_2_uses_canonical_title_only(self) -> None:
+        with patch(
+            "vector_store.services.embedding_docs_pipeline.base.EmbeddingService"
+        ) as mock_embedding_service, patch(
+            "vector_store.services.embedding_docs_pipeline.base.ChatGoogleGenerativeAI"
+        ) as mock_chat_gemini, patch(
+            "vector_store.services.embedding_docs_pipeline.base.time.sleep",
+            return_value=None,
+        ):
+            mock_embedding = MagicMock()
+            mock_embedding.embed_documents.return_value = [[0.1] * 768]
+            mock_embedding_service.return_value = mock_embedding
+            mock_chat_gemini.return_value = MagicMock()
+
+            pipeline = COVIDQAEmbeddingPipeline(embedding_provider="transformers")
+            llm_payload = {
+                "disease_name": "hiv-1 infection",
+                "general": "summary",
+                "triệu chứng": "",
+                "nguyên nhân": "",
+                "yếu tố nguy cơ": "",
+                "chẩn đoán và điều trị": "",
+                "sinh hoạt và phòng ngừa": "",
+            }
+            with patch.object(
+                pipeline,
+                "_llm_invoke",
+                return_value=json.dumps(llm_payload, ensure_ascii=False),
+            ):
+                count = pipeline.stage_2_index_a(
+                    [
+                        {
+                            "article_id": "covidqa-001",
+                            "context_id": "ctx-001",
+                            "context": "Article about HIV.",
+                        }
+                    ],
+                    {
+                        "hiv-1": {"ctx-001"},
+                        "hiv-1 infection": {"ctx-001"},
+                    },
+                )
+
+            self.assertEqual(count, 1)
+            docs = MedicalDocument.objects.filter(index_type=IndexType.A)
+            self.assertEqual(docs.count(), 1)
+            doc = docs.first()
+            self.assertIsNotNone(doc)
+            if doc is not None:
+                self.assertEqual(doc.title, "hiv-1 infection")
+                self.assertEqual(
+                    doc.metadata.get("title_aliases"),
+                    ["hiv-1", "hiv-1 infection"],
+                )
+
+    def test_stage_3_uses_canonical_title_only(self) -> None:
+        with patch(
+            "vector_store.services.embedding_docs_pipeline.base.EmbeddingService"
+        ) as mock_embedding_service, patch(
+            "vector_store.services.embedding_docs_pipeline.base.ChatGoogleGenerativeAI"
+        ) as mock_chat_gemini, patch(
+            "vector_store.services.embedding_docs_pipeline.base.time.sleep",
+            return_value=None,
+        ):
+            mock_embedding = MagicMock()
+            mock_embedding.embed_documents.side_effect = [
+                [[0.1] * 768],
+                [[0.2] * 768],
+            ]
+            mock_embedding_service.return_value = mock_embedding
+            mock_chat_gemini.return_value = MagicMock()
+
+            pipeline = COVIDQAEmbeddingPipeline(embedding_provider="transformers")
+            with patch.object(
+                pipeline,
+                "classify_sections",
+                return_value={
+                    "general": "General section text.",
+                    "symptom": "Symptom section text.",
+                    "aetiologies": "",
+                    "risk": "",
+                    "diagnose_and_treaty": "",
+                    "living_and_preventive": "",
+                },
+            ):
+                count = pipeline.stage_3_index_b(
+                    [
+                        {
+                            "article_id": "covidqa-001",
+                            "context_id": "ctx-001",
+                            "context": "Article about HIV.",
+                        }
+                    ],
+                    {
+                        "hiv-1": {"ctx-001"},
+                        "hiv-1 infection": {"ctx-001"},
+                    },
+                )
+
+            self.assertEqual(count, 2)
+            docs = MedicalDocument.objects.filter(index_type=IndexType.B).order_by("id")
+            self.assertEqual(docs.count(), 2)
+            self.assertEqual(
+                set(docs.values_list("title", flat=True)),
+                {"hiv-1 infection"},
+            )
+            first_doc = docs.first()
+            self.assertIsNotNone(first_doc)
+            if first_doc is not None:
+                self.assertEqual(
+                    first_doc.metadata.get("title_aliases"),
+                    ["hiv-1", "hiv-1 infection"],
+                )

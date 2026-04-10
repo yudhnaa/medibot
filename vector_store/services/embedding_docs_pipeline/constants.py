@@ -3,11 +3,12 @@ Shared constants for the COVID-QA embedding pipeline.
 """
 
 import os
-from typing import cast
 
 from chatbot.models.medical_document import SectionType
-from django.conf import settings
-from vector_store.services.constants import DEFAULT_EMBEDDING_PROVIDER
+from vector_store.services.constants import (
+    DEFAULT_EMBEDDING_PROVIDER,
+    DEFAULT_OPENROUTER_BASE_URL,
+)
 
 # =============================================================================
 # Prompt constants for LLM extraction
@@ -101,12 +102,18 @@ JSON:"""
 
 # Number of unique articles to embed.
 # Change this to scale: 5 = quick test, 147 = full dataset.
-NUM_DOCS_TO_PROCESS: int = 5
+NUM_DOCS_TO_PROCESS: int = 147
+
+# Source dataset metadata
+COVID_QA_DATASET_NAME: str = "deepset/covid_qa_deepset"
+ARTICLE_ID_PREFIX: str = "covidqa"
 
 # =============================================================================
 # LLM Configuration (for extraction / summarisation)
 # =============================================================================
+LLM_PROVIDER: str = "gemini"
 LLM_MODEL: str = "gemini-2.5-flash"
+OPENROUTER_LLM_BASE_URL: str = DEFAULT_OPENROUTER_BASE_URL
 
 # Max Q&A pairs for evaluation dataset generation
 QA_SAMPLE_SIZE: int = 200
@@ -133,6 +140,10 @@ RETRY_WAIT_MAX: float = 60.0  # seconds
 
 PIPELINE_DIR = os.path.dirname(os.path.abspath(__file__))
 EVAL_DATASET_OUTPUT_PATH = os.path.join(PIPELINE_DIR, "evaluation_dataset_vi.json")
+EXTRACTION_DATASET_OUTPUT_PATH = os.path.join(
+    PIPELINE_DIR,
+    "covid_qa_extraction_dataset.json",
+)
 
 # Source tag used to mark documents in MedicalDocument table
 DOCUMENT_SOURCE_TAG: str = "covid_qa_deepset"
@@ -141,14 +152,12 @@ DOCUMENT_SOURCE_TAG: str = "covid_qa_deepset"
 # Runtime configuration (from Django settings + ChatbotConfig)
 # =============================================================================
 
-GOOGLE_API_KEY = cast(str, getattr(settings, "GOOGLE_API_KEY", ""))
+GOOGLE_API_KEY = ""
 
-EMBEDDING_DIMENSIONS: int = cast(int, getattr(settings, "VECTOR_DIMENSIONS", 768))
-CHUNK_SIZE: int = cast(int, getattr(settings, "CHUNK_SIZE", 1000))
-CHUNK_OVERLAP: int = cast(int, getattr(settings, "CHUNK_OVERLAP", 200))
-EMBEDDING_PROVIDER: str = str(
-    getattr(settings, "EMBEDDING_PROVIDER", DEFAULT_EMBEDDING_PROVIDER)
-)
+EMBEDDING_DIMENSIONS: int = 768
+CHUNK_SIZE: int = 1000
+CHUNK_OVERLAP: int = 200
+EMBEDDING_PROVIDER: str = DEFAULT_EMBEDDING_PROVIDER
 
 SECTION_TYPE_MAP = {
     "general": SectionType.GENERAL,

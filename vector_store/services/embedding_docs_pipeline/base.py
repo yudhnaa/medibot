@@ -4,12 +4,16 @@ Base classes and shared logic for the embedding pipelines.
 
 import json
 import logging
+import os
 import time
 from abc import ABC, abstractmethod
+from datetime import datetime, timezone
 from typing import Any
 
+from django.conf import settings
 from django.core.exceptions import SynchronousOnlyOperation
 from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_openai import ChatOpenAI
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from pydantic import SecretStr
 from tenacity import (
@@ -26,12 +30,15 @@ from chatbot.models.medical_document import IndexType, SectionType
 from vector_store.services.embedding_docs_pipeline.constants import (
     CHUNK_OVERLAP,
     CHUNK_SIZE,
+    COVID_QA_DATASET_NAME,
     DOCUMENT_SOURCE_TAG,
     EMBEDDING_DIMENSIONS,
     EMBEDDING_PROVIDER,
     EMBEDDING_SLEEP_SECONDS,
-    GOOGLE_API_KEY,
+    EXTRACTION_DATASET_OUTPUT_PATH,
+    LLM_PROVIDER,
     LLM_MODEL,
+    OPENROUTER_LLM_BASE_URL,
     PROMPT_CLASSIFY_SECTIONS,
     PROMPT_EXTRACT_DISEASES,
     PROMPT_EXTRACT_SUMMARY,
@@ -40,6 +47,10 @@ from vector_store.services.embedding_docs_pipeline.constants import (
     RETRY_WAIT_MIN,
     SECTION_TYPE_MAP,
     VALID_SECTIONS,
+)
+from vector_store.services.constants import (
+    OPENROUTER_API_KEY_ENV_NAME,
+    OPENROUTER_BASE_URL_ENV_NAME,
 )
 from vector_store.services.embedding_service import EmbeddingService
 
@@ -52,6 +63,10 @@ class BaseEmbeddingPipeline(ABC):
     def __init__(
         self,
         embedding_provider: str | None = None,
+        llm_provider: str | None = None,
+        llm_model: str | None = None,
+        llm_base_url: str | None = None,
+        llm_api_key: str | None = None,
         **provider_kwargs,
     ) -> None:
         self.embedding_dimensions = int(
@@ -64,11 +79,20 @@ class BaseEmbeddingPipeline(ABC):
         self.embedding_provider = embedding_provider or str(
             self.get_runtime_config("EMBEDDING_PROVIDER", EMBEDDING_PROVIDER)
         )
+        self.llm_provider = (
+            llm_provider
+            or str(self.get_runtime_config("LLM_PROVIDER", LLM_PROVIDER))
+        ).strip().lower()
+        self.llm_model_override = llm_model
+        self.llm_base_url_override = llm_base_url
+        self.llm_api_key_override = llm_api_key
         self.provider_kwargs = provider_kwargs
         self.embedding_service = self.create_embedding_service(
             self.embedding_provider, **provider_kwargs
         )
         self.llm = self.create_llm()
+        self.extraction_dataset_output_path = EXTRACTION_DATASET_OUTPUT_PATH
+        self.extraction_records: dict[str, dict[str, Any]] = {}
 
     def get_runtime_config(self, key: str, default: Any) -> Any:
         """Read config from DB at runtime with safe fallback for async startup."""
@@ -88,11 +112,51 @@ class BaseEmbeddingPipeline(ABC):
             )
             return default
 
-    def create_llm(self) -> ChatGoogleGenerativeAI:
+    def create_llm(self) -> ChatGoogleGenerativeAI | ChatOpenAI:
         """Create LLM instance for extraction tasks."""
+        provider = self.llm_provider
+
+        if provider == "openrouter":
+            model_name = self.llm_model_override or str(
+                self.get_runtime_config("LLM_MODEL", "openai/gpt-4.1-mini")
+            )
+            self.llm_model = model_name
+            base_url_default = os.getenv(OPENROUTER_BASE_URL_ENV_NAME) or OPENROUTER_LLM_BASE_URL
+            base_url = (
+                self.llm_base_url_override
+                or str(
+                    self.get_runtime_config("OPENROUTER_BASE_URL", base_url_default)
+                ).strip()
+            )
+            api_key_default = os.getenv(OPENROUTER_API_KEY_ENV_NAME, "")
+            api_key = self.llm_api_key_override or str(
+                self.get_runtime_config(OPENROUTER_API_KEY_ENV_NAME, api_key_default)
+            ).strip()
+            if not api_key:
+                raise ValueError(
+                    f"{OPENROUTER_API_KEY_ENV_NAME} is required for openrouter LLM provider"
+                )
+
+            return ChatOpenAI(
+                model=model_name,
+                api_key=SecretStr(api_key),
+                base_url=base_url,
+                temperature=0.1,
+            )
+
+        model_name = self.llm_model_override or str(
+            self.get_runtime_config("LLM_MODEL", LLM_MODEL)
+        )
+        self.llm_model = model_name
+        google_api_key_default = os.getenv("GOOGLE_API_KEY") or str(
+            getattr(settings, "GOOGLE_API_KEY", "")
+        ).strip()
+        google_api_key = self.llm_api_key_override or str(
+            self.get_runtime_config("GOOGLE_API_KEY", google_api_key_default)
+        ).strip()
         return ChatGoogleGenerativeAI(
-            model=LLM_MODEL,
-            google_api_key=SecretStr(GOOGLE_API_KEY),
+            model=model_name,
+            google_api_key=SecretStr(google_api_key),
             temperature=0.1,
         )
 
@@ -103,8 +167,111 @@ class BaseEmbeddingPipeline(ABC):
         return EmbeddingService(provider=provider, **provider_kwargs)
 
     @abstractmethod
-    def load_contexts(self, num_docs: int | None = None) -> list[dict]:
+    def load_contexts(
+        self, num_docs: int | None = None, start_article: int = 1
+    ) -> list[dict]:
         """Load source contexts for the pipeline."""
+
+    def _initialize_extraction_records(self, contexts: list[dict]) -> None:
+        """Initialize per-article extraction records for dataset export."""
+        records: dict[str, dict[str, Any]] = {}
+
+        for ctx in contexts:
+            context_id = str(ctx.get("context_id", ""))
+            article_id = str(ctx.get("article_id") or context_id)
+            records[article_id] = {
+                "article_id": article_id,
+                "context_id": context_id,
+                "dataset": COVID_QA_DATASET_NAME,
+                "llm_provider": self.llm_provider,
+                "llm_model": self.llm_model,
+                "stage_1": {
+                    "diseases": [],
+                },
+                "stage_2": {
+                    "summaries": {},
+                },
+                "stage_3": {
+                    "sections": {},
+                },
+            }
+
+        self.extraction_records = records
+
+    def _persist_extraction_dataset(self) -> str:
+        """Persist per-article extraction artifacts to JSON file."""
+        output_dir = os.path.dirname(self.extraction_dataset_output_path)
+        os.makedirs(output_dir, exist_ok=True)
+
+        payload = {
+            "dataset": COVID_QA_DATASET_NAME,
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "article_count": len(self.extraction_records),
+            "llm_provider": self.llm_provider,
+            "llm_model": self.llm_model,
+            "articles": list(self.extraction_records.values()),
+        }
+
+        with open(self.extraction_dataset_output_path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+
+        logger.info(
+            "Saved extraction dataset: %s (articles=%s)",
+            self.extraction_dataset_output_path,
+            len(self.extraction_records),
+        )
+        return self.extraction_dataset_output_path
+
+    def _context_id_to_article_id_map(self, contexts: list[dict]) -> dict[str, str]:
+        """Build context_id -> article_id mapping for metadata tracking."""
+        mapping: dict[str, str] = {}
+        for ctx in contexts:
+            context_id = str(ctx.get("context_id", ""))
+            if not context_id:
+                continue
+            mapping[context_id] = str(ctx.get("article_id") or context_id)
+        return mapping
+
+    def _build_context_aliases(
+        self, disease_to_contexts: dict[str, set[str]]
+    ) -> dict[str, list[str]]:
+        """Build context_id -> alias list mapping from Stage 1 results."""
+        context_aliases: dict[str, set[str]] = {}
+        for disease_name, context_ids in disease_to_contexts.items():
+            alias = str(disease_name).strip().lower()
+            if not alias:
+                continue
+            for context_id in context_ids:
+                context_aliases.setdefault(context_id, set()).add(alias)
+        return {
+            context_id: sorted(list(aliases))
+            for context_id, aliases in context_aliases.items()
+        }
+
+    def _canonical_title_score(self, alias: str) -> float:
+        """Score alias for canonical title selection."""
+        score = float(len(alias))
+        canonical_keywords = (
+            "infection",
+            "disease",
+            "syndrome",
+            "condition",
+            "illness",
+            "disorder",
+        )
+        if any(keyword in alias for keyword in canonical_keywords):
+            score += 100.0
+        return score
+
+    def _select_canonical_title(self, aliases: list[str]) -> str:
+        """Select a canonical title from alias list for Index A/B storage."""
+        cleaned = sorted({str(alias).strip().lower() for alias in aliases if alias})
+        if not cleaned:
+            return ""
+        return max(
+            cleaned,
+            key=lambda alias: (self._canonical_title_score(alias), len(alias), alias),
+        )
 
     def extract_diseases_from_context(self, context_text: str) -> list[str]:
         """Extract disease/syndrome/pathogen names from a single article."""
@@ -380,28 +547,45 @@ class BaseEmbeddingPipeline(ABC):
         """Embed a single text through the configured embedding service."""
         return self.embedding_service.embed_text(text)
 
-    def run(self, num_docs: int | None = None) -> dict:
+    def run(
+        self,
+        num_docs: int | None = None,
+        start_article: int = 1,
+        clear_existing: bool = True,
+    ) -> dict:
         """Run the three-stage pipeline."""
-        contexts = self.load_contexts(num_docs=num_docs)
+        contexts = self.load_contexts(num_docs=num_docs, start_article=start_article)
         if not contexts:
             logger.warning("No contexts loaded. Pipeline cannot continue.")
             return {"index_c": 0, "index_a": 0, "index_b": 0}
 
-        clear_covid_qa_documents()
+        self._initialize_extraction_records(contexts)
+        if clear_existing:
+            clear_covid_qa_documents()
 
         disease_to_contexts = self.stage_1_index_c(contexts)
         if not disease_to_contexts:
             logger.error("Stage 1 failed — no diseases extracted. Aborting.")
-            return {"index_c": 0, "index_a": 0, "index_b": 0}
+            extraction_path = self._persist_extraction_dataset()
+            return {
+                "articles": len(contexts),
+                "index_c": 0,
+                "index_a": 0,
+                "index_b": 0,
+                "extraction_dataset_path": extraction_path,
+            }
 
         index_a_count = self.stage_2_index_a(contexts, disease_to_contexts)
         index_b_count = self.stage_3_index_b(contexts, disease_to_contexts)
+        extraction_path = self._persist_extraction_dataset()
 
         return {
+            "articles": len(contexts),
             "index_c": len(disease_to_contexts),
             "index_a": index_a_count,
             "index_b": index_b_count,
             "total": len(disease_to_contexts) + index_a_count + index_b_count,
+            "extraction_dataset_path": extraction_path,
         }
 
     def stage_1_index_c(self, contexts: list[dict]) -> dict[str, set[str]]:
@@ -411,16 +595,25 @@ class BaseEmbeddingPipeline(ABC):
         logger.info("%s", "=" * 60)
 
         disease_to_contexts: dict[str, set[str]] = {}
+        context_to_article = self._context_id_to_article_id_map(contexts)
 
         for ctx in tqdm(contexts, desc="Stage 1: Extracting diseases"):
-            context_id = ctx["context_id"]
-            context_text = ctx["context"]
+            context_id = str(ctx.get("context_id", ""))
+            context_text = str(ctx.get("context", ""))
+            article_id = str(ctx.get("article_id") or context_id)
 
             diseases = self.extract_diseases_from_context(context_text)
+            unique_diseases: set[str] = set()
             for disease in diseases:
                 normalized = disease.strip().lower()
                 if normalized:
                     disease_to_contexts.setdefault(normalized, set()).add(context_id)
+                    unique_diseases.add(normalized)
+
+            if article_id in self.extraction_records:
+                self.extraction_records[article_id]["stage_1"]["diseases"] = sorted(
+                    unique_diseases
+                )
 
             time.sleep(EMBEDDING_SLEEP_SECONDS)
 
@@ -445,8 +638,14 @@ class BaseEmbeddingPipeline(ABC):
                 index_type=IndexType.C,
                 source=DOCUMENT_SOURCE_TAG,
                 metadata={
-                    "dataset": "deepset/covid_qa_deepset",
+                    "dataset": COVID_QA_DATASET_NAME,
                     "source_contexts": list(disease_to_contexts[disease_name]),
+                    "source_article_ids": sorted(
+                        {
+                            context_to_article.get(context_id, context_id)
+                            for context_id in disease_to_contexts[disease_name]
+                        }
+                    ),
                 },
             )
 
@@ -463,60 +662,82 @@ class BaseEmbeddingPipeline(ABC):
         logger.info("STAGE 2: Index A — Structured Summary Extraction")
         logger.info("%s", "=" * 60)
 
-        ctx_lookup = {ctx["context_id"]: ctx["context"] for ctx in contexts}
+        ctx_lookup = {str(ctx["context_id"]): ctx for ctx in contexts if ctx.get("context_id")}
         count = 0
+        context_aliases = self._build_context_aliases(disease_to_contexts)
 
-        for disease_name, context_ids in tqdm(
-            disease_to_contexts.items(), desc="Stage 2: Building summaries"
+        for context_id, aliases in tqdm(
+            context_aliases.items(), desc="Stage 2: Building summaries"
         ):
-            for context_id in context_ids:
-                context_text = ctx_lookup.get(context_id, "")
-                if not context_text:
+            ctx_data = ctx_lookup.get(context_id)
+            if not ctx_data:
+                continue
+
+            context_text = str(ctx_data.get("context", ""))
+            if not context_text.strip():
+                continue
+
+            canonical_title = self._select_canonical_title(aliases)
+            if not canonical_title:
+                continue
+
+            text = context_text[:8000] if len(context_text) > 8000 else context_text
+            article_id = str(ctx_data.get("article_id") or context_id)
+            prompt = PROMPT_EXTRACT_SUMMARY.format(
+                disease_name=canonical_title, text=text
+            )
+
+            try:
+                response = self._llm_invoke(self.llm, prompt)
+                summary_data = self._parse_json_response(response)
+                if not isinstance(summary_data, dict):
+                    logger.warning(
+                        "Non-dict summary for %s: %s",
+                        canonical_title,
+                        type(summary_data),
+                    )
                     continue
 
-                text = context_text[:8000] if len(context_text) > 8000 else context_text
-                prompt = PROMPT_EXTRACT_SUMMARY.format(
-                    disease_name=disease_name, text=text
+                summary_data["disease_name"] = canonical_title
+
+                summary_text = self.build_summary_text(summary_data)
+                if not summary_text.strip():
+                    continue
+
+                embedding = self.embed_documents([summary_text.lower()])[0]
+
+                MedicalDocument.objects.create(
+                    title=canonical_title,
+                    content=summary_text.lower(),
+                    embedding=embedding,
+                    section_type=SectionType.GENERAL,
+                    index_type=IndexType.A,
+                    source=DOCUMENT_SOURCE_TAG,
+                    metadata={
+                        "context_id": context_id,
+                        "article_id": article_id,
+                        "canonical_title": canonical_title,
+                        "title_aliases": aliases,
+                        "dataset": COVID_QA_DATASET_NAME,
+                    },
+                )
+                if article_id in self.extraction_records:
+                    stage_2 = self.extraction_records[article_id]["stage_2"]
+                    stage_2["canonical_title"] = canonical_title
+                    stage_2["aliases"] = aliases
+                    summaries = stage_2["summaries"]
+                    summaries[canonical_title] = summary_data
+                count += 1
+
+            except Exception as e:
+                logger.warning(
+                    "Summary extraction failed for %s (context %s): %s",
+                    canonical_title,
+                    context_id,
+                    e,
                 )
 
-                try:
-                    response = self._llm_invoke(self.llm, prompt)
-                    summary_data = self._parse_json_response(response)
-                    if not isinstance(summary_data, dict):
-                        logger.warning(
-                            f"Non-dict summary for {disease_name}: {type(summary_data)}"
-                        )
-                        continue
-
-                    summary_data["disease_name"] = disease_name
-
-                    summary_text = self.build_summary_text(summary_data)
-                    if not summary_text.strip():
-                        continue
-
-                    embedding = self.embed_documents([summary_text.lower()])[0]
-
-                    MedicalDocument.objects.create(
-                        title=disease_name,
-                        content=summary_text.lower(),
-                        embedding=embedding,
-                        section_type=SectionType.GENERAL,
-                        index_type=IndexType.A,
-                        source=DOCUMENT_SOURCE_TAG,
-                        metadata={
-                            "context_id": context_id,
-                            "dataset": "deepset/covid_qa_deepset",
-                        },
-                    )
-                    count += 1
-
-                except Exception as e:
-                    logger.warning(
-                        f"Summary extraction failed for {disease_name} "
-                        f"(context {context_id}): {e}"
-                    )
-
-                time.sleep(EMBEDDING_SLEEP_SECONDS)
+            time.sleep(EMBEDDING_SLEEP_SECONDS)
 
         logger.info(f"Index A: {count} summary entries stored")
         return count
@@ -537,23 +758,32 @@ class BaseEmbeddingPipeline(ABC):
             separators=["\n\n", "\n", ". ", ", ", " ", ""],
         )
 
-        ctx_lookup = {ctx["context_id"]: ctx["context"] for ctx in contexts}
+        ctx_lookup = {str(ctx["context_id"]): ctx for ctx in contexts if ctx.get("context_id")}
         count = 0
+        context_aliases = self._build_context_aliases(disease_to_contexts)
 
-        context_to_diseases: dict[str, list[str]] = {}
-        for disease_name, context_ids in disease_to_contexts.items():
-            for cid in context_ids:
-                context_to_diseases.setdefault(cid, []).append(disease_name)
-
-        for context_id, diseases in tqdm(
-            context_to_diseases.items(), desc="Stage 3: Section chunking"
+        for context_id, aliases in tqdm(
+            context_aliases.items(), desc="Stage 3: Section chunking"
         ):
-            context_text = ctx_lookup.get(context_id, "")
-            if not context_text:
+            ctx_data = ctx_lookup.get(context_id)
+            if not ctx_data:
+                continue
+
+            context_text = str(ctx_data.get("context", ""))
+            article_id = str(ctx_data.get("article_id") or context_id)
+            if not context_text.strip():
+                continue
+            canonical_title = self._select_canonical_title(aliases)
+            if not canonical_title:
                 continue
 
             try:
                 sections = self.classify_sections(context_text)
+                if article_id in self.extraction_records:
+                    stage_3 = self.extraction_records[article_id]["stage_3"]
+                    stage_3["canonical_title"] = canonical_title
+                    stage_3["aliases"] = aliases
+                    stage_3["sections"] = sections
             except Exception as e:
                 logger.warning(f"Section classification failed for {context_id}: {e}")
                 time.sleep(EMBEDDING_SLEEP_SECONDS)
@@ -578,27 +808,27 @@ class BaseEmbeddingPipeline(ABC):
                     )
                     continue
 
-                for disease_name in diseases:
-                    for i, (chunk_text, embedding) in enumerate(
-                        zip(chunks_lower, embeddings)
-                    ):
-                        MedicalDocument.objects.create(
-                            title=disease_name,
-                            content=chunk_text,
-                            embedding=embedding,
-                            section_type=section_type,
-                            index_type=IndexType.B,
-                            source=DOCUMENT_SOURCE_TAG,
-                            metadata={
-                                "context_id": context_id,
-                                "disease": disease_name,
-                                "section": section_key,
-                                "chunk_index": i,
-                                "total_chunks": len(chunks),
-                                "dataset": "deepset/covid_qa_deepset",
-                            },
-                        )
-                        count += 1
+                for i, (chunk_text, embedding) in enumerate(zip(chunks_lower, embeddings)):
+                    MedicalDocument.objects.create(
+                        title=canonical_title,
+                        content=chunk_text,
+                        embedding=embedding,
+                        section_type=section_type,
+                        index_type=IndexType.B,
+                        source=DOCUMENT_SOURCE_TAG,
+                        metadata={
+                            "context_id": context_id,
+                            "article_id": article_id,
+                            "disease": canonical_title,
+                            "canonical_title": canonical_title,
+                            "title_aliases": aliases,
+                            "section": section_key,
+                            "chunk_index": i,
+                            "total_chunks": len(chunks),
+                            "dataset": COVID_QA_DATASET_NAME,
+                        },
+                    )
+                    count += 1
 
                 time.sleep(EMBEDDING_SLEEP_SECONDS)
 
@@ -620,10 +850,23 @@ class BaseEmbeddingPipeline(ABC):
         wait=wait_exponential(min=RETRY_WAIT_MIN, max=RETRY_WAIT_MAX),
         reraise=True,
     )
-    def _llm_invoke(self, llm: ChatGoogleGenerativeAI, prompt: str) -> str:
+    def _llm_invoke(self, llm: Any, prompt: str) -> str:
         """Call LLM with retry. Returns raw text response."""
         response = llm.invoke(prompt)
-        return str(response.content) if hasattr(response, "content") else str(response)
+        content = response.content if hasattr(response, "content") else response
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            parts: list[str] = []
+            for item in content:
+                if isinstance(item, str):
+                    parts.append(item)
+                elif isinstance(item, dict):
+                    text = item.get("text")
+                    if isinstance(text, str):
+                        parts.append(text)
+            return "\n".join(parts).strip()
+        return str(content)
 
     @retry(
         retry=retry_if_exception_type(Exception),

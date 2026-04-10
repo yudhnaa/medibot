@@ -52,13 +52,12 @@ class TransformersEmbeddingProvider(EmbeddingProvider):
             instruction: Instruction to prepend to queries (embed_text).
         """
         if not model_name:
-            # Load from database config
-            db_model = ChatbotConfig.get_config("TRANSFORMERS_EMBEDDING_MODEL")
-            if isinstance(db_model, str):
-                model_name = db_model
+            db_model = ChatbotConfig.get_config("EMBEDDING_MODEL")
+            if isinstance(db_model, str) and db_model.strip():
+                model_name = db_model.strip()
             else:
                 logger.warning(
-                    "TRANSFORMERS_EMBEDDING_MODEL not found in config, using default."
+                    "EMBEDDING_MODEL not found in config, using provider default."
                 )
                 model_name = DEFAULT_TRANSFORMERS_MODEL
 

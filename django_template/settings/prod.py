@@ -3,6 +3,7 @@ from sentry_sdk.integrations.django import DjangoIntegration
 
 # pylint: disable=wildcard-import,unused-wildcard-import
 from .base import *  # noqa: F401,F403
+from utils.logger import get_logging_config
 
 ALLOWED_HOSTS = []
 
@@ -38,34 +39,9 @@ sentry_sdk.init(
     ],
 )
 
-# Logging
-LOGGING = {
-    "version": 1,
-    "disable_existing_loggers": False,
-    "formatters": {
-        "standard": {
-            "format": "[%(asctime)s] %(levelname)s [%(name)s:%(lineno)s] %(message)s",
-            "datefmt": "%d/%b/%Y %H:%M:%S",
-        },
-    },
-    "filters": {"require_debug_false": {"()": "django.utils.log.RequireDebugFalse"}},
-    "handlers": {
-        "console": {
-            "level": "INFO",
-            "class": "logging.StreamHandler",
-            "formatter": "standard",
-        },
-        "sentry": {
-            "level": "ERROR",
-            "filters": ["require_debug_false"],
-            "class": "raven.contrib.django.handlers.SentryHandler",
-        },
-    },
-    "loggers": {
-        "django": {
-            "handlers": ["console", "sentry"],
-            "propagate": True,
-            "level": "INFO",
-        },
-    },
-}
+LOGGING = get_logging_config(
+    log_level=os.getenv("LOG_LEVEL", "INFO"),
+    enable_colors=False,
+    enable_django_debug=False,
+    enable_sql_debug=ENABLE_SQL_DEBUG_LOGGING,
+)

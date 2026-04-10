@@ -18,11 +18,11 @@ DEFAULT_RAG_CONFIG: dict[str, float | int] = {
 # =============================================================================
 DEFAULT_MODEL_CONFIG: dict[str, str | float | bool | int] = {
     "IS_USE_PAID_GOOGLE_GEMINI_API_KEY": False,
+    "LLM_PROVIDER": "gemini",  # Active LLM provider: gemini | openrouter
     "LLM_MODEL": "gemini-2.5-flash",
     "EMBEDDING_PROVIDER": "openrouter",  # Active embedding provider: gemini | tei | transformers | openrouter
-    "GEMINI_EMBEDDING_MODEL": "models/gemini-embedding-001",
-    "TRANSFORMERS_EMBEDDING_MODEL": "Qwen/Qwen3-Embedding-0.6B",
-    "OPENROUTER_EMBEDDING_MODEL": "text-embedding-3-small",
+    "EMBEDDING_MODEL": "text-embedding-3-small",
+    "OPENROUTER_BASE_URL": "https://openrouter.ai/api/v1",
     "TEMPERATURE": 0,
     "VECTOR_DIMENSIONS": 768,
 }

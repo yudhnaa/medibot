@@ -2,7 +2,7 @@
 Constants for embedding services.
 """
 
-DEFAULT_EMBEDDING_MODEL = "models/gemini-embedding-001"
+DEFAULT_EMBEDDING_MODEL = "openai/text-embedding-3-small"
 EMBEDDING_PROVIDER_GEMINI = "gemini"
 EMBEDDING_PROVIDER_OPENROUTER = "openrouter"
 EMBEDDING_PROVIDER_TEI = "tei"
@@ -14,7 +14,7 @@ DEFAULT_TRANSFORMERS_INSTRUCTION = (
     "Given a web search query, retrieve relevant passages that answer the query"
 )
 DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
-DEFAULT_OPENROUTER_EMBEDDING_MODEL = "text-embedding-3-small"
+DEFAULT_OPENROUTER_MODEL = "text-embedding-3-small"
 
 GOOGLE_API_KEY_ENV_NAME = "GOOGLE_API_KEY"
 OPENROUTER_API_KEY_ENV_NAME = "OPENROUTER_API_KEY"

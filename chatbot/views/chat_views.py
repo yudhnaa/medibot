@@ -157,12 +157,22 @@ class ChatView(APIView):
         message: str = validated["message"]
         use_stream: bool = validated.get("stream", False)
         xray_analysis_id: int | None = validated.get("xray_analysis_id")
-        uploaded_image = request.FILES.get("image") or validated.get("image")
+        uploaded_image = validated.get("image")
+        if uploaded_image is None:
+            raw_request = getattr(request, "_request", request)
+            uploaded_image = getattr(raw_request, "FILES", {}).get("image")
 
         logger.info(
-            f"Chat request received. Session: {session_id}, Stream: {use_stream}, XRay: {xray_analysis_id}, HasImage: {bool(uploaded_image)}"
+            "Chat request received. session=%s stream=%s xray=%s has_image=%s",
+            session_id,
+            use_stream,
+            xray_analysis_id,
+            bool(uploaded_image),
         )
-        logger.debug(f"Request data: {request.data}")
+        logger.debug(
+            "Chat request payload keys: %s",
+            sorted(request.data.keys()),
+        )
 
         # --- Inline X-Ray Analysis logic ---
         if uploaded_image and not xray_analysis_id:
@@ -202,7 +212,7 @@ class ChatView(APIView):
                     heatmap_base64=heatmap_b64,
                 )
                 xray_analysis_id = analysis.pk
-                logger.info(f"Generated new XRayAnalysis ID: {xray_analysis_id}")
+                logger.info("Generated new XRayAnalysis ID: %s", xray_analysis_id)
             except Exception as e:
                 logger.exception("X-ray analysis failed during chat request")
                 return Response(
@@ -294,13 +304,11 @@ class ChatView(APIView):
                 async for chunk in chatbot.astream_response(
                     message, xray_analysis_id=xray_analysis_id
                 ):
+                    if not chunk:
+                        continue
                     chunk_count += 1
-                    logger.info(f"Streaming chunk {chunk_count}: {repr(chunk)}")
                     # Format as Server-Sent Event
                     if "\n" in chunk:
-                        # Handle multi-line chunks
-                        payload = ""
-                        # Use splitlines to handle various newline formats safely
                         formatted_lines = [
                             f"data: {line}" for line in chunk.splitlines()
                         ]
@@ -308,12 +316,21 @@ class ChatView(APIView):
                     else:
                         payload = f"data: {chunk}\n\n"
 
-                    logger.info(f"Sent event: {repr(payload)}")
+                    logger.debug(
+                        "Streaming chunk sent. session=%s chunk=%s bytes=%s",
+                        session_id,
+                        chunk_count,
+                        len(payload),
+                    )
                     yield payload
-                logger.info(f"Streaming complete: {chunk_count} chunks")
+                logger.info(
+                    "Streaming complete. session=%s chunks=%s",
+                    session_id,
+                    chunk_count,
+                )
                 yield "data: [DONE]\n\n"
             except Exception as e:
-                logger.error(f"Streaming error: {e}")
+                logger.error("Streaming error for session=%s: %s", session_id, e)
                 yield f"data: [ERROR] {e!s}\n\n"
 
         response = StreamingHttpResponse(

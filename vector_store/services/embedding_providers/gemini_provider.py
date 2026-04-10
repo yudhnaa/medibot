@@ -35,17 +35,21 @@ class GeminiEmbeddingProvider(EmbeddingProvider):
             model: Gemini embedding model name
         """
         if not model:
-            # Load from database config
-            model_name = ChatbotConfig.get_config("GEMINI_EMBEDDING_MODEL")
-            if isinstance(model_name, str):
-                model = model_name
+            model_name = ChatbotConfig.get_config("EMBEDDING_MODEL")
+            if isinstance(model_name, str) and model_name.strip():
+                model = model_name.strip()
             else:
                 logger.warning(
-                    "GEMINI_EMBEDDING_MODEL not found in config, using default."
+                    "EMBEDDING_MODEL not found in config, using provider default."
                 )
                 model = DEFAULT_EMBEDDING_MODEL
 
-        api_key = os.getenv(GOOGLE_API_KEY_ENV_NAME)
+        db_api_key = ChatbotConfig.get_config("GOOGLE_API_KEY", None)
+        api_key = (
+            db_api_key.strip()
+            if isinstance(db_api_key, str) and db_api_key.strip()
+            else os.getenv(GOOGLE_API_KEY_ENV_NAME)
+        )
         if not api_key:
             raise ValueError(
                 f"{GOOGLE_API_KEY_ENV_NAME} environment variable is required"

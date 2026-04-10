@@ -19,7 +19,11 @@ Django Settings Configuration (add to settings/base.py):
     LOGGING = get_logging_config(log_level="DEBUG")  # or "INFO", "WARNING", etc.
 """
 
+import itertools
 import logging
+import numbers
+import re
+from collections.abc import Mapping, Sequence
 import sys
 from typing import Any, Literal
 
@@ -43,6 +47,134 @@ SIMPLE_FORMAT = "[{levelname:^8}] {message}"
 
 # Date format
 DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
+
+
+class SQLDebugSanitizerFilter(logging.Filter):
+    """
+    Sanitize SQL debug params so logs stay readable for humans.
+
+    This keeps useful SQL text and short textual params visible, while replacing
+    embeddings, base64 blobs, and oversized binary-ish payloads with concise
+    placeholders.
+    """
+
+    BASE64_LENGTH_THRESHOLD = 256
+    EMBEDDING_DIM_THRESHOLD = 64
+    MAX_TEXT_PREVIEW = 160
+    MAX_SEQUENCE_ITEMS = 8
+    _BASE64_RE = re.compile(r"^[A-Za-z0-9+/=\s]+$")
+    _SQL_WHITESPACE_RE = re.compile(r"\s+")
+
+    @override
+    def filter(self, record: logging.LogRecord) -> bool:
+        """Rewrite django.db.backends records with sanitized params."""
+        if not record.name.startswith("django.db.backends"):
+            return True
+
+        sql = self._normalize_sql(getattr(record, "sql", None))
+        params = self._sanitize_value(getattr(record, "params", None))
+        alias = getattr(record, "alias", None)
+        duration = getattr(record, "duration", None)
+
+        if sql is not None:
+            record.sql = sql
+        if hasattr(record, "params"):
+            record.params = params
+
+        if isinstance(record.args, tuple) and len(record.args) == 4:
+            record.args = (
+                duration if duration is not None else record.args[0],
+                sql if sql is not None else record.args[1],
+                params,
+                alias if alias is not None else record.args[3],
+            )
+        else:
+            record.msg = "(%.3f) %s; args=%s; alias=%s"
+            record.args = (
+                float(duration or 0.0),
+                sql or "",
+                params,
+                alias or "default",
+            )
+
+        return True
+
+    def _normalize_sql(self, sql: Any) -> Any:
+        """Collapse whitespace in SQL statements for easier scanning."""
+        if not isinstance(sql, str):
+            return sql
+        return self._SQL_WHITESPACE_RE.sub(" ", sql).strip()
+
+    def _sanitize_value(self, value: Any) -> Any:
+        """Sanitize a logged SQL parameter recursively."""
+        if value is None:
+            return None
+
+        if isinstance(value, str):
+            return self._sanitize_text(value)
+
+        if isinstance(value, (bytes, bytearray, memoryview)):
+            return f"<binary payload {len(value)} bytes>"
+
+        if isinstance(value, Mapping):
+            items = list(value.items())
+            sanitized: dict[Any, Any] = {}
+            for idx, (key, item) in enumerate(items[: self.MAX_SEQUENCE_ITEMS]):
+                sanitized[key] = self._sanitize_value(item)
+            if len(items) > self.MAX_SEQUENCE_ITEMS:
+                sanitized["..."] = f"{len(items) - self.MAX_SEQUENCE_ITEMS} more fields"
+            return sanitized
+
+        if self._looks_like_embedding(value):
+            return f"<embedding vector dims={len(value)}>"
+
+        if isinstance(value, Sequence) and not isinstance(
+            value,
+            (str, bytes, bytearray, memoryview),
+        ):
+            limited_items = list(itertools.islice(iter(value), self.MAX_SEQUENCE_ITEMS))
+            sanitized_items = [self._sanitize_value(item) for item in limited_items]
+            if hasattr(value, "__len__") and len(value) > self.MAX_SEQUENCE_ITEMS:
+                sanitized_items.append(
+                    f"... ({len(value) - self.MAX_SEQUENCE_ITEMS} more items)"
+                )
+            if isinstance(value, tuple):
+                return tuple(sanitized_items)
+            return sanitized_items
+
+        return value
+
+    def _looks_like_embedding(self, value: Any) -> bool:
+        """Detect long numeric vectors such as embeddings."""
+        if isinstance(value, (str, bytes, bytearray, memoryview)):
+            return False
+        if not isinstance(value, Sequence):
+            return False
+        if not hasattr(value, "__len__") or len(value) < self.EMBEDDING_DIM_THRESHOLD:
+            return False
+
+        sample = list(itertools.islice(iter(value), 8))
+        if not sample:
+            return False
+        return all(isinstance(item, numbers.Number) for item in sample)
+
+    def _sanitize_text(self, text: str) -> str:
+        """Preserve human-readable text while hiding unreadable payloads."""
+        if text.startswith("data:image/") and ";base64," in text:
+            return f"<base64 image payload len={len(text)}>"
+
+        compact = text.strip()
+        if (
+            len(compact) >= self.BASE64_LENGTH_THRESHOLD
+            and self._BASE64_RE.fullmatch(compact)
+        ):
+            return f"<base64 payload len={len(text)}>"
+
+        if len(text) <= self.MAX_TEXT_PREVIEW:
+            return text
+
+        preview = text[: self.MAX_TEXT_PREVIEW].rstrip()
+        return f"{preview}... [len={len(text)}]"
 
 
 class ColorFormatter(logging.Formatter):
@@ -142,6 +274,7 @@ def get_logging_config(
     log_to_file: bool = False,
     log_file_path: str = "logs/django.log",
     enable_django_debug: bool = False,
+    enable_sql_debug: bool = False,
 ) -> dict[str, Any]:
     """
     Generate a Django LOGGING configuration dictionary.
@@ -157,6 +290,7 @@ def get_logging_config(
         log_to_file: Whether to also log messages to a file.
         log_file_path: Path to the log file (used if log_to_file is True).
         enable_django_debug: Whether to enable Django's internal debug logging.
+        enable_sql_debug: Whether to enable SQL query logging via django.db.backends.
 
     Returns:
         A dictionary suitable for Django's LOGGING setting.
@@ -218,6 +352,9 @@ def get_logging_config(
             "require_debug_false": {
                 "()": "django.utils.log.RequireDebugFalse",
             },
+            "sanitize_sql_debug": {
+                "()": SQLDebugSanitizerFilter,
+            },
         },
         "handlers": handlers,
         "root": {
@@ -238,11 +375,27 @@ def get_logging_config(
             },
             "django.db.backends": {
                 "handlers": handler_list,
-                "level": "DEBUG" if enable_django_debug else "WARNING",
+                "level": "DEBUG" if enable_sql_debug else "WARNING",
+                "filters": ["sanitize_sql_debug"],
                 "propagate": False,
             },
             # Application loggers - these are the ones you typically use
             "chatbot": {
+                "handlers": handler_list,
+                "level": log_level,
+                "propagate": False,
+            },
+            "nlp": {
+                "handlers": handler_list,
+                "level": log_level,
+                "propagate": False,
+            },
+            "vision": {
+                "handlers": handler_list,
+                "level": log_level,
+                "propagate": False,
+            },
+            "vector_store": {
                 "handlers": handler_list,
                 "level": log_level,
                 "propagate": False,
@@ -260,6 +413,21 @@ def get_logging_config(
             "utils": {
                 "handlers": handler_list,
                 "level": log_level,
+                "propagate": False,
+            },
+            "httpx": {
+                "handlers": handler_list,
+                "level": "WARNING",
+                "propagate": False,
+            },
+            "httpcore": {
+                "handlers": handler_list,
+                "level": "WARNING",
+                "propagate": False,
+            },
+            "huggingface_hub": {
+                "handlers": handler_list,
+                "level": "WARNING",
                 "propagate": False,
             },
         },

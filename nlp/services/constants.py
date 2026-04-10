@@ -17,6 +17,11 @@ VNCORENLP_PATH: Final[str] = os.path.join(_LIBS_DIR, "VNCore-NLP")
 MEDICAL_NER_MODEL_PATH: Final[str] = os.path.join(
     _LIBS_DIR, "VietMed_NER", "phobert-base-v2-VietMed-NER"
 )
+MEDICAL_NER_TOKENIZER_PATH: Final[str] = os.path.join(
+    _LIBS_DIR,
+    "VietMed_NER",
+    "phobert-base-v2-tokenizer",
+)
 
 # -----------------------------------------------------------------------------
 # Negation Detector Constants
