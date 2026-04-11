@@ -88,6 +88,16 @@ class XRayContextTests(SimpleTestCase):
         service._chain.ainvoke = AsyncMock(return_value="ok")
         service._save_message = MagicMock()
         service._apply_analysis_to_intake = MagicMock()
+        service._analyze_query = MagicMock(
+            return_value={
+                "q_cleaned": "tôi bị sốt và ho",
+                "q_symptom": "sốt, ho",
+                "positives": {"SYMPTOM": ["sốt", "ho"], "ETIOLOGY": [], "RISK": []},
+                "negatives": {"SYMPTOM": []},
+                "disease_mentions": [],
+                "patient_state_extract": {},
+            }
+        )
         service._get_chat_history = MagicMock(return_value=[])
         service._get_xray_analysis_payload = MagicMock(
             return_value={
@@ -109,87 +119,121 @@ class XRayContextTests(SimpleTestCase):
             service._chain.ainvoke.await_args.args[0]["xray_context"],
             "XRAY-CONTEXT",
         )
+        self.assertIn("analysis", service._chain.ainvoke.await_args.args[0])
+        service._analyze_query.assert_called_once_with("Tôi bị sốt và ho")
+        service._apply_analysis_to_intake.assert_called_once()
 
 
 class RouterAndRetrievalTests(SimpleTestCase):
-    """Tests for C/A/B routing and FAQ retrieval behavior."""
+    """Tests for C/A/B routing and multi-stage retrieval behavior."""
+
+    def test_filter_generic_symptom_terms_removes_meta_terms(self) -> None:
+        service = object.__new__(ChatbotService)
+        filtered = ChatbotService._filter_generic_symptom_terms(
+            service,
+            ["triệu chứng", "dấu hiệu", "sốt", "triệu chứng: ho", "covid 19"],
+            disease_mentions={"covid 19"},
+        )
+        self.assertEqual(filtered, ["sốt", "ho"])
 
     @patch("chatbot.services.chatbot_service.ChatbotConfig.get_config")
-    def test_gate_with_index_c_uses_intent_and_margin(
+    def test_gate_with_index_c_uses_q_cleaned_threshold(
         self, mock_get_config: MagicMock
     ) -> None:
-        config = {
-            "RAG_C_TOPK": 3,
-            "RAG_C_HIGH": 0.82,
-            "RAG_C_LOW": 0.7,
-            "RAG_C_MARGIN": 0.05,
-        }
+        config = {"RAG_THRESH_C": 0.8}
         mock_get_config.side_effect = lambda key, default=None: config.get(key, default)
 
         service = object.__new__(ChatbotService)
         service.vector_manager = MagicMock()
+        service._user_intake_db = SimpleNamespace(symptoms=[], age=None, sex="unknown")
+        service.vector_manager.embedding_service = None
         service.vector_manager.search_similar.return_value = [
             SimpleNamespace(
                 distance=0.3,  # score = 0.85
                 title="covid-19",
                 content="covid-19",
-                metadata={"canonical_title": "covid-19", "primary_intent": "symptom"},
-            ),
-            SimpleNamespace(
-                distance=0.52,  # score = 0.74
-                title="influenza",
-                content="influenza",
-                metadata={"canonical_title": "influenza", "primary_intent": "symptom"},
+                metadata={"canonical_title": "covid-19"},
             ),
         ]
 
-        gate = ChatbotService._gate_with_index_c(
-            service,
-            "Triệu chứng COVID-19 là gì?",
-            query_intent="symptom",
-        )
+        gate = ChatbotService._gate_with_index_c(service, "triệu chứng covid-19")
 
         self.assertTrue(gate["go_single"])
-        self.assertEqual(gate["reason"], "high_confidence_route")
+        self.assertEqual(gate["reason"], "above_0.8")
         self.assertEqual(gate["title"], "covid-19")
-        self.assertEqual(gate["intent"], "symptom")
-        self.assertGreaterEqual(gate["route_margin"], 0.05)
+        self.assertGreaterEqual(gate["top_score"], 0.8)
 
     @patch("chatbot.services.chatbot_service.ChatbotConfig.get_config")
-    def test_faq_retrieval_accepts_high_score_answer(
+    def test_multi_disease_retrieval_builds_candidates_and_summary(
         self, mock_get_config: MagicMock
     ) -> None:
         config = {
-            "RAG_A_TOPK": 5,
-            "RAG_A_ANSWER_MIN": 0.84,
-            "RAG_A_EVIDENCE_MIN": 0.74,
+            "RAG_B_TOPK": 5,
+            "RAG_MERGED_LIMIT": 10,
+            "RAG_TITLE_TOP_M": 3,
+            "RAG_FINAL_TITLES": 2,
+            "RAG_MERGE_WEIGHT_ENTITIES": 0.5,
+            "RAG_MERGE_WEIGHT_QUERY": 0.5,
+            "RAG_NEG_SYM_SIM_THRESH": 0.75,
+            "RAG_PENALTY_ALPHA": 0.5,
         }
         mock_get_config.side_effect = lambda key, default=None: config.get(key, default)
 
         service = object.__new__(ChatbotService)
         service.vector_manager = MagicMock()
-        service.vector_manager.search_similar.return_value = [
+        service._user_intake_db = SimpleNamespace(
+            symptoms=["sốt"],
+            age=25,
+            sex="female",
+        )
+        service.vector_manager.embedding_service = None
+
+        b_docs_query_a = [
             SimpleNamespace(
-                distance=0.3,  # score 0.85 (+ intent bonus 0.03)
-                content="triệu chứng covid-19 là gì",
-                metadata={
-                    "qa_id": "qa-1",
-                    "answer_text": "Các triệu chứng thường gặp gồm sốt, ho khan và mệt mỏi.",
-                    "context_id": "ctx-1",
-                    "article_id": "covidqa-001",
-                    "primary_intent": "symptom",
-                },
+                distance=0.2,
+                title="bệnh sởi",
+                content="sốt cao, phát ban, viêm kết mạc",
+                section_type="symptom",
+                source="admin_url",
+                metadata={"canonical_title": "bệnh sởi", "section": "symptom"},
+            ),
+        ]
+        b_docs_query_b = [
+            SimpleNamespace(
+                distance=0.25,
+                title="bệnh sởi",
+                content="virus sởi lây qua đường hô hấp",
+                section_type="aetiologies",
+                source="admin_url",
+                metadata={"canonical_title": "bệnh sởi", "section": "aetiologies"},
+            ),
+        ]
+        a_summary_docs = [
+            SimpleNamespace(
+                distance=0.1,
+                title="bệnh sởi",
+                content="bệnh sởi là bệnh truyền nhiễm cấp tính do virus sởi.",
+                metadata={"canonical_title": "bệnh sởi"},
             )
         ]
+        service.vector_manager.search_similar.side_effect = [
+            b_docs_query_a,  # Stage 3 query 2a
+            b_docs_query_b,  # Stage 3 query 2b
+            a_summary_docs,  # Stage 6 summary fetch
+        ]
 
-        faq_hit = ChatbotService._faq_retrieval_index_a(
+        result = ChatbotService._multi_disease_retrieval(
             service,
-            question="Triệu chứng covid-19 là gì?",
-            gate={"title": "covid-19", "intent": "symptom"},
-            analysis={"positives": {}, "negatives": {}},
+            analysis={
+                "q_cleaned": "tôi bị sốt phát ban",
+                "q_symptom": "sốt, phát ban",
+                "positives": {"SYMPTOM": ["sốt", "phát ban"], "ETIOLOGY": [], "RISK": []},
+                "negatives": {"SYMPTOM": ["đau bụng"]},
+            },
         )
 
-        self.assertTrue(faq_hit["accepted"])
-        self.assertTrue(faq_hit["direct_answer"])
-        self.assertFalse(faq_hit["need_evidence"])
-        self.assertEqual(faq_hit["intent"], "symptom")
+        self.assertGreaterEqual(len(result["candidates"]), 1)
+        first = result["candidates"][0]
+        self.assertEqual(first["title"], "bệnh sởi")
+        self.assertIn("summary", first)
+        self.assertTrue(first["final_score"] > 0)

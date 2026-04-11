@@ -3,6 +3,7 @@
 import logging
 import os
 from datetime import datetime, timezone
+from typing import Any
 
 from celery import shared_task
 
@@ -57,17 +58,21 @@ def process_csv_upload(
         manager = VectorStoreManager(embedding_provider=resolved_provider)
 
         total_documents = []
+        per_index_reports: dict[str, dict[str, Any]] = {}
 
         # Process CSV for each selected index type
         for index_type in index_types:
             logger.info(f"Processing index type: {index_type}")
 
-            # Process CSV to document dictionaries
-            documents = manager.process_csv_to_documents(
+            # Process CSV to document dictionaries with row-level report
+            result = manager.process_csv_to_documents_with_report(
                 csv_path=file_path,
                 source=source,
                 index_type=index_type,
+                ingestion_job_id=job_id,
             )
+            documents = result["documents"]
+            per_index_reports[index_type] = result["report"]
 
             if documents:
                 # Add documents with embeddings to database
@@ -92,16 +97,27 @@ def process_csv_upload(
         )
 
         if job:
+            failed_rows_total = sum(
+                int(report.get("failed_rows", 0)) for report in per_index_reports.values()
+            )
+            report_chunks = [
+                f"{index_type}: rows={report.get('total_rows', 0)}, "
+                f"ok={report.get('success_rows', 0)}, "
+                f"failed={report.get('failed_rows', 0)}"
+                for index_type, report in per_index_reports.items()
+            ]
             job.status = EmbeddingJobStatus.COMPLETED
             job.total_documents = len(total_documents)
             job.successful_documents = len(total_documents)
-            job.failed_documents = 0
+            job.failed_documents = failed_rows_total
+            job.notes = " | ".join(report_chunks)
             job.save(
                 update_fields=[
                     "status",
                     "total_documents",
                     "successful_documents",
                     "failed_documents",
+                    "notes",
                 ]
             )
 
@@ -121,6 +137,7 @@ def process_csv_upload(
             ),
             "count": len(total_documents),
             "index_types": index_types,
+            "reports": per_index_reports,
         }
 
     except Exception as exc:
@@ -150,6 +167,90 @@ def process_csv_upload(
             "status": "error",
             "message": f"Failed to process CSV: {str(exc)}",
             "count": 0,
+        }
+
+
+@shared_task(
+    bind=True,
+    max_retries=2,
+    default_retry_delay=60,
+    soft_time_limit=20 * 60,
+    time_limit=25 * 60,
+)
+def process_article_url_embed(
+    self,
+    url: str,
+    embedding_provider: str | None = None,
+    source: str = "admin_url",
+    user_id: int | None = None,
+    job_id: int | None = None,
+):
+    """Crawl URL, extract disease sections via LLM, and embed into A/B/C indexes."""
+    job = None
+    if job_id is not None:
+        from chatbot.models import EmbeddingJob
+
+        job = EmbeddingJob.objects.filter(id=job_id).first()
+        if job:
+            job.status = EmbeddingJobStatus.PROCESSING
+            job.save(update_fields=["status"])
+
+    try:
+        from vector_store.services.article_ingestion_service import (
+            ArticleIngestionService,
+        )
+
+        resolved_provider = EmbeddingService.resolve_provider(embedding_provider)
+        service = ArticleIngestionService(embedding_provider=resolved_provider)
+        result = service.ingest_from_url(
+            url=url,
+            source=source,
+            ingestion_job_id=job_id,
+        )
+
+        if job:
+            total = int(result.get("total", 0))
+            job.status = EmbeddingJobStatus.COMPLETED
+            job.total_documents = total
+            job.successful_documents = total
+            job.failed_documents = 0
+            job.completed_at = datetime.now(timezone.utc)
+            job.notes = (
+                f"url={url}, index_c={result.get('index_c', 0)}, "
+                f"index_a={result.get('index_a', 0)}, "
+                f"index_b={result.get('index_b', 0)}"
+            )
+            job.save(
+                update_fields=[
+                    "status",
+                    "total_documents",
+                    "successful_documents",
+                    "failed_documents",
+                    "completed_at",
+                    "notes",
+                ]
+            )
+
+        return {
+            "status": "success",
+            "message": "URL crawl and embedding completed",
+            **result,
+        }
+    except Exception as exc:
+        logger.error("Error processing URL embedding for %s: %s", url, exc, exc_info=True)
+        if job:
+            job.status = EmbeddingJobStatus.FAILED
+            job.error_messages = [str(exc)]
+            job.completed_at = datetime.now(timezone.utc)
+            job.save(update_fields=["status", "error_messages", "completed_at"])
+
+        if self.request.retries < self.max_retries:
+            raise self.retry(exc=exc)
+
+        return {
+            "status": "error",
+            "message": f"Failed URL embedding: {str(exc)}",
+            "total": 0,
         }
 
 

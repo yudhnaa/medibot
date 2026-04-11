@@ -22,6 +22,72 @@ SYNONYM_MAP = {
     "rubella": ["sởi đức"],
 }
 
+# LLM query analyzer constants
+QUERY_ANALYZER_PROMPT = """\
+You are a Vietnamese medical query analyzer.
+Extract structured fields from a patient question for a retrieval pipeline.
+
+Return ONLY valid JSON with these keys:
+{{
+  "normalized_query": "normalized vietnamese query",
+  "entities_by_type": {{
+    "disease": [],
+    "symptom": [],
+    "aetiology": [],
+    "risk": [],
+    "age": [],
+    "gender": []
+  }},
+  "negated_entities": [],
+  "affirmed_entities": [],
+  "disease_mentions": [],
+  "symptom_positive": [],
+  "symptom_negative": [],
+  "patient_state_extract": {{
+    "age": null,
+    "sex": null
+  }},
+  "q_cleaned": "query without negated entities",
+  "q_symptom": "symptom-centric query with positive symptoms + disease mentions + patient state"
+}}
+
+Rules:
+- Use lowercase text values.
+- Keep arrays deduplicated.
+- Extract only concrete medical entities actually mentioned by the user.
+- symptom_positive and symptom_negative must contain concrete symptom phrases
+  (examples: "sốt", "ho khan", "khó thở"), not meta terms.
+- Never output generic/meta placeholders in symptom arrays such as:
+  "triệu chứng", "dấu hiệu", "biểu hiện", "tình trạng", "vấn đề sức khỏe".
+- If user asks about symptoms in general but does not provide concrete symptoms,
+  return symptom_positive=[] and symptom_negative=[].
+- If unknown, return empty arrays and null scalar values.
+- No markdown.
+
+Question:
+{question}
+
+Known patient state:
+age={age}, sex={sex}, symptoms={symptoms}
+"""
+
+GENERIC_SYMPTOM_TERMS = {
+    "triệu chứng",
+    "trieu chung",
+    "symptom",
+    "symptoms",
+    "dấu hiệu",
+    "dau hieu",
+    "biểu hiện",
+    "bieu hien",
+    "tình trạng",
+    "tinh trang",
+    "vấn đề sức khỏe",
+    "van de suc khoe",
+    "sức khỏe",
+    "suc khoe",
+}
+
 # Section ordering and header mappings
 SECTION_ORDER = [
     "general",
@@ -89,7 +155,7 @@ HEADER_SINGLE_DISEASE = "THÔNG TIN CHI TIẾT VỀ BỆNH: {title}"
 HEADER_SINGLE_DISEASE_SUBTITLE = "(Tổng hợp từ cơ sở dữ liệu y khoa)\n"
 HEADER_FAQ_MATCH = "FAQ PHÙ HỢP NHẤT"
 HEADER_EVIDENCE_BLOCK = "BẰNG CHỨNG THAM CHIẾU"
-HEADER_MULTI_DISEASE_ANALYSIS = "PHÂN TÍCH TRUY VẤN (NER & phủ định):"
+HEADER_MULTI_DISEASE_ANALYSIS = "PHÂN TÍCH TRUY VẤN (LLM JSON):"
 HEADER_MULTI_DISEASE_CANDIDATES = "\nCÁC BỆNH CÓ KHẢ NĂNG:"
 HEADER_PATIENT_INFO = "\nTHÔNG TIN BỆNH NHÂN:\n"
 

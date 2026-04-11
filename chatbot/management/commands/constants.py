@@ -7,10 +7,15 @@ These are used by the seed_config management command.
 # RAG Pipeline Configuration
 # =============================================================================
 DEFAULT_RAG_CONFIG: dict[str, float | int] = {
-    "RAG_THRESH_C": 0.75,
+    "RAG_THRESH_C": 0.8,
     "RAG_B_TOPK": 20,
+    "RAG_MERGED_LIMIT": 40,
     "RAG_TITLE_TOP_M": 5,
+    "RAG_NEG_SYM_SIM_THRESH": 0.75,
+    "RAG_PENALTY_ALPHA": 0.5,
     "RAG_FINAL_TITLES": 5,
+    "RAG_MERGE_WEIGHT_ENTITIES": 0.5,
+    "RAG_MERGE_WEIGHT_QUERY": 0.5,
 }
 
 # =============================================================================
@@ -37,6 +42,9 @@ DEFAULT_RATE_LIMITS: dict[str, bool | int | None] = {}
 # =============================================================================
 DEFAULT_FEATURE_FLAGS: dict[str, bool] = {
     "VNCORENLP_ENABLED": True,
+    "ENABLE_LOCAL_NLP_FALLBACK": False,
+    "RAG_LOG_STAGE1_PREPROCESS": True,
+    "RAG_LOG_STAGE2_GATE": True,
 }
 
 # =============================================================================

@@ -21,6 +21,7 @@ class EmbeddingJob(models.Model):
         ("reembed_missing", "Re-embed Missing Embeddings"),
         ("change_provider", "Change Embedding Provider"),
         ("csv_upload", "CSV Upload"),
+        ("url_ingest", "URL Crawl & Embed"),
     ]
 
     # Tracking

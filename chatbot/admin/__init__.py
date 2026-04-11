@@ -20,8 +20,8 @@ from chatbot.models import (
     EmbeddingJob,
     EmbeddingAuditLog,
 )
-from chatbot.forms import CovidQAEmbedForm, CsvUploadForm
-from chatbot.tasks import process_covid_qa_embed, process_csv_upload
+from chatbot.forms import ArticleUrlEmbedForm, CsvUploadForm
+from chatbot.tasks import process_article_url_embed, process_csv_upload
 from vector_store.services.embedding_service import EmbeddingService
 from chatbot.admin.document_admin import (
     MedicalDocumentAdmin,
@@ -58,9 +58,9 @@ class ExtendedMedicalDocumentAdmin(MedicalDocumentAdmin):
                 name="chatbot_medicaldocument_upload_csv",
             ),
             path(
-                "embed-covid-qa/",
-                self.admin_site.admin_view(self.embed_covid_qa_view),
-                name="chatbot_medicaldocument_embed_covid_qa",
+                "embed-url/",
+                self.admin_site.admin_view(self.embed_url_view),
+                name="chatbot_medicaldocument_embed_url",
             ),
         ]
         return custom_urls + urls
@@ -168,8 +168,8 @@ class ExtendedMedicalDocumentAdmin(MedicalDocumentAdmin):
             context,
         )
 
-    def embed_covid_qa_view(self, request: HttpRequest):
-        """Trigger covid_qa_deepset embedding with selectable article count."""
+    def embed_url_view(self, request: HttpRequest):
+        """Trigger URL crawl + LLM extraction + embedding into C/A/B indexes."""
         from chatbot.models import EmbeddingJobStatus
 
         user_obj = cast(Any, request.user)
@@ -180,54 +180,31 @@ class ExtendedMedicalDocumentAdmin(MedicalDocumentAdmin):
             messages.error(
                 request,
                 (
-                    "You do not have permission to run covid_qa_deepset embedding. "
+                    "You do not have permission to run URL embedding. "
                     "Only superusers can perform this action."
                 ),
             )
             return redirect("admin:chatbot_medicaldocument_changelist")
 
         if request.method == "POST":
-            form = CovidQAEmbedForm(request.POST)
+            form = ArticleUrlEmbedForm(request.POST)
             if form.is_valid():
-                num_articles = int(form.cleaned_data["num_articles"])
-                start_article = int(form.cleaned_data["start_article"])
+                url = str(form.cleaned_data["url"]).strip()
                 embedding_provider = EmbeddingService.resolve_provider()
 
-                llm_provider_raw = ChatbotConfig.get_config("LLM_PROVIDER", "gemini")
-                llm_provider = (
-                    llm_provider_raw.lower().strip()
-                    if isinstance(llm_provider_raw, str)
-                    else "gemini"
-                )
-                llm_model_default = (
-                    "openai/gpt-4.1-mini"
-                    if llm_provider == "openrouter"
-                    else "gemini-2.5-flash"
-                )
-                llm_model_raw = ChatbotConfig.get_config("LLM_MODEL", llm_model_default)
-                llm_model = (
-                    llm_model_raw if isinstance(llm_model_raw, str) else llm_model_default
-                )
-
                 job = EmbeddingJob.objects.create(
-                    job_type="change_provider",
+                    job_type="url_ingest",
                     status=EmbeddingJobStatus.PENDING,
                     provider=embedding_provider,
                     created_by=user_obj,
-                    notes=(
-                        f"covid_qa_deepset embed request "
-                        f"(start_article={start_article}, num_articles={num_articles}, "
-                        f"llm_provider={llm_provider})"
-                    ),
+                    notes=f"URL ingest request: {url}",
                 )
 
                 try:
-                    task = process_covid_qa_embed.delay(  # pyright: ignore[reportCallIssue]
-                        num_articles=num_articles,
-                        start_article=start_article,
+                    task = process_article_url_embed.delay(  # pyright: ignore[reportCallIssue]
+                        url=url,
                         embedding_provider=embedding_provider,
-                        llm_provider=llm_provider,
-                        llm_model=llm_model,
+                        source="admin_url",
                         user_id=user_pk,
                         job_id=job.pk,
                     )
@@ -237,10 +214,8 @@ class ExtendedMedicalDocumentAdmin(MedicalDocumentAdmin):
                     messages.info(
                         request,
                         (
-                            f"covid_qa_deepset embedding started (Job #{job.pk}). "
-                            f"Range={start_article}-{start_article + num_articles - 1}, "
-                            f"embedding_provider={embedding_provider}, "
-                            f"llm_provider={llm_provider}. "
+                            f"URL embedding started (Job #{job.pk}). "
+                            f"url={url}, embedding_provider={embedding_provider}. "
                             "Check Embedding Jobs for progress."
                         ),
                     )
@@ -251,23 +226,23 @@ class ExtendedMedicalDocumentAdmin(MedicalDocumentAdmin):
                     messages.error(
                         request,
                         (
-                            f"Failed to start covid_qa_deepset embedding: {exc}. "
+                            f"Failed to start URL embedding: {exc}. "
                             "Please ensure Celery worker is running."
                         ),
                     )
                 return redirect("admin:chatbot_medicaldocument_changelist")
         else:
-            form = CovidQAEmbedForm()
+            form = ArticleUrlEmbedForm()
 
         context = {
             **self.admin_site.each_context(request),
             "form": form,
-            "title": "Embed covid_qa_deepset Articles",
+            "title": "Crawl URL & Embed",
             "opts": self.model._meta,
         }
         return render(
             request,
-            "admin/chatbot/medicaldocument/embed_covid_qa_form.html",
+            "admin/chatbot/medicaldocument/embed_url_form.html",
             context,
         )
 

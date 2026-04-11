@@ -4,8 +4,8 @@
 {% block extrahead %}
     {{ block.super }}
     <style>
-        .upload-csv-form {
-            max-width: 600px;
+        .embed-url-form {
+            max-width: 700px;
             margin: 20px auto;
             padding: 20px;
             background: #f8f9fa;
@@ -19,8 +19,7 @@
             font-weight: bold;
             margin-bottom: 5px;
         }
-        .form-row input[type="file"],
-        .form-row select {
+        .form-row input[type="url"] {
             width: 100%;
             padding: 8px;
             border: 1px solid #ccc;
@@ -84,33 +83,27 @@
 <div class="breadcrumbs">
     <a href="{% url 'admin:index' %}">{% trans 'Home' %}</a>
     &rsaquo; <a href="{% url 'admin:chatbot_medicaldocument_changelist' %}">{% trans 'Medical Documents' %}</a>
-    &rsaquo; {% trans 'Upload CSV' %}
+    &rsaquo; {% trans 'Crawl URL & Embed' %}
 </div>
 {% endblock %}
 
 {% block content %}
-<div class="upload-csv-form">
-    <h1>{% trans "Upload CSV File for Medical Documents" %}</h1>
-    
+<div class="embed-url-form">
+    <h1>{% trans "Crawl URL and Embed Medical Article" %}</h1>
+
     <div class="instructions">
         <h3>{% trans "Instructions" %}</h3>
         <ul>
-            <li>{% trans "Upload a CSV file containing disease articles to be embedded into the vector database." %}</li>
-            <li>{% trans "The file will be processed in the background using Celery." %}</li>
-            <li>{% trans "Processing time depends on file size and selected embedding provider." %}</li>
-            <li>{% trans "Maximum file size: 50MB" %}</li>
-            <li>{% trans "Ensure Celery worker is running before uploading." %}</li>
+            <li>{% trans "Paste a disease article URL." %}</li>
+            <li>{% trans "System will crawl content, ask LLM to extract structured fields, then embed into C/A/B collections." %}</li>
+            <li>{% trans "The job runs in background via Celery." %}</li>
+            <li>{% trans "Ensure Celery worker is running." %}</li>
         </ul>
-        <p>
-            <strong>{% trans "Required columns:" %}</strong>
-            title, general, symptom, aetiologies, risk, diagnose_and_treaty, living_and_preventive
-            (optional: url)
-        </p>
     </div>
 
-    <form method="post" enctype="multipart/form-data">
+    <form method="post">
         {% csrf_token %}
-        
+
         {% if form.errors %}
             <div class="errornote">
                 {% trans "Please correct the errors below." %}
@@ -135,7 +128,7 @@
         {% endfor %}
 
         <div class="submit-row">
-            <input type="submit" value="{% trans 'Upload and Process' %}" />
+            <input type="submit" value="{% trans 'Start Crawl & Embed' %}" />
             <a href="{% url 'admin:chatbot_medicaldocument_changelist' %}">{% trans 'Cancel' %}</a>
         </div>
     </form>

@@ -1,5 +1,7 @@
 """Forms for chatbot application."""
 
+from urllib.parse import urlparse
+
 from django import forms
 from django.contrib.admin.widgets import FilteredSelectMultiple
 
@@ -21,13 +23,13 @@ class CsvUploadForm(forms.Form):
     index_types = forms.MultipleChoiceField(
         label="Index Types",
         choices=IndexType.choices,
-        initial=[IndexType.B],
+        initial=[IndexType.C, IndexType.A, IndexType.B],
         widget=forms.CheckboxSelectMultiple,
         help_text=(
             "Select one or more index types to create. "
-            "A=Summary Index (disease-level), "
-            "B=Detail Index (per-section), "
-            "C=Title Index (title-only)"
+            "A=medical_documents_disease (summary per disease), "
+            "B=medical_documents_chunks (section-level detail), "
+            "C=medical_documents_titles (disease title gate)"
         ),
     )
 
@@ -56,43 +58,21 @@ class CsvUploadForm(forms.Form):
         return csv_file
 
 
-class CovidQAEmbedForm(forms.Form):
-    """Form for triggering covid_qa_deepset embedding from admin."""
+class ArticleUrlEmbedForm(forms.Form):
+    """Form for triggering URL crawl + LLM extraction + embedding."""
 
-    num_articles = forms.IntegerField(
-        label="Number of Articles",
-        initial=147,
-        min_value=1,
-        max_value=147,
-        help_text="Select how many unique covid_qa_deepset articles to embed (1-147).",
-    )
-    start_article = forms.IntegerField(
-        label="Start Article",
-        initial=1,
-        min_value=1,
-        max_value=147,
-        help_text=(
-            "1-based article index to start from. "
-            "Example: start=10, num=5 -> embed articles 10-14."
-        ),
+    url = forms.URLField(
+        label="Article URL",
+        max_length=2048,
+        help_text="Paste an article URL to crawl and index into C/A/B collections.",
     )
 
-    def clean(self):
-        cleaned_data = super().clean() or {}
-        num_articles = cleaned_data.get("num_articles")
-        start_article = cleaned_data.get("start_article")
-
-        if num_articles is None or start_article is None:
-            return cleaned_data
-
-        if start_article + num_articles - 1 > 147:
-            raise forms.ValidationError(
-                (
-                    "Requested range exceeds available 147 unique articles. "
-                    "Please reduce Number of Articles or Start Article."
-                )
-            )
-        return cleaned_data
+    def clean_url(self):
+        raw_url = str(self.cleaned_data.get("url", "")).strip()
+        parsed = urlparse(raw_url)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise forms.ValidationError("Only valid http/https URLs are supported.")
+        return raw_url
 
 
 class DocumentEditForm(forms.ModelForm):

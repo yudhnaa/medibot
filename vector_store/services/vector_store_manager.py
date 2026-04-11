@@ -16,6 +16,10 @@ from vector_store.services.embedding_service import EmbeddingService
 from vector_store.services.embedding_docs_pipeline.csv_pipeline import (
     CSVEmbeddingPipeline,
 )
+from vector_store.services.embedding_docs_pipeline.article_schema import (
+    normalize_article_record,
+    parse_list_items,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -242,8 +246,12 @@ class VectorStoreManager:
     # -------------------------
 
     def _safe_parse_list(self, value: Any) -> list[str]:
-        """Safely parse a Python list serialized as a string."""
-        return self._csv_pipeline()._safe_parse_list(value)
+        """Safely parse list-like values from CSV cells."""
+        if value is None:
+            return []
+        if not isinstance(value, (str, list, tuple, set)):
+            return []
+        return parse_list_items(value)
 
     def _split_sentences(self, text: str) -> list[str]:
         """Simple sentence splitter for Vietnamese text."""
@@ -251,15 +259,26 @@ class VectorStoreManager:
 
     def create_document_content(self, section: str, row: pd.Series) -> str | None:
         """Create content for a specific section of the medical CSV row."""
-        return self._csv_pipeline().create_document_content(section, row)
+        if section not in row:
+            return None
+        value = row.get(section)
+        if value is None:
+            return None
+        if section == "general":
+            content = str(value).strip()
+            return content if content else None
+        items = parse_list_items(value)
+        if not items:
+            return None
+        return ", ".join(items)
 
     def _extract_items_from_value(self, val: Any, k: int = 3) -> list[str]:
         """Extract up to k items from a cell value (list string or comma-separated)."""
-        return self._csv_pipeline()._extract_items_from_value(val, k)
+        return parse_list_items(val)[:k]
 
     def _parse_items_string(self, s: str, k: int) -> list[str]:
         """Parse a string that may be a Python list literal or comma-separated values."""
-        return self._csv_pipeline()._parse_items_string(s, k)
+        return parse_list_items(s)[:k]
 
     def _build_summary_parts(self, row: pd.Series) -> list[str]:
         """Build the list of summary parts from row data."""
@@ -268,6 +287,70 @@ class VectorStoreManager:
     def _build_index_a_summary(self, row: pd.Series) -> str | None:
         """Construct disease-level summary for Index A."""
         return self._csv_pipeline().build_index_a_summary(row)
+
+    def process_csv_to_documents_with_report(
+        self,
+        csv_path: str,
+        source: str,
+        index_type: str = IndexType.B,
+        ingestion_job_id: int | None = None,
+    ) -> dict[str, Any]:
+        """
+        Process CSV file to index-ready documents with per-row validation report.
+
+        Returns:
+            {
+              "documents": [...],
+              "report": {"total_rows": int, "success_rows": int, "failed_rows": int, "errors": [...]}
+            }
+        """
+        documents: list[dict[str, Any]] = []
+        errors: list[dict[str, Any]] = []
+        df = pd.read_csv(csv_path)
+
+        for row_index, row in df.iterrows():
+            raw_payload = {
+                "title": row.get("title", ""),
+                "general": (
+                    row.get("general", "")
+                    if index_type != IndexType.C
+                    else (row.get("general", "") or row.get("title", ""))
+                ),
+                "symptom": row.get("symptom", ""),
+                "aetiologies": row.get("aetiologies", ""),
+                "risk": row.get("risk", ""),
+                "diagnose_and_treaty": row.get("diagnose_and_treaty", ""),
+                "living_and_preventive": row.get("living_and_preventive", ""),
+                "url": row.get("url", ""),
+            }
+
+            record, row_errors = normalize_article_record(
+                raw_payload,
+                source_url=str(row.get("url", "")).strip(),
+                source_type="csv",
+                source_name=source.lower(),
+                row_index=int(row_index),
+                ingestion_job_id=ingestion_job_id,
+                ingestion_trace=f"csv_row_{row_index}",
+            )
+            if record is None:
+                errors.append(
+                    {
+                        "row_index": int(row_index),
+                        "errors": row_errors,
+                    }
+                )
+                continue
+
+            documents.extend(record.build_index_documents(index_type=index_type))
+
+        report = {
+            "total_rows": int(len(df)),
+            "success_rows": int(len(df) - len(errors)),
+            "failed_rows": int(len(errors)),
+            "errors": errors,
+        }
+        return {"documents": documents, "report": report}
 
     def process_csv_to_documents(
         self,
@@ -286,11 +369,13 @@ class VectorStoreManager:
         Returns:
             List of document dictionaries ready for add_documents()
         """
-        documents = self._csv_pipeline().build_documents_from_csv(
+        result = self.process_csv_to_documents_with_report(
             csv_path=csv_path,
             source=source,
             index_type=index_type,
+            ingestion_job_id=None,
         )
+        documents = result["documents"]
         logger.info(f"Processed {len(documents)} documents from {csv_path}")
         return documents
 
