@@ -108,6 +108,11 @@ class ChatResponseSerializer(serializers.Serializer):
     session_id = serializers.UUIDField()
     response = serializers.CharField()
     response_time_ms = serializers.IntegerField()
+    source_urls = serializers.ListField(
+        child=serializers.URLField(),
+        required=False,
+        allow_empty=True,
+    )
     metadata = serializers.DictField(required=False)
     is_active = serializers.BooleanField(default=True, read_only=True)
 
@@ -171,4 +176,5 @@ class RetrievedDocSerializer(serializers.Serializer):
     title = serializers.CharField(allow_null=True)
     section = serializers.CharField(allow_null=True)
     source = serializers.CharField(allow_null=True)
+    url = serializers.URLField(allow_null=True, required=False)
     preview = serializers.CharField()

@@ -260,6 +260,7 @@ class ChatView(APIView):
             "session_id": session_id,
             "response": response_text,
             "response_time_ms": response_time_ms,
+            "source_urls": chatbot.get_last_source_urls(),
             "metadata": {
                 "mode": chatbot.get_last_audit().get("mode"),
             },
@@ -281,9 +282,10 @@ class ChatView(APIView):
         """Generate a streaming response."""
 
         async def event_stream():
+            import json
+
             try:
                 if xray_analysis_id:
-                    import json
                     from vision.models import XRayAnalysis
                     from vision.serializers import XRayAnalysisDisplaySerializer
 
@@ -328,6 +330,18 @@ class ChatView(APIView):
                     session_id,
                     chunk_count,
                 )
+                raw_source_urls = await sync_to_async(chatbot.get_last_source_urls)()
+                source_urls = (
+                    raw_source_urls if isinstance(raw_source_urls, list) else []
+                )
+                source_urls = [
+                    str(url).strip() for url in source_urls if str(url).strip()
+                ]
+                if source_urls:
+                    yield (
+                        "event: sources\n"
+                        f"data: {json.dumps({'source_urls': source_urls}, ensure_ascii=False)}\n\n"
+                    )
                 yield "data: [DONE]\n\n"
             except Exception as e:
                 logger.error("Streaming error for session=%s: %s", session_id, e)

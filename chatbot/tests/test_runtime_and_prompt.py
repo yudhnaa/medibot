@@ -127,6 +127,27 @@ class XRayContextTests(SimpleTestCase):
 class RouterAndRetrievalTests(SimpleTestCase):
     """Tests for C/A/B routing and multi-stage retrieval behavior."""
 
+    def test_get_last_source_urls_dedupes_and_extracts_nested_metadata(self) -> None:
+        service = object.__new__(ChatbotService)
+        service._last_docs_cache = [
+            SimpleNamespace(
+                metadata={"url": "https://example.org/covid-19"},
+                page_content="doc 1",
+            ),
+            SimpleNamespace(
+                metadata={"metadata": {"url": "https://example.org/covid-19"}},
+                page_content="doc 2",
+            ),
+            SimpleNamespace(
+                metadata={"source_url": "https://example.org/prevention"},
+                page_content="doc 3",
+            ),
+        ]
+
+        urls = ChatbotService.get_last_source_urls(service)
+
+        self.assertEqual(urls, ["https://example.org/covid-19", "https://example.org/prevention"])
+
     def test_filter_generic_symptom_terms_removes_meta_terms(self) -> None:
         service = object.__new__(ChatbotService)
         filtered = ChatbotService._filter_generic_symptom_terms(

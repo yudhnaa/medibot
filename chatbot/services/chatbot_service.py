@@ -344,22 +344,27 @@ class ChatbotService:
                     "analysis": analysis,
                 }
             )
+            response_text = str(response)
+            source_urls = self.get_last_source_urls()
 
             response_time_ms = int((time.time() - start_time) * 1000)
 
             # Save assistant message
+            assistant_metadata: dict[str, Any] = {
+                "audit_id": self._last_audit.get("audit_id"),
+                "mode": self._last_audit.get("mode"),
+            }
+            if source_urls:
+                assistant_metadata["source_urls"] = source_urls
             self._save_message(
                 MessageRole.ASSISTANT,
-                response,
+                response_text,
                 response_time_ms=response_time_ms,
-                metadata={
-                    "audit_id": self._last_audit.get("audit_id"),
-                    "mode": self._last_audit.get("mode"),
-                },
+                metadata=assistant_metadata,
             )
 
             logger.info(f"Query processed in {response_time_ms}ms")
-            return response
+            return response_text
 
         except Exception as e:
             logger.error(f"Error processing query: {e}")
@@ -403,6 +408,8 @@ class ChatbotService:
                     "analysis": analysis,
                 }
             )
+            response_text = str(response)
+            source_urls = self.get_last_source_urls()
 
             response_time_ms = int((time.time() - start_time) * 1000)
             assistant_metadata = {
@@ -411,17 +418,19 @@ class ChatbotService:
             }
             if xray_payload["serialized"] is not None:
                 assistant_metadata["xray_analysis"] = xray_payload["serialized"]
+            if source_urls:
+                assistant_metadata["source_urls"] = source_urls
 
             # Save assistant message
             await sync_to_async(self._save_message)(
                 MessageRole.ASSISTANT,
-                response,
+                response_text,
                 response_time_ms=response_time_ms,
                 metadata=assistant_metadata,
             )
 
             logger.info(f"Query processed in {response_time_ms}ms")
-            return response
+            return response_text
 
         except Exception as e:
             logger.error(f"Error processing query: {e}")
@@ -465,12 +474,19 @@ class ChatbotService:
                 full_response += chunk
                 yield chunk
 
+            response_with_sources = full_response
+            source_urls = self.get_last_source_urls()
+
             # Save complete response
             response_time_ms = int((time.time() - start_time) * 1000)
+            assistant_metadata: dict[str, Any] = {}
+            if source_urls:
+                assistant_metadata["source_urls"] = source_urls
             self._save_message(
                 MessageRole.ASSISTANT,
-                full_response,
+                response_with_sources,
                 response_time_ms=response_time_ms,
+                metadata=assistant_metadata,
             )
 
         except Exception as e:
@@ -528,6 +544,9 @@ class ChatbotService:
                 full_response += chunk
                 yield chunk
 
+            response_with_sources = full_response
+            source_urls = self.get_last_source_urls()
+
             # Prepare metadata for assistant message
             assistant_metadata = {
                 "audit_id": self._last_audit.get("audit_id"),
@@ -535,12 +554,14 @@ class ChatbotService:
             }
             if xray_payload["serialized"] is not None:
                 assistant_metadata["xray_analysis"] = xray_payload["serialized"]
+            if source_urls:
+                assistant_metadata["source_urls"] = source_urls
 
             # Save complete response (DB op -> async)
             response_time_ms = int((time.time() - start_time) * 1000)
             await sync_to_async(self._save_message)(
                 MessageRole.ASSISTANT,
-                full_response,
+                response_with_sources,
                 response_time_ms=response_time_ms,
                 metadata=assistant_metadata,
             )
@@ -1018,6 +1039,11 @@ class ChatbotService:
                         "title": d.title,
                         "section": d.section_type,
                         "source": d.source,
+                        "url": (
+                            (getattr(d, "metadata", {}) or {}).get("url")
+                            or (getattr(d, "metadata", {}) or {}).get("source_url")
+                            or ""
+                        ),
                         "score": self._score_from_distance(getattr(d, "distance", 1.0)),
                         "evidence_id": (getattr(d, "metadata", {}) or {}).get(
                             "evidence_id"
@@ -1260,6 +1286,7 @@ class ChatbotService:
                 for raw_doc in raw_docs:
                     md = getattr(raw_doc, "metadata", {}) or {}
                     section = str(md.get("section") or raw_doc.section_type or "").lower()
+                    url = str(md.get("url") or md.get("source_url") or "").strip()
                     if section in {"symptom", "symptoms"}:
                         symptom_texts.append(str(raw_doc.content))
                     evidence_docs.append(
@@ -1269,9 +1296,11 @@ class ChatbotService:
                                 "title": title,
                                 "section": section,
                                 "source": raw_doc.source,
+                                "url": url,
                                 "score": self._score_from_distance(
                                     getattr(raw_doc, "distance", 1.0)
                                 ),
+                                "metadata": md,
                             },
                         )
                     )
@@ -1510,17 +1539,55 @@ class ChatbotService:
         self._user_intake_db.refresh_from_db()
         return self._user_intake_db
 
+    def _extract_doc_source_url(self, metadata: dict[str, Any]) -> str:
+        """Extract source URL from normalized or nested metadata."""
+        candidates: list[Any] = [
+            metadata.get("url"),
+            metadata.get("source_url"),
+        ]
+        nested_metadata = metadata.get("metadata")
+        if isinstance(nested_metadata, dict):
+            candidates.extend(
+                [
+                    nested_metadata.get("url"),
+                    nested_metadata.get("source_url"),
+                ]
+            )
+
+        for candidate in candidates:
+            url = str(candidate or "").strip()
+            if url.startswith(("http://", "https://")):
+                return url
+        return ""
+
+    def get_last_source_urls(
+        self, max_items: int = DEFAULT_DOCS_CACHE_SIZE
+    ) -> list[str]:
+        """Get unique source URLs from the last retrieved evidence docs."""
+        docs = cast(list[Document], getattr(self, "_last_docs_cache", []) or [])
+        urls: list[str] = []
+        seen: set[str] = set()
+        for doc in docs[:max_items]:
+            metadata = doc.metadata if isinstance(doc.metadata, dict) else {}
+            url = self._extract_doc_source_url(metadata)
+            if url and url not in seen:
+                urls.append(url)
+                seen.add(url)
+        return urls
+
     def get_last_docs(
         self, max_items: int = DEFAULT_DOCS_CACHE_SIZE
     ) -> list[dict[str, Any]]:
         """Get last retrieved documents for UI display."""
         out = []
         for d in self._last_docs_cache[:max_items]:
+            metadata = d.metadata if isinstance(d.metadata, dict) else {}
             out.append(
                 {
-                    "title": d.metadata.get("title"),
-                    "section": d.metadata.get("section"),
-                    "source": d.metadata.get("source"),
+                    "title": metadata.get("title"),
+                    "section": metadata.get("section"),
+                    "source": metadata.get("source"),
+                    "url": self._extract_doc_source_url(metadata) or None,
                     "preview": (
                         d.page_content[:DEFAULT_DOC_PREVIEW_LENGTH] + "..."
                         if len(d.page_content) > DEFAULT_DOC_PREVIEW_LENGTH
