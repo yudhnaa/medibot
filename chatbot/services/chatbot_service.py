@@ -277,8 +277,12 @@ class ChatbotService:
                     "doc_count": len(evidence_docs),
                 }
             else:
-                tier_result = await sync_to_async(self._multi_disease_retrieval)(analysis)
-                context = self._build_multi_disease_context(question, analysis, tier_result)
+                tier_result = await sync_to_async(self._multi_disease_retrieval)(
+                    analysis
+                )
+                context = self._build_multi_disease_context(
+                    question, analysis, tier_result
+                )
                 self._last_docs_cache = cast(
                     list[Document], tier_result.get("evidence_docs", [])
                 )[:DEFAULT_DOCS_CACHE_SIZE]
@@ -520,9 +524,7 @@ class ChatbotService:
 
         # Analyze once per turn and update intake
         analysis = await sync_to_async(self._analyze_query)(question)
-        await sync_to_async(self._apply_analysis_to_intake)(
-            question, analysis=analysis
-        )
+        await sync_to_async(self._apply_analysis_to_intake)(question, analysis=analysis)
 
         # Get history (DB op -> async)
         chat_history = await sync_to_async(self._get_chat_history)()
@@ -572,9 +574,7 @@ class ChatbotService:
             await sync_to_async(self._save_message)(MessageRole.ASSISTANT, error_msg)
             yield error_msg
 
-    def _serialize_xray_analysis(
-        self, analysis_record: XRayAnalysis
-    ) -> dict[str, Any]:
+    def _serialize_xray_analysis(self, analysis_record: XRayAnalysis) -> dict[str, Any]:
         """Serialize X-ray analysis for message metadata."""
         return cast(
             dict[str, Any],
@@ -615,7 +615,9 @@ class ChatbotService:
             ]
         )
 
-    def _get_xray_analysis_payload(self, xray_analysis_id: int | None) -> dict[str, Any]:
+    def _get_xray_analysis_payload(
+        self, xray_analysis_id: int | None
+    ) -> dict[str, Any]:
         """Load X-ray metadata/context once for the current request."""
         payload: dict[str, Any] = {
             "context": "",
@@ -631,7 +633,9 @@ class ChatbotService:
             logger.warning("XRayAnalysis not found for id=%s", xray_analysis_id)
             return payload
         except Exception as exc:
-            logger.warning("Failed to load XRayAnalysis id=%s: %s", xray_analysis_id, exc)
+            logger.warning(
+                "Failed to load XRayAnalysis id=%s: %s", xray_analysis_id, exc
+            )
             return payload
 
         payload["context"] = self._build_xray_context(analysis_record)
@@ -735,7 +739,9 @@ class ChatbotService:
             patient_state_extract = payload.get("patient_state_extract", {}) or {}
             analysis_result = {
                 "original": question,
-                "processed_text": str(payload.get("normalized_query", normalized_question)),
+                "processed_text": str(
+                    payload.get("normalized_query", normalized_question)
+                ),
                 "positives": {
                     "SYMPTOM": symptom_positive,
                     "ETIOLOGY": etiology_terms,
@@ -773,7 +779,9 @@ class ChatbotService:
     def _parse_query_analyzer_payload(self, payload_text: str) -> dict[str, Any]:
         text = payload_text.strip()
         if text.startswith("```"):
-            lines = [line for line in text.splitlines() if not line.strip().startswith("```")]
+            lines = [
+                line for line in text.splitlines() if not line.strip().startswith("```")
+            ]
             text = "\n".join(lines).strip()
         parsed = json.loads(text)
         if not isinstance(parsed, dict):
@@ -781,6 +789,81 @@ class ChatbotService:
         return parsed
 
     def _fallback_query_analysis(self, question: str) -> dict[str, Any]:
+        """Fallback with NER + negation detection, then heuristic."""
+        try:
+            from nlp.services.integrator import NERNegationIntegrator
+
+            integrator = NERNegationIntegrator()
+            ner_result = integrator.process_text(question)
+
+            negated_entities = ner_result["entities"]["negated"]
+            non_negated_entities = ner_result["entities"]["non_negated"]
+
+            symptom_negative = [
+                str(e.get("span", "")).strip().lower()
+                for e in negated_entities
+                if e.get("label") == "SYMPTOM" and str(e.get("span", "")).strip()
+            ]
+            symptom_positive = [
+                str(e.get("span", "")).strip().lower()
+                for e in non_negated_entities
+                if e.get("label") == "SYMPTOM" and str(e.get("span", "")).strip()
+            ]
+            disease_mentions = [
+                str(e.get("span", "")).strip().lower()
+                for e in non_negated_entities
+                if e.get("label") == "DISEASE" and str(e.get("span", "")).strip()
+            ]
+            etiology_terms = [
+                str(e.get("span", "")).strip().lower()
+                for e in non_negated_entities
+                if e.get("label") in ("AETIOLOGY", "ETIOLOGY")
+                and str(e.get("span", "")).strip()
+            ]
+            risk_terms = [
+                str(e.get("span", "")).strip().lower()
+                for e in non_negated_entities
+                if e.get("label") == "RISK" and str(e.get("span", "")).strip()
+            ]
+
+            text = re.sub(r"\s+", " ", str(question or "").strip()).lower()
+            q_cleaned = text
+            for neg in symptom_negative:
+                q_cleaned = q_cleaned.replace(neg, "").strip()
+            q_cleaned = re.sub(r"\s+", " ", q_cleaned).strip()
+
+            q_symptom_parts = list(symptom_positive) + disease_mentions
+            q_symptom_parts.extend(
+                str(sym).strip().lower()
+                for sym in (self._user_intake_db.symptoms or [])
+                if str(sym).strip()
+            )
+            q_symptom = ", ".join(dict.fromkeys(q_symptom_parts))
+            if not q_symptom:
+                q_symptom = q_cleaned or text
+
+            return {
+                "original": question,
+                "processed_text": text,
+                "positives": {
+                    "SYMPTOM": symptom_positive,
+                    "ETIOLOGY": etiology_terms,
+                    "RISK": risk_terms,
+                },
+                "negatives": {"SYMPTOM": symptom_negative},
+                "has_negation": bool(symptom_negative),
+                "entities_by_type": {},
+                "disease_mentions": disease_mentions,
+                "patient_state_extract": {},
+                "q_cleaned": q_cleaned or text,
+                "q_symptom": q_symptom or text,
+            }
+        except Exception as exc:
+            logger.warning("NER fallback failed: %s, using heuristic", exc)
+            return self._fallback_query_analysis_heuristic(question)
+
+    def _fallback_query_analysis_heuristic(self, question: str) -> dict[str, Any]:
+        """Simple heuristic fallback using Vietnamese negation cues."""
         text = re.sub(r"\s+", " ", str(question or "").strip()).lower()
         neg_candidates: list[str] = []
         neg_cues = ["không", "chưa", "không có", "không bị"]
@@ -854,8 +937,12 @@ class ChatbotService:
             "processed_text": analysis_result.get("processed_text", ""),
             "q_cleaned": analysis_result.get("q_cleaned", ""),
             "q_symptom": analysis_result.get("q_symptom", ""),
-            "positives": (analysis_result.get("positives", {}) or {}).get("SYMPTOM", []),
-            "negatives": (analysis_result.get("negatives", {}) or {}).get("SYMPTOM", []),
+            "positives": (analysis_result.get("positives", {}) or {}).get(
+                "SYMPTOM", []
+            ),
+            "negatives": (analysis_result.get("negatives", {}) or {}).get(
+                "SYMPTOM", []
+            ),
             "disease_mentions": analysis_result.get("disease_mentions", []),
             "patient_state_extract": analysis_result.get("patient_state_extract", {}),
         }
@@ -983,13 +1070,17 @@ class ChatbotService:
             top_doc = docs[0]
             score = self._score_from_distance(getattr(top_doc, "distance", 1.0))
             metadata = getattr(top_doc, "metadata", {}) or {}
-            title = str(
-                metadata.get("canonical_title")
-                or metadata.get("title")
-                or top_doc.title
-                or top_doc.content
-                or ""
-            ).strip().lower()
+            title = (
+                str(
+                    metadata.get("canonical_title")
+                    or metadata.get("title")
+                    or top_doc.title
+                    or top_doc.content
+                    or ""
+                )
+                .strip()
+                .lower()
+            )
 
             result["top_score"] = score
             result["title"] = title
@@ -1029,7 +1120,9 @@ class ChatbotService:
                 d
                 for d in docs
                 if (d.title or "").lower() == normalized_title
-                or str((getattr(d, "metadata", {}) or {}).get("canonical_title", "")).lower()
+                or str(
+                    (getattr(d, "metadata", {}) or {}).get("canonical_title", "")
+                ).lower()
                 == normalized_title
             ]
             return [
@@ -1169,7 +1262,9 @@ class ChatbotService:
         # Fast lexical overlap fallback.
         tokens_a = set(a.split())
         tokens_b = set(b.split())
-        lexical = len(tokens_a.intersection(tokens_b)) / max(1, len(tokens_a.union(tokens_b)))
+        lexical = len(tokens_a.intersection(tokens_b)) / max(
+            1, len(tokens_a.union(tokens_b))
+        )
 
         # Optional embedding similarity if available.
         try:
@@ -1231,12 +1326,16 @@ class ChatbotService:
             for source_key, docs in [("score_2a", docs_2a), ("score_2b", docs_2b)]:
                 for doc in docs:
                     metadata = getattr(doc, "metadata", {}) or {}
-                    title = str(
-                        metadata.get("canonical_title")
-                        or metadata.get("title")
-                        or doc.title
-                        or ""
-                    ).strip().lower()
+                    title = (
+                        str(
+                            metadata.get("canonical_title")
+                            or metadata.get("title")
+                            or doc.title
+                            or ""
+                        )
+                        .strip()
+                        .lower()
+                    )
                     if not title:
                         continue
                     score = self._score_from_distance(getattr(doc, "distance", 1.0))
@@ -1256,10 +1355,9 @@ class ChatbotService:
 
             merged_items: list[tuple[str, dict[str, Any]]] = []
             for title, group in title_map.items():
-                score_merge = (
-                    merge_w_symptom * float(group.get("score_2a", 0.0))
-                    + merge_w_query * float(group.get("score_2b", 0.0))
-                )
+                score_merge = merge_w_symptom * float(
+                    group.get("score_2a", 0.0)
+                ) + merge_w_query * float(group.get("score_2b", 0.0))
                 group["score_merge"] = score_merge
                 merged_items.append((title, group))
 
@@ -1278,14 +1376,18 @@ class ChatbotService:
             evidence_docs: list[Document] = []
 
             for title, group in merged_items:
-                scores = sorted([float(score) for score in group.get("scores", [])], reverse=True)
+                scores = sorted(
+                    [float(score) for score in group.get("scores", [])], reverse=True
+                )
                 avg_score = sum(scores[:top_m]) / max(1, min(len(scores), top_m))
 
                 symptom_texts: list[str] = []
                 raw_docs = cast(list[Any], group.get("docs", []))
                 for raw_doc in raw_docs:
                     md = getattr(raw_doc, "metadata", {}) or {}
-                    section = str(md.get("section") or raw_doc.section_type or "").lower()
+                    section = str(
+                        md.get("section") or raw_doc.section_type or ""
+                    ).lower()
                     url = str(md.get("url") or md.get("source_url") or "").strip()
                     if section in {"symptom", "symptoms"}:
                         symptom_texts.append(str(raw_doc.content))
@@ -1392,7 +1494,9 @@ class ChatbotService:
         evidence_docs = cast(list[Document], tier_result.get("evidence_docs", []))
         if evidence_docs:
             lines.append(f"\n- {HEADER_EVIDENCE_BLOCK}:")
-            for idx, doc in enumerate(evidence_docs[:DEFAULT_SECTION_ITEMS_LIMIT], start=1):
+            for idx, doc in enumerate(
+                evidence_docs[:DEFAULT_SECTION_ITEMS_LIMIT], start=1
+            ):
                 section = str(doc.metadata.get("section", "")).strip()
                 title = str(doc.metadata.get("title", "")).strip()
                 snippet = re.sub(r"\s+", " ", str(doc.page_content)).strip()
@@ -1412,9 +1516,7 @@ class ChatbotService:
     ) -> None:
         """Update intake from analyzed question and persist to database."""
         analysis_result = (
-            analysis
-            if isinstance(analysis, dict)
-            else self._analyze_query(question)
+            analysis if isinstance(analysis, dict) else self._analyze_query(question)
         )
         pos = analysis_result.get("positives", {}) or {}
         neg = analysis_result.get("negatives", {}) or {}
@@ -1447,7 +1549,9 @@ class ChatbotService:
         # Update disease mention if explicit and not conflicting.
         if disease_mentions:
             first_disease = str(disease_mentions[0]).strip()
-            if first_disease and first_disease != (self._user_intake_db.disease_name or ""):
+            if first_disease and first_disease != (
+                self._user_intake_db.disease_name or ""
+            ):
                 self._user_intake_db.disease_name = first_disease
                 symptoms_updated = True
 
