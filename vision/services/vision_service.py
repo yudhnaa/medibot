@@ -29,7 +29,8 @@ def load_image(path):
 
 
 def overlay_heatmap(gray, heatmap, alpha=0.5):
-    heatmap_color = cv2.applyColorMap(np.uint8(255 * heatmap), cv2.COLORMAP_JET)
+    heatmap_uint8 = (255 * heatmap).astype(np.uint8)
+    heatmap_color = cv2.applyColorMap(heatmap_uint8, cv2.COLORMAP_JET)
     heatmap_color = cv2.cvtColor(heatmap_color, cv2.COLOR_BGR2RGB)
     gray_rgb = np.stack([gray, gray, gray], axis=-1)
     overlay = cv2.addWeighted(gray_rgb, 1 - alpha, heatmap_color, alpha, 0)
