@@ -1,0 +1,19 @@
+{% if rows %}
+  <table class="benchmark-bar-table">
+    <tbody>
+      {% for row in rows %}
+        <tr>
+          <td style="width: 42%;">{{ row.label }}</td>
+          <td style="width: 40%;">
+            <div class="benchmark-bar">
+              <span style="width: {{ row.width }}%"></span>
+            </div>
+          </td>
+          <td style="width: 18%;">{{ row.value }}</td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+{% else %}
+  <p class="benchmark-muted">No data.</p>
+{% endif %}

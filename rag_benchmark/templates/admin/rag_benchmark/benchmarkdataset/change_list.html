@@ -1,0 +1,11 @@
+{% extends "admin/change_list.html" %}
+
+{% block object-tools-items %}
+  <li>
+    <a href="{{ run_benchmark_url }}" class="historylink">Run Benchmark</a>
+  </li>
+  <li>
+    <a href="{{ import_jsonl_url }}" class="addlink">Import JSONL Dataset</a>
+  </li>
+  {{ block.super }}
+{% endblock %}
