@@ -1,0 +1,490 @@
+from __future__ import annotations
+
+import json
+import os
+import random
+import re
+from collections import defaultdict
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+from langchain_core.documents import Document
+from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
+from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+from pydantic import SecretStr
+from ragas.run_config import RunConfig
+from ragas.testset import TestsetGenerator
+
+from chatbot.models import ChatbotConfig, MedicalDocument
+from chatbot.services.gemini_manager import get_gemini_manager
+from vector_store.services.constants import (
+    DEFAULT_OPENROUTER_BASE_URL,
+    DEFAULT_OPENROUTER_MODEL,
+    OPENROUTER_API_KEY_ENV_NAME,
+    OPENROUTER_BASE_URL_ENV_NAME,
+)
+
+NEGATION_TOKENS = (
+    " không ",
+    " khong ",
+    " not ",
+    " no ",
+    " without ",
+)
+
+NOISY_STYLES = {"POOR_GRAMMAR", "MISSPELLED", "NOISE"}
+
+SECTION_PATTERN = re.compile(r"Section\[(?P<section>[^\]]+)\]:")
+TITLE_PATTERN = re.compile(r"^Title:\s*(?P<title>.+?)\s*$", re.IGNORECASE)
+
+SUPPORTED_PROVIDERS = {"gemini", "openrouter"}
+
+
+@dataclass(slots=True)
+class GeneratedBenchmarkDatasetReport:
+    output_path: str
+    total_cases: int
+    dev_cases: int
+    test_cases: int
+    unique_gold_titles: int
+    source_titles: int
+
+
+class RagasBenchmarkDatasetGenerator:
+    """
+    Generate benchmark dataset JSONL from current vector-store documents via Ragas.
+
+    The generated payload follows the benchmark importer schema in this repository.
+    """
+
+    def generate_jsonl(
+        self,
+        *,
+        output_path: str,
+        testset_size: int,
+        dataset_version: str = "v1",
+        dev_ratio: float = 0.6,
+        seed: int = 42,
+        provider: str = "auto",
+        llm_model: str | None = None,
+        embedding_model: str | None = None,
+        llm_context: str = (
+            "Generate realistic Vietnamese end-user medical questions that match "
+            "the provided disease context. Keep questions concise and practical."
+        ),
+        index_types: list[str] | None = None,
+        min_document_words: int = 100,
+    ) -> GeneratedBenchmarkDatasetReport:
+        if testset_size < 2:
+            raise ValueError(
+                "testset_size must be >= 2 to include both dev and test split"
+            )
+
+        supported_indexes = {"A", "B", "C"}
+        selected_indexes = [
+            item.strip().upper() for item in (index_types or ["A", "B", "C"])
+        ]
+        selected_indexes = [
+            item for item in selected_indexes if item in supported_indexes
+        ]
+        if not selected_indexes:
+            raise ValueError("index_types must include at least one of: A,B,C")
+
+        source_docs, source_titles = self._build_source_documents(
+            index_types=selected_indexes,
+            min_document_words=min_document_words,
+        )
+        if not source_docs:
+            raise ValueError(
+                "No vector-store documents meet minimum length for Ragas generation"
+            )
+
+        testset_records = self._generate_ragas_records(
+            documents=source_docs,
+            testset_size=testset_size,
+            provider=self._resolve_provider(provider),
+            llm_model=llm_model,
+            embedding_model=embedding_model,
+            llm_context=llm_context,
+        )
+
+        cases = self._build_cases(
+            rows=testset_records,
+            dataset_version=dataset_version,
+            dev_ratio=dev_ratio,
+            seed=seed,
+            fallback_title=source_docs[0].metadata.get("title", ""),
+        )
+        if len(cases) < 2:
+            raise ValueError(
+                "Ragas generated too few valid rows. Increase testset_size or corpus coverage."
+            )
+
+        path = Path(output_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("w", encoding="utf-8") as fp:
+            for row in cases:
+                fp.write(json.dumps(row, ensure_ascii=False))
+                fp.write("\n")
+
+        dev_cases = sum(1 for case in cases if case["split"] == "dev")
+        test_cases = sum(1 for case in cases if case["split"] == "test")
+        unique_titles = {
+            title
+            for case in cases
+            for title in case.get("gold_titles", [])
+            if str(title).strip()
+        }
+        return GeneratedBenchmarkDatasetReport(
+            output_path=str(path),
+            total_cases=len(cases),
+            dev_cases=dev_cases,
+            test_cases=test_cases,
+            unique_gold_titles=len(unique_titles),
+            source_titles=source_titles,
+        )
+
+    def _build_source_documents(
+        self,
+        *,
+        index_types: list[str],
+        min_document_words: int,
+    ) -> tuple[list[Document], int]:
+        docs_by_title: dict[str, list[MedicalDocument]] = defaultdict(list)
+        queryset = (
+            MedicalDocument.objects.filter(index_type__in=index_types)
+            .exclude(content="")
+            .order_by("title", "index_type", "section_type", "id")
+        )
+        for record in queryset:
+            title = str(record.title or "").strip()
+            if not title:
+                continue
+            docs_by_title[title].append(record)
+
+        source_documents: list[Document] = []
+        for title, records in docs_by_title.items():
+            lines: list[str] = [f"Title: {title}"]
+            sections_seen: set[str] = set()
+            for record in records:
+                content = str(record.content or "").strip()
+                if not content:
+                    continue
+                section = str(record.section_type or "general").strip().lower()
+                sections_seen.add(section)
+                lines.append(f"Section[{section}]: {content}")
+
+            page_content = "\n".join(lines).strip()
+            if len(page_content.split()) < min_document_words:
+                continue
+
+            source_documents.append(
+                Document(
+                    page_content=page_content,
+                    metadata={
+                        "title": title,
+                        "sections": sorted(sections_seen),
+                        "doc_count": len(records),
+                    },
+                )
+            )
+
+        return source_documents, len(docs_by_title)
+
+    def _generate_ragas_records(
+        self,
+        *,
+        documents: list[Document],
+        testset_size: int,
+        provider: str,
+        llm_model: str | None,
+        embedding_model: str | None,
+        llm_context: str,
+    ) -> list[dict[str, Any]]:
+        llm, embeddings = self._create_ragas_models(
+            provider=provider,
+            llm_model=llm_model,
+            embedding_model=embedding_model,
+        )
+
+        generator = TestsetGenerator.from_langchain(
+            llm=llm,
+            embedding_model=embeddings,
+            llm_context=llm_context,
+        )
+        testset = generator.generate_with_langchain_docs(
+            documents,
+            testset_size=testset_size,
+            run_config=RunConfig(
+                timeout=180,
+                max_retries=3,
+                max_wait=30,
+                max_workers=4,
+            ),
+            raise_exceptions=False,
+        )
+        dataframe = testset.to_pandas()
+        return list(dataframe.to_dict(orient="records"))
+
+    def _resolve_provider(self, provider: str) -> str:
+        normalized = str(provider or "").strip().lower()
+        if not normalized or normalized == "auto":
+            configured = ChatbotConfig.get_config("LLM_PROVIDER", "gemini")
+            normalized = str(configured or "gemini").strip().lower()
+        if normalized not in SUPPORTED_PROVIDERS:
+            supported = ", ".join(sorted(SUPPORTED_PROVIDERS))
+            raise ValueError(
+                f"Unsupported provider `{normalized}`. Supported: {supported}"
+            )
+        return normalized
+
+    def _create_ragas_models(
+        self,
+        *,
+        provider: str,
+        llm_model: str | None,
+        embedding_model: str | None,
+    ):
+        if provider == "openrouter":
+            return self._create_openrouter_models(
+                llm_model=llm_model,
+                embedding_model=embedding_model,
+            )
+        return self._create_gemini_models(
+            llm_model=llm_model,
+            embedding_model=embedding_model,
+        )
+
+    def _create_gemini_models(
+        self,
+        *,
+        llm_model: str | None,
+        embedding_model: str | None,
+    ):
+        manager = get_gemini_manager()
+        api_key = manager.get_current_key()
+        llm = ChatGoogleGenerativeAI(
+            model=llm_model or "gemini-2.5-flash",
+            google_api_key=api_key,
+            temperature=0.2,
+            max_output_tokens=2048,
+            streaming=False,
+        )
+        embeddings = GoogleGenerativeAIEmbeddings(
+            model=embedding_model or "models/gemini-embedding-001",
+            google_api_key=api_key,
+        )
+        return llm, embeddings
+
+    def _create_openrouter_models(
+        self,
+        *,
+        llm_model: str | None,
+        embedding_model: str | None,
+    ):
+        api_key_raw = ChatbotConfig.get_config(OPENROUTER_API_KEY_ENV_NAME, None)
+        api_key = (
+            api_key_raw.strip()
+            if isinstance(api_key_raw, str) and api_key_raw.strip()
+            else os.getenv(OPENROUTER_API_KEY_ENV_NAME)
+        )
+        if not api_key:
+            raise ValueError(
+                f"{OPENROUTER_API_KEY_ENV_NAME} is required for provider=openrouter"
+            )
+
+        db_base_url = ChatbotConfig.get_config("OPENROUTER_BASE_URL", None)
+        base_url = (
+            db_base_url.strip()
+            if isinstance(db_base_url, str) and db_base_url.strip()
+            else os.getenv(OPENROUTER_BASE_URL_ENV_NAME) or DEFAULT_OPENROUTER_BASE_URL
+        )
+
+        default_llm_model = str(
+            ChatbotConfig.get_config("LLM_MODEL", "openai/gpt-4.1-mini")
+        )
+        default_embedding_model = str(
+            ChatbotConfig.get_config("EMBEDDING_MODEL", DEFAULT_OPENROUTER_MODEL)
+        )
+
+        llm = ChatOpenAI(
+            model=(llm_model or default_llm_model),
+            api_key=SecretStr(api_key),
+            base_url=base_url,
+            temperature=0.2,
+            max_tokens=2048,
+        )
+        embeddings = OpenAIEmbeddings(
+            model=(embedding_model or default_embedding_model),
+            api_key=SecretStr(api_key),
+            base_url=base_url,
+        )
+        return llm, embeddings
+
+    def _build_cases(
+        self,
+        *,
+        rows: list[dict[str, Any]],
+        dataset_version: str,
+        dev_ratio: float,
+        seed: int,
+        fallback_title: str,
+    ) -> list[dict[str, Any]]:
+        normalized: list[dict[str, Any]] = []
+        for row in rows:
+            question = str(row.get("user_input") or "").strip()
+            if not question:
+                continue
+            normalized.append(row)
+
+        if len(normalized) < 2:
+            return []
+
+        randomizer = random.Random(seed)
+        randomizer.shuffle(normalized)
+
+        total = len(normalized)
+        dev_count = max(1, min(total - 1, int(round(total * dev_ratio))))
+
+        cases: list[dict[str, Any]] = []
+        for idx, row in enumerate(normalized, start=1):
+            split = "dev" if idx <= dev_count else "test"
+            case = self._build_case_payload(
+                row=row,
+                case_no=idx,
+                split=split,
+                dataset_version=dataset_version,
+                fallback_title=fallback_title,
+            )
+            cases.append(case)
+        return cases
+
+    def _build_case_payload(
+        self,
+        *,
+        row: dict[str, Any],
+        case_no: int,
+        split: str,
+        dataset_version: str,
+        fallback_title: str,
+    ) -> dict[str, Any]:
+        question = str(row.get("user_input") or "").strip()
+        query_style = str(row.get("query_style") or "").strip().upper()
+        query_length = str(row.get("query_length") or "").strip().upper()
+        synthesizer_name = str(row.get("synthesizer_name") or "").strip()
+
+        contexts_raw = row.get("reference_contexts")
+        contexts: list[str] = []
+        if isinstance(contexts_raw, list):
+            contexts = [str(item).strip() for item in contexts_raw if str(item).strip()]
+
+        title = self._extract_title_from_contexts(contexts, fallback=fallback_title)
+        sections = self._extract_sections_from_contexts(contexts)
+        scenario = self._infer_scenario(
+            question=question,
+            query_style=query_style,
+            query_length=query_length,
+        )
+        expected_behavior = self._infer_expected_behavior(scenario)
+        gold_titles = [title] if title else []
+        expected_mode = self._infer_expected_mode(
+            expected_behavior=expected_behavior,
+            gold_titles=gold_titles,
+        )
+
+        must_have_sections = sections if expected_mode == "single-disease" else []
+        if expected_mode == "single-disease" and not must_have_sections:
+            must_have_sections = ["general", "symptom"]
+
+        case_id = f"{split}-{scenario}-{case_no:03d}"
+        reference_answer = str(row.get("reference") or "").strip()
+
+        return {
+            "case_id": case_id,
+            "dataset_version": dataset_version,
+            "split": split,
+            "question": question,
+            "intake_payload": {},
+            "scenario": scenario,
+            "expected_mode": expected_mode,
+            "gold_titles": gold_titles,
+            "forbidden_titles": [],
+            "must_have_sections": must_have_sections,
+            "expected_behavior": expected_behavior,
+            "reference_answer": reference_answer,
+            "notes": (
+                "Generated by ragas testset generator "
+                f"(synthesizer={synthesizer_name}, style={query_style}, length={query_length})"
+            ),
+            "gold_analysis": {},
+            "gold_primary_title": gold_titles[0] if gold_titles else "",
+            "must_not_sections": [],
+            "reference_context_ids": [],
+            "requires_followup_topic": "",
+            "risk_level": "medium",
+            "annotation_metadata": {
+                "source": "ragas_testset_generator",
+                "synthesizer_name": synthesizer_name,
+                "query_style": query_style,
+                "query_length": query_length,
+            },
+        }
+
+    def _extract_title_from_contexts(
+        self, contexts: list[str], *, fallback: str
+    ) -> str:
+        for context in contexts:
+            first_line = context.splitlines()[0] if context else ""
+            match = TITLE_PATTERN.match(first_line.strip())
+            if match:
+                title = str(match.group("title")).strip()
+                if title:
+                    return title
+        return str(fallback).strip()
+
+    def _extract_sections_from_contexts(self, contexts: list[str]) -> list[str]:
+        sections: list[str] = []
+        for context in contexts:
+            for match in SECTION_PATTERN.finditer(context):
+                section = str(match.group("section")).strip().lower()
+                if section and section not in sections:
+                    sections.append(section)
+        return sections[:3]
+
+    def _infer_scenario(
+        self,
+        *,
+        question: str,
+        query_style: str,
+        query_length: str,
+    ) -> str:
+        normalized_question = f" {question.lower()} "
+        if any(token in normalized_question for token in NEGATION_TOKENS):
+            return "negation"
+        if query_style in NOISY_STYLES:
+            return "noisy_query"
+        if query_style == "WEB_SEARCH_LIKE":
+            return "paraphrase"
+        if query_length == "SHORT" and len(question.split()) <= 6:
+            return "insufficient_info"
+        return "single_clear"
+
+    def _infer_expected_behavior(self, scenario: str) -> str:
+        if scenario == "insufficient_info":
+            return "ask_followup"
+        if scenario == "out_of_scope":
+            return "abstain"
+        return "answer"
+
+    def _infer_expected_mode(
+        self,
+        *,
+        expected_behavior: str,
+        gold_titles: list[str],
+    ) -> str:
+        if expected_behavior != "answer":
+            return "multi-disease-v2"
+        if len(gold_titles) == 1:
+            return "single-disease"
+        return "multi-disease-v2"

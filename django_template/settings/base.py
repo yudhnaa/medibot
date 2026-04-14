@@ -60,6 +60,7 @@ INSTALLED_APPS = [
     "django_celery_beat",
     "authentication",
     "chatbot",
+    "rag_benchmark",
     "vector_store",
     "vision",
 ]

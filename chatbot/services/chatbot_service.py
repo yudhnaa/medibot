@@ -1704,3 +1704,295 @@ class ChatbotService:
     def get_last_audit(self) -> dict[str, Any]:
         """Get last audit info for metadata."""
         return self._last_audit
+
+    def run_benchmark_case(
+        self,
+        *,
+        question: str,
+        intake_payload: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """
+        Run one offline benchmark case and return stable stage artifacts.
+
+        This hook is additive and intentionally decoupled from logging output so
+        benchmark infrastructure can consume deterministic runtime artifacts.
+        """
+        if intake_payload:
+            self._apply_benchmark_intake_payload(intake_payload)
+
+        total_started_at = time.perf_counter()
+        timings_ms: dict[str, int] = {}
+        analysis: dict[str, Any] = {}
+        gate: dict[str, Any] = {}
+        retrieval_output: dict[str, Any] = {}
+        generation_output: dict[str, Any] = {}
+        mode = "multi-disease-v2"
+
+        try:
+            stage_started_at = time.perf_counter()
+            analysis = self._analyze_query(question)
+            timings_ms["analysis_latency"] = int(
+                (time.perf_counter() - stage_started_at) * 1000
+            )
+
+            q_cleaned = str(analysis.get("q_cleaned", question)).strip() or question
+            stage_started_at = time.perf_counter()
+            gate = self._gate_with_index_c(q_cleaned)
+            timings_ms["gate_latency"] = int(
+                (time.perf_counter() - stage_started_at) * 1000
+            )
+
+            stage_started_at = time.perf_counter()
+            if gate.get("go_single") and gate.get("title"):
+                mode = "single-disease"
+                title = str(gate.get("title", "")).strip().lower()
+                evidence_docs = self._fetch_docs_for_title(
+                    title, index="B", k=DEFAULT_SINGLE_DISEASE_DOCS_K
+                )
+                summaries = self._fetch_summary_docs_for_titles(
+                    [title], str(analysis.get("q_cleaned", ""))
+                )
+                context = self._build_single_disease_context_with_summary(
+                    title=title,
+                    docs=evidence_docs,
+                    summaries=summaries,
+                )
+                self._last_docs_cache = evidence_docs[:DEFAULT_DOCS_CACHE_SIZE]
+                retrieval_output = self._build_benchmark_retrieval_output(
+                    mode=mode,
+                    docs=evidence_docs,
+                    candidates=[
+                        {
+                            "title": title,
+                            "top_score": float(gate.get("top_score", 0.0) or 0.0),
+                        }
+                    ],
+                    summaries={
+                        item.get("title", ""): item.get("summary", "")
+                        for item in summaries
+                    },
+                )
+                self._last_audit = {
+                    "audit_id": str(uuid.uuid4()),
+                    "ts": time.time(),
+                    "mode": mode,
+                    "title": title,
+                    "router_score": gate.get("top_score", 0.0),
+                    "doc_count": len(evidence_docs),
+                }
+            else:
+                mode = "multi-disease-v2"
+                tier_result = self._multi_disease_retrieval(analysis)
+                context = self._build_multi_disease_context(
+                    question, analysis, tier_result
+                )
+                evidence_docs = cast(
+                    list[Document], tier_result.get("evidence_docs", [])
+                )
+                self._last_docs_cache = evidence_docs[:DEFAULT_DOCS_CACHE_SIZE]
+                retrieval_output = self._build_benchmark_retrieval_output(
+                    mode=mode,
+                    docs=evidence_docs,
+                    candidates=cast(
+                        list[dict[str, Any]], tier_result.get("candidates", [])
+                    ),
+                    summaries=cast(dict[str, str], tier_result.get("summaries", {})),
+                )
+                self._last_audit = {
+                    "audit_id": str(uuid.uuid4()),
+                    "ts": time.time(),
+                    "mode": mode,
+                    "candidates": [
+                        candidate.get("title")
+                        for candidate in cast(
+                            list[dict[str, Any]], tier_result.get("candidates", [])
+                        )[:5]
+                    ],
+                }
+
+            timings_ms["retrieval_latency"] = int(
+                (time.perf_counter() - stage_started_at) * 1000
+            )
+            self._last_query_text = question
+
+            stage_started_at = time.perf_counter()
+            prompt_input = {
+                "context": context,
+                "chat_history": [],
+                "question": question,
+            }
+            prompt_messages = self._create_prompt_template().format_messages(
+                **prompt_input
+            )
+            llm_result = self.llm.invoke(prompt_messages)
+            llm_content = (
+                llm_result.content if hasattr(llm_result, "content") else llm_result
+            )
+            if isinstance(llm_content, list):
+                llm_content = "\n".join(str(item) for item in llm_content)
+            final_answer = str(llm_content or "").strip()
+            timings_ms["generation_latency"] = int(
+                (time.perf_counter() - stage_started_at) * 1000
+            )
+
+            source_urls = self.get_last_source_urls()
+            generation_output = {
+                "final_answer": final_answer,
+                "source_urls": source_urls,
+                "context_snapshot": context[:4000],
+            }
+        except Exception as exc:
+            generation_output = {
+                "final_answer": "",
+                "source_urls": [],
+                "context_snapshot": "",
+                "error": str(exc),
+            }
+        finally:
+            timings_ms["total_latency"] = int(
+                (time.perf_counter() - total_started_at) * 1000
+            )
+
+        return {
+            "question": question,
+            "mode": mode,
+            "analysis_output": analysis,
+            "gate_output": gate,
+            "retrieval_output": retrieval_output,
+            "generation_output": generation_output,
+            "audit_metadata": self._last_audit,
+            "timings_ms": timings_ms,
+        }
+
+    def _apply_benchmark_intake_payload(self, intake_payload: dict[str, Any]) -> None:
+        """Reset and apply explicit intake payload before benchmark execution."""
+        self._user_intake_db.reset_session_specific_fields()
+        updates = {
+            "disease_name": intake_payload.get("disease_name"),
+            "age": intake_payload.get("age"),
+            "sex": intake_payload.get("sex"),
+            "symptoms": intake_payload.get("symptoms", []),
+            "symptoms_negated": intake_payload.get("symptoms_negated", []),
+            "onset_days": intake_payload.get("onset_days"),
+            "pregnancy_status": intake_payload.get("pregnancy_status"),
+            "location_country": intake_payload.get("location_country"),
+            "chronic_conditions": intake_payload.get("chronic_conditions", []),
+            "allergies": intake_payload.get("allergies", []),
+            "meds": intake_payload.get("meds", []),
+        }
+        safe_updates = {
+            key: value for key, value in updates.items() if value is not None
+        }
+        if safe_updates:
+            self.update_intake(**safe_updates)
+
+    def _build_benchmark_retrieval_output(
+        self,
+        *,
+        mode: str,
+        docs: list[Document],
+        candidates: list[dict[str, Any]],
+        summaries: dict[str, str],
+    ) -> dict[str, Any]:
+        seen_urls: set[str] = set()
+        seen_titles: set[str] = set()
+        seen_sections: set[str] = set()
+        retrieved_titles: list[str] = []
+        retrieved_sections: list[str] = []
+        retrieved_urls: list[str] = []
+        retrieved_ids: list[str] = []
+        retrieved_context_texts: list[str] = []
+        retrieved_items: list[dict[str, Any]] = []
+
+        for doc in docs:
+            metadata = doc.metadata if isinstance(doc.metadata, dict) else {}
+            title = str(metadata.get("title", "")).strip().lower()
+            section = str(metadata.get("section", "")).strip().lower()
+            source_url = self._extract_doc_source_url(metadata)
+            identity = self._extract_retrieval_identity(metadata)
+            snippet = re.sub(r"\s+", " ", str(doc.page_content or "")).strip()
+
+            if title and title not in seen_titles:
+                seen_titles.add(title)
+                retrieved_titles.append(title)
+            if section and section not in seen_sections:
+                seen_sections.add(section)
+                retrieved_sections.append(section)
+            if source_url and source_url not in seen_urls:
+                seen_urls.add(source_url)
+                retrieved_urls.append(source_url)
+            if (
+                identity["retrieval_id"]
+                and identity["retrieval_id"] not in retrieved_ids
+            ):
+                retrieved_ids.append(identity["retrieval_id"])
+            if snippet:
+                retrieved_context_texts.append(snippet)
+
+            retrieved_items.append(
+                {
+                    "title": title,
+                    "section": section,
+                    "url": source_url,
+                    "score": float(metadata.get("score", 0.0) or 0.0),
+                    "retrieval_identity": identity,
+                    "content_preview": snippet[:300],
+                }
+            )
+
+        return {
+            "mode": mode,
+            "candidates": candidates,
+            "summaries": summaries,
+            "retrieved_titles": retrieved_titles,
+            "retrieved_sections": retrieved_sections,
+            "retrieved_urls": retrieved_urls,
+            "retrieved_ids": retrieved_ids,
+            "retrieved_context_texts": retrieved_context_texts,
+            "retrieved_items": retrieved_items,
+        }
+
+    def _extract_retrieval_identity(self, metadata: dict[str, Any]) -> dict[str, str]:
+        nested_metadata = metadata.get("metadata")
+        nested = nested_metadata if isinstance(nested_metadata, dict) else {}
+
+        evidence_id = str(
+            metadata.get("evidence_id") or nested.get("evidence_id") or ""
+        ).strip()
+        summary_id = str(
+            metadata.get("summary_id")
+            or nested.get("summary_id")
+            or nested.get("qa_id")
+            or ""
+        ).strip()
+        route_id = str(metadata.get("route_id") or nested.get("route_id") or "").strip()
+        context_id = str(
+            metadata.get("context_id") or nested.get("context_id") or ""
+        ).strip()
+        canonical_title = (
+            str(
+                metadata.get("canonical_title")
+                or nested.get("canonical_title")
+                or metadata.get("title")
+                or ""
+            )
+            .strip()
+            .lower()
+        )
+
+        retrieval_id = evidence_id or summary_id or route_id or context_id
+        if not retrieval_id:
+            parts = [canonical_title, str(metadata.get("section", "")).strip().lower()]
+            url = self._extract_doc_source_url(metadata)
+            if url:
+                parts.append(url)
+            retrieval_id = "|".join(part for part in parts if part)
+
+        return {
+            "retrieval_id": retrieval_id,
+            "evidence_id": evidence_id,
+            "summary_id": summary_id,
+            "route_id": route_id,
+            "context_id": context_id,
+            "canonical_title": canonical_title,
+        }

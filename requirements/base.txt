@@ -49,3 +49,4 @@ scikit-learn==1.8.0
 
 # Data
 datasets==4.8.4
+ragas==0.4.3
