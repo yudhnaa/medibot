@@ -10,12 +10,21 @@ from drf_yasg.views import get_schema_view
 
 SchemaView = get_schema_view(
     openapi.Info(
-        title="Snippets API",
+        title="MediBot Backend API",
         default_version="v1",
-        description="Test description",
-        terms_of_service="https://www.google.com/policies/terms/",
-        contact=openapi.Contact(email="contact@snippets.local"),
-        license=openapi.License(name="python-django-api-template License"),
+        description=(
+            "Generated API schema for the MediBot Django backend.\n\n"
+            "Current public REST surface includes authentication, chatbot, "
+            "vector-store, and vision endpoints under `/api/v1/`.\n\n"
+            "Important runtime notes:\n"
+            "- Most REST responses are wrapped by `CustomJSONRenderer`.\n"
+            "- Chat streaming is served as Server-Sent Events at "
+            "`/api/v1/chatbot/chat/` when `stream=true`.\n"
+            "- Offline benchmark workflows live in Django admin / management "
+            "commands and are not exposed as public REST endpoints."
+        ),
+        contact=openapi.Contact(email="backend@medibot.local"),
+        license=openapi.License(name="MediBot Project License"),
     ),
     public=True,
     permission_classes=[permissions.AllowAny],
@@ -59,5 +68,5 @@ if settings.DEBUG:
             path("__debug__/", include(debug_toolbar.urls)),
         ]
 
-admin.site.site_header = "python-django-api-template"
-admin.site.index_title = "python-django-api-template"
+admin.site.site_header = "MediBot Admin"
+admin.site.index_title = "MediBot Operations"
