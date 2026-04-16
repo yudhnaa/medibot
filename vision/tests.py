@@ -3,6 +3,8 @@ Tests for Vision module.
 Tests model builder, preprocessing, Grad-CAM, findings, and config loading.
 """
 
+import base64
+import tempfile
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -323,6 +325,40 @@ class AnalyzeViewTests(TestCase):
         self.assertIn("bilateral involvement", data["findings"])
         self.assertEqual(len(data["embedding"]), 1024)
         mock_analyze.assert_called_once()
+
+    @patch("vision.views.analyze_xray")
+    def test_analyze_persists_heatmap_base64(self, mock_analyze: MagicMock) -> None:
+        """Returned heatmap should also be stored on the analysis record."""
+        from vision.models import XRayAnalysis
+
+        heatmap_bytes = b"fake-heatmap-png"
+        with tempfile.NamedTemporaryFile(suffix=".png") as heatmap_file:
+            heatmap_file.write(heatmap_bytes)
+            heatmap_file.flush()
+            mock_analyze.return_value = {
+                "class_probs": {
+                    "COVID": 0.8,
+                    "Normal": 0.1,
+                    "Viral Pneumonia": 0.05,
+                    "Lung Opacity": 0.05,
+                },
+                "pred_label": "COVID",
+                "findings": ["bilateral involvement"],
+                "heatmap_path": heatmap_file.name,
+                "mask_path": None,
+                "embedding": [0.1] * 1024,
+            }
+
+            image = _create_test_image()
+            response = self.client.post(self.url, {"image": image}, format="multipart")
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()["data"]
+        expected_heatmap = base64.b64encode(heatmap_bytes).decode("utf-8")
+        analysis = XRayAnalysis.objects.get(pk=data["id"])
+
+        self.assertEqual(data["heatmap_base64"], expected_heatmap)
+        self.assertEqual(analysis.heatmap_base64, expected_heatmap)
 
     def test_analyze_missing_image_returns_400(self) -> None:
         """Test missing image file returns 400."""

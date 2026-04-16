@@ -238,39 +238,7 @@ class OfflineBenchmarkRunner:
             title=f"Benchmark case {case.case_id}",
             is_active=True,
         )
-        service = ChatbotService(session)
-        self._reset_service_intake(service=service, intake_payload=case.intake_payload)
-        return service
-
-    def _reset_service_intake(
-        self,
-        *,
-        service: ChatbotService,
-        intake_payload: dict[str, Any] | None,
-    ) -> None:
-        service._user_intake_db.reset_session_specific_fields()  # pyright: ignore[reportPrivateUsage]
-        payload = intake_payload if isinstance(intake_payload, dict) else {}
-        if not payload:
-            return
-
-        updates = {
-            "disease_name": payload.get("disease_name"),
-            "age": payload.get("age"),
-            "sex": payload.get("sex"),
-            "symptoms": payload.get("symptoms", []),
-            "symptoms_negated": payload.get("symptoms_negated", []),
-            "onset_days": payload.get("onset_days"),
-            "pregnancy_status": payload.get("pregnancy_status"),
-            "location_country": payload.get("location_country"),
-            "chronic_conditions": payload.get("chronic_conditions", []),
-            "allergies": payload.get("allergies", []),
-            "meds": payload.get("meds", []),
-        }
-        safe_updates = {
-            key: value for key, value in updates.items() if value is not None
-        }
-        if safe_updates:
-            service.update_intake(**safe_updates)
+        return ChatbotService(session)
 
     def _persist_run_aggregate(
         self,

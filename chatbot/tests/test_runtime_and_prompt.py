@@ -258,3 +258,63 @@ class RouterAndRetrievalTests(SimpleTestCase):
         self.assertEqual(first["title"], "bệnh sởi")
         self.assertIn("summary", first)
         self.assertTrue(first["final_score"] > 0)
+
+
+class BenchmarkIntakeTests(SimpleTestCase):
+    """Tests for benchmark-only intake replacement semantics."""
+
+    def test_apply_benchmark_intake_payload_replaces_persistent_state(self) -> None:
+        service = object.__new__(ChatbotService)
+        intake = SimpleNamespace(
+            disease_name="bệnh cũ",
+            age=72,
+            sex="female",
+            symptoms=["sốt cũ"],
+            symptoms_negated=["không đau đầu"],
+            onset_days=9,
+            pregnancy_status="yes",
+            location_country="VN",
+            chronic_conditions=["hen suyễn"],
+            allergies=["penicillin"],
+            meds=["thuốc cũ"],
+            save=MagicMock(),
+        )
+        service._user_intake_db = intake
+
+        ChatbotService._apply_benchmark_intake_payload(
+            service,
+            {
+                "age": 25,
+                "sex": "male",
+                "symptoms": ["sốt", "sốt", " "],
+                "meds": ["paracetamol"],
+            },
+        )
+
+        self.assertIsNone(intake.disease_name)
+        self.assertEqual(intake.age, 25)
+        self.assertEqual(intake.sex, "male")
+        self.assertEqual(intake.symptoms, ["sốt"])
+        self.assertEqual(intake.symptoms_negated, [])
+        self.assertIsNone(intake.onset_days)
+        self.assertIsNone(intake.pregnancy_status)
+        self.assertIsNone(intake.location_country)
+        self.assertEqual(intake.chronic_conditions, [])
+        self.assertEqual(intake.allergies, [])
+        self.assertEqual(intake.meds, ["paracetamol"])
+        intake.save.assert_called_once_with()
+
+    def test_run_benchmark_case_applies_empty_payload_reset(self) -> None:
+        service = object.__new__(ChatbotService)
+        service._apply_benchmark_intake_payload = MagicMock()
+        service._analyze_query = MagicMock(side_effect=RuntimeError("boom"))
+        service._last_audit = {}
+
+        result = ChatbotService.run_benchmark_case(
+            service,
+            question="test benchmark",
+            intake_payload={},
+        )
+
+        service._apply_benchmark_intake_payload.assert_called_once_with({})
+        self.assertEqual(result["generation_output"]["error"], "boom")

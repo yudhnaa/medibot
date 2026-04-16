@@ -1717,7 +1717,7 @@ class ChatbotService:
         This hook is additive and intentionally decoupled from logging output so
         benchmark infrastructure can consume deterministic runtime artifacts.
         """
-        if intake_payload:
+        if intake_payload is not None:
             self._apply_benchmark_intake_payload(intake_payload)
 
         total_started_at = time.perf_counter()
@@ -1866,25 +1866,39 @@ class ChatbotService:
 
     def _apply_benchmark_intake_payload(self, intake_payload: dict[str, Any]) -> None:
         """Reset and apply explicit intake payload before benchmark execution."""
-        self._user_intake_db.reset_session_specific_fields()
-        updates = {
-            "disease_name": intake_payload.get("disease_name"),
-            "age": intake_payload.get("age"),
-            "sex": intake_payload.get("sex"),
-            "symptoms": intake_payload.get("symptoms", []),
-            "symptoms_negated": intake_payload.get("symptoms_negated", []),
-            "onset_days": intake_payload.get("onset_days"),
-            "pregnancy_status": intake_payload.get("pregnancy_status"),
-            "location_country": intake_payload.get("location_country"),
-            "chronic_conditions": intake_payload.get("chronic_conditions", []),
-            "allergies": intake_payload.get("allergies", []),
-            "meds": intake_payload.get("meds", []),
-        }
-        safe_updates = {
-            key: value for key, value in updates.items() if value is not None
-        }
-        if safe_updates:
-            self.update_intake(**safe_updates)
+        payload = intake_payload if isinstance(intake_payload, dict) else {}
+
+        def _normalize_list(value: Any) -> list[str]:
+            if not isinstance(value, list):
+                return []
+
+            items: list[str] = []
+            seen: set[str] = set()
+            for item in value:
+                text = str(item).strip()
+                if text and text not in seen:
+                    seen.add(text)
+                    items.append(text)
+            return items
+
+        # Benchmark cases must run in isolation, so replace the tracked intake
+        # state with an explicit baseline instead of append-merging via update_intake().
+        self._user_intake_db.disease_name = payload.get("disease_name") or None
+        self._user_intake_db.age = payload.get("age")
+        self._user_intake_db.sex = payload.get("sex") or "unknown"
+        self._user_intake_db.symptoms = _normalize_list(payload.get("symptoms"))
+        self._user_intake_db.symptoms_negated = _normalize_list(
+            payload.get("symptoms_negated")
+        )
+        self._user_intake_db.onset_days = payload.get("onset_days")
+        self._user_intake_db.pregnancy_status = payload.get("pregnancy_status")
+        self._user_intake_db.location_country = payload.get("location_country") or None
+        self._user_intake_db.chronic_conditions = _normalize_list(
+            payload.get("chronic_conditions")
+        )
+        self._user_intake_db.allergies = _normalize_list(payload.get("allergies"))
+        self._user_intake_db.meds = _normalize_list(payload.get("meds"))
+        self._user_intake_db.save()
 
     def _build_benchmark_retrieval_output(
         self,

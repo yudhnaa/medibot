@@ -81,6 +81,7 @@ class AnalyzeView(APIView):
                 pred_label=result["pred_label"],
                 findings=result["findings"],
                 embedding=result["embedding"],
+                heatmap_base64=heatmap_b64,
             )
 
             response_data = {
