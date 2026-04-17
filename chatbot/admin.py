@@ -16,9 +16,7 @@ from chatbot.models import (
     UserPreference,
 )
 from chatbot.forms import CsvUploadForm
-from chatbot.tasks import process_csv_upload
 from chatbot.admin.document_admin import MedicalDocumentAdmin
-from vector_store.services.embedding_service import EmbeddingService
 
 
 @admin.register(ChatSession)
@@ -76,6 +74,8 @@ class ExtendedMedicalDocumentAdmin(MedicalDocumentAdmin):
         if request.method == "POST":
             form = CsvUploadForm(request.POST, request.FILES)
             if form.is_valid():
+                from vector_store.services.embedding_service import EmbeddingService
+
                 # Get form data
                 csv_file = form.cleaned_data["csv_file"]
                 index_types = form.cleaned_data["index_types"]  # Now returns a list
@@ -106,6 +106,8 @@ class ExtendedMedicalDocumentAdmin(MedicalDocumentAdmin):
 
                 # Trigger Celery task for background processing
                 try:
+                    from chatbot.tasks import process_csv_upload
+
                     task = process_csv_upload.delay(  # pyright: ignore[reportCallIssue]
                         file_path=file_path,
                         index_types=list(index_types),

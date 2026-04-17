@@ -1,11 +1,25 @@
-import sentry_sdk
-from sentry_sdk.integrations.django import DjangoIntegration
+try:
+    import sentry_sdk
+    from sentry_sdk.integrations.django import DjangoIntegration
+except ImportError:  # pragma: no cover - optional prod dependency
+    sentry_sdk = None
+    DjangoIntegration = None
 
 # pylint: disable=wildcard-import,unused-wildcard-import
 from .base import *  # noqa: F401,F403
 from utils.logger import get_logging_config
 
-ALLOWED_HOSTS = []
+
+def _split_csv_env(name):
+    return [value.strip() for value in os.getenv(name, "").split(",") if value.strip()]
+
+
+ALLOWED_HOSTS = _split_csv_env("ALLOWED_HOSTS") or ["localhost", "127.0.0.1"]
+CORS_ALLOWED_ORIGINS = _split_csv_env("CORS_ALLOWED_ORIGINS")
+CSRF_TRUSTED_ORIGINS = _split_csv_env("CSRF_TRUSTED_ORIGINS")
+CORS_ALLOW_CREDENTIALS = (
+    os.getenv("CORS_ALLOW_CREDENTIALS", "False").lower() in ("true", "1", "yes")
+)
 
 DEBUG = os.getenv("DEBUG", "False").lower() in ("true", "1", "yes")
 
@@ -26,18 +40,20 @@ DATABASES = {
 }
 
 # Sentry
-sentry_sdk.init(
-    dsn=os.getenv("SENTRY_DNS"),
-    enable_tracing=True,
-    integrations=[
-        DjangoIntegration(
-            transaction_style="url",
-            middleware_spans=True,
-            signals_spans=False,
-            cache_spans=False,
-        ),
-    ],
-)
+SENTRY_DSN = os.getenv("SENTRY_DNS")
+if sentry_sdk is not None and DjangoIntegration is not None and SENTRY_DSN:
+    sentry_sdk.init(
+        dsn=SENTRY_DSN,
+        enable_tracing=True,
+        integrations=[
+            DjangoIntegration(
+                transaction_style="url",
+                middleware_spans=True,
+                signals_spans=False,
+                cache_spans=False,
+            ),
+        ],
+    )
 
 LOGGING = get_logging_config(
     log_level=os.getenv("LOG_LEVEL", "INFO"),

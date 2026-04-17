@@ -24,10 +24,6 @@ from chatbot.forms import (
     VectorSearchForm,
     ReembeddingForm,
 )
-from vector_store.services.embedding_service import EmbeddingService
-from vector_store.services.reembed_service import ReembeddingService
-from vector_store.services.quality_service import QualityService
-from vector_store.services.vector_store_manager import VectorStoreManager
 
 
 class MedicalDocumentAdmin(admin.ModelAdmin):
@@ -272,6 +268,10 @@ class MedicalDocumentAdmin(admin.ModelAdmin):
                 min_similarity = form.cleaned_data.get("min_similarity", 0.5)
 
                 try:
+                    from vector_store.services.vector_store_manager import (
+                        VectorStoreManager,
+                    )
+
                     manager = VectorStoreManager()
                     raw_results = []
                     if section_types:
@@ -336,6 +336,8 @@ class MedicalDocumentAdmin(admin.ModelAdmin):
 
     def quality_check_view(self, request: HttpRequest) -> HttpResponse:
         """Embedding quality check interface."""
+        from vector_store.services.quality_service import QualityService
+
         page = int(request.GET.get("page", 1))
         check_type = request.GET.get("check_type", "all")
 
@@ -377,6 +379,9 @@ class MedicalDocumentAdmin(admin.ModelAdmin):
         if request.method == "POST":
             form = ReembeddingForm(request.POST)
             if form.is_valid():
+                from vector_store.services.embedding_service import EmbeddingService
+                from vector_store.services.reembed_service import ReembeddingService
+
                 reembed_type = form.cleaned_data["reembed_type"]
                 section_type = form.cleaned_data.get("section_type")
                 run_async = form.cleaned_data["run_async"]
@@ -505,6 +510,8 @@ class MedicalDocumentAdmin(admin.ModelAdmin):
             query_text = data.get("query")
             k = int(data.get("k", 5))
             section_type = data.get("section_type")
+
+            from vector_store.services.vector_store_manager import VectorStoreManager
 
             manager = VectorStoreManager()
             docs = manager.search_similar(

@@ -1,66 +1,168 @@
-version: "3.7"
-
 services:
     web:
         build:
             context: ./
             dockerfile: Dockerfile
-        command: ./docker-entrypoint.sh -- python manage.py runserver 0.0.0.0:8000
+            args:
+                REQUIREMENTS_FILE: requirements/base.txt
+        command:
+            [
+                "./docker-entrypoint.sh",
+                "daphne",
+                "-b",
+                "0.0.0.0",
+                "-p",
+                "8000",
+                "django_template.asgi:application",
+            ]
         volumes:
-            - .:/usr/src/app/
             - torch_weights:/root/.cache/torch
+            - media_data:/usr/src/app/media
         ports:
             - 8000:8000
+        env_file:
+            - .env
         environment:
-            - SECRET_KEY=${SECRET_KEY}
-            - DJANGO_SETTINGS_MODULE=django_template.settings.prod
+            SECRET_KEY: ${SECRET_KEY}
+            DEBUG: "False"
+            DJANGO_SETTINGS_MODULE: django_template.settings.prod
+            DB_HOST: db
+            DB_PORT: 5432
+            BROKER_URL: redis://redis:6379/0
+            CELERY_RESULT_BACKEND: redis://redis:6379/1
+            CELERY_CACHE_BACKEND: redis://redis:6379/2
+            REDIS_HOST: redis
+            ALLOWED_HOSTS: ${ALLOWED_HOSTS:-localhost,127.0.0.1}
+            RUN_DB_MIGRATIONS: "true"
+            RUN_COLLECTSTATIC: "true"
         depends_on:
-            - db
+            db:
+                condition: service_healthy
+            redis:
+                condition: service_healthy
+        restart: unless-stopped
     db:
-        image: postgres:14-alpine
+        image: pgvector/pgvector:pg16
         volumes:
-          - django_template_db:/var/lib/postgresql/data
+            - django_template_db:/var/lib/postgresql/data
         environment:
-            - POSTGRES_USER=${DB_USER}
-            - POSTGRES_PASSWORD=${DB_PASSWORD}
-            - POSTGRES_DB=${DB_NAME}
-        ports:
-            - 5432:5432
+            POSTGRES_USER: ${DB_USER:-postgres}
+            POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
+            POSTGRES_DB: ${DB_NAME:-medibot}
+        healthcheck:
+            test:
+                [
+                    "CMD-SHELL",
+                    "pg_isready -U ${DB_USER:-postgres} -d ${DB_NAME:-medibot}",
+                ]
+            interval: 10s
+            timeout: 5s
+            retries: 5
+            start_period: 10s
+        restart: unless-stopped
     redis:
         image: redis:7.2.3-alpine
+        command: ["redis-server", "--appendonly", "yes"]
         volumes:
-            - ./tmp/redis/data:/data
-        ports:
-            - 6379:6379
+            - redis_data:/data
+        healthcheck:
+            test: ["CMD", "redis-cli", "ping"]
+            interval: 10s
+            timeout: 5s
+            retries: 5
+            start_period: 5s
+        restart: unless-stopped
     worker:
-        build: ./
-        entrypoint: celery
-        command: -A django_template worker --beat --scheduler django -l info -E
+        build:
+            context: ./
+            dockerfile: Dockerfile
+            args:
+                REQUIREMENTS_FILE: requirements/base.txt
+        command:
+            ["celery", "-A", "django_template.celery", "worker", "-l", "info", "-E"]
         volumes:
-            - .:/app
             - torch_weights:/root/.cache/torch
+            - media_data:/usr/src/app/media
+        env_file:
+            - .env
         environment:
-            - BROKER_URL=${BROKER_URL}
-            - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND}
-            - CELERY_CACHE_BACKEND=${CELERY_CACHE_BACKEND}
+            DEBUG: "False"
+            DJANGO_SETTINGS_MODULE: django_template.settings.prod
+            DB_HOST: db
+            DB_PORT: 5432
+            BROKER_URL: redis://redis:6379/0
+            CELERY_RESULT_BACKEND: redis://redis:6379/1
+            CELERY_CACHE_BACKEND: redis://redis:6379/2
+            REDIS_HOST: redis
         depends_on:
-            - db
-            - redis
+            db:
+                condition: service_healthy
+            redis:
+                condition: service_healthy
+        restart: unless-stopped
+    beat:
+        build:
+            context: ./
+            dockerfile: Dockerfile
+            args:
+                REQUIREMENTS_FILE: requirements/base.txt
+        command:
+            [
+                "celery",
+                "-A",
+                "django_template.celery",
+                "beat",
+                "-l",
+                "info",
+                "--scheduler",
+                "django_celery_beat.schedulers:DatabaseScheduler",
+            ]
+        env_file:
+            - .env
+        environment:
+            DEBUG: "False"
+            DJANGO_SETTINGS_MODULE: django_template.settings.prod
+            DB_HOST: db
+            DB_PORT: 5432
+            BROKER_URL: redis://redis:6379/0
+            CELERY_RESULT_BACKEND: redis://redis:6379/1
+            CELERY_CACHE_BACKEND: redis://redis:6379/2
+            REDIS_HOST: redis
+        depends_on:
+            db:
+                condition: service_healthy
+            redis:
+                condition: service_healthy
+        restart: unless-stopped
     flower:
-        build: ./
-        command: celery -A django_template flower
-        volumes:
-            - .:/data
-        working_dir: /data
+        build:
+            context: ./
+            dockerfile: Dockerfile
+            args:
+                REQUIREMENTS_FILE: requirements/base.txt
+        command:
+            ["celery", "-A", "django_template.celery", "flower", "--port=5555"]
         ports:
             - 5555:5555
+        profiles:
+            - ops
+        env_file:
+            - .env
         environment:
-            - BROKER_URL=${BROKER_URL}
-            - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND}
+            DEBUG: "False"
+            DJANGO_SETTINGS_MODULE: django_template.settings.prod
+            BROKER_URL: redis://redis:6379/0
+            CELERY_RESULT_BACKEND: redis://redis:6379/1
+            ENABLE_STARTUP_WARMUP: "False"
         depends_on:
-            - worker
-            - redis
+            worker:
+                condition: service_started
+            redis:
+                condition: service_healthy
+        restart: unless-stopped
 
 volumes:
     django_template_db:
+    redis_data:
     torch_weights:
+    media_data:

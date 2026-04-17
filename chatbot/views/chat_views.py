@@ -3,6 +3,8 @@ Chat Views
 DRF views for chat API endpoints.
 """
 
+from __future__ import annotations
+
 import logging
 import time
 import asyncio
@@ -22,7 +24,6 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from vision.models import XRayAnalysis
-from vision.services.vision_service import analyze_xray
 
 from chatbot.models import ChatMessage, ChatSession
 from chatbot.serializers import (
@@ -35,7 +36,6 @@ from chatbot.serializers import (
     UserIntakeInputSerializer,
     UserIntakeOutputSerializer,
 )
-from chatbot.services import ChatbotService
 
 logger = logging.getLogger(__name__)
 
@@ -147,6 +147,8 @@ class ChatView(APIView):
 
     async def post(self, request: Request) -> Response | StreamingHttpResponse:
         """Send a message and get a response."""
+        from chatbot.services.chatbot_service import ChatbotService
+
         serializer = ChatInputSerializer(data=request.data)
         if not serializer.is_valid():
             logger.error(f"Invalid chat input: {serializer.errors}")
@@ -179,6 +181,7 @@ class ChatView(APIView):
             import os
             import tempfile
             from django.conf import settings
+            from vision.services.vision_service import analyze_xray
 
             suffix: str = os.path.splitext(str(uploaded_image.name))[1] or ".png"
             with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
@@ -363,6 +366,8 @@ class UserIntakeView(APIView):
 
     def get(self, request: Request, session_id: str) -> Response:
         """Get current user intake for a session."""
+        from chatbot.services.chatbot_service import ChatbotService
+
         try:
             session = ChatSession.objects.get(
                 session_id=session_id, customer=request.user
@@ -389,6 +394,8 @@ class UserIntakeView(APIView):
 
     def patch(self, request: Request, session_id: str) -> Response:
         """Update user intake for a session."""
+        from chatbot.services.chatbot_service import ChatbotService
+
         try:
             session = ChatSession.objects.get(
                 session_id=session_id, customer=request.user
@@ -426,6 +433,8 @@ class RetrievedDocsView(APIView):
 
     def get(self, request: Request, session_id: str) -> Response:
         """Get last retrieved documents for a session."""
+        from chatbot.services.chatbot_service import ChatbotService
+
         try:
             session = ChatSession.objects.get(
                 session_id=session_id, customer=request.user

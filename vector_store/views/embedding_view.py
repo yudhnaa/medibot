@@ -7,13 +7,14 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from vector_store.serializers import EmbedDocumentsSerializer, EmbedTextSerializer
-from vector_store.services.embedding_service import EmbeddingService
 
 
 class EmbedTextView(APIView):
     permission_classes = (IsAuthenticated,)
 
     def post(self, request: Request):
+        from vector_store.services.embedding_service import EmbeddingService
+
         serializer = EmbedTextSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
@@ -34,6 +35,8 @@ class EmbedDocumentsView(APIView):
     permission_classes = (IsAuthenticated,)
 
     def post(self, request: Request):
+        from vector_store.services.embedding_service import EmbeddingService
+
         serializer = EmbedDocumentsSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
