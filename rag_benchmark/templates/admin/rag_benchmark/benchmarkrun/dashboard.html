@@ -109,14 +109,6 @@
       <article class="benchmark-card">
         <h3>Total Cases</h3>
         <strong>{{ run.total_cases }}</strong>
-        <div class="benchmark-muted">Passed {{ run.passed_cases }} · Failed {{ run.failed_cases }}</div>
-      </article>
-      <article class="benchmark-card">
-        <h3>Pass / Fail</h3>
-        <strong>{{ pass_rate }}% / {{ fail_rate }}%</strong>
-        <div class="benchmark-progress">
-          <span style="width: {{ pass_rate }}%"></span>
-        </div>
       </article>
     </section>
 
@@ -188,57 +180,5 @@
       {% endif %}
     </section>
 
-    <section class="benchmark-grid">
-      <article class="benchmark-card">
-        <h3>Scenario Failures</h3>
-        {% include "admin/rag_benchmark/benchmarkrun/includes/bar_table.html" with rows=scenario_failures %}
-      </article>
-      <article class="benchmark-card">
-        <h3>Mode Failures</h3>
-        {% include "admin/rag_benchmark/benchmarkrun/includes/bar_table.html" with rows=mode_failures %}
-      </article>
-      <article class="benchmark-card">
-        <h3>Confidence Buckets</h3>
-        {% include "admin/rag_benchmark/benchmarkrun/includes/bar_table.html" with rows=confidence_failures %}
-      </article>
-      <article class="benchmark-card">
-        <h3>Question Length</h3>
-        {% include "admin/rag_benchmark/benchmarkrun/includes/bar_table.html" with rows=question_length_failures %}
-      </article>
-      <article class="benchmark-card">
-        <h3>Review Taxonomy</h3>
-        {% include "admin/rag_benchmark/benchmarkrun/includes/bar_table.html" with rows=review_distribution %}
-      </article>
-    </section>
-
-    <section class="benchmark-card">
-      <h3>Recent Failed Cases</h3>
-      {% if top_failure_results %}
-        <table class="benchmark-bar-table">
-          <thead>
-            <tr>
-              <th>Case ID</th>
-              <th>Status</th>
-              <th>Scenario</th>
-              <th>Expected Mode</th>
-              <th>Taxonomy</th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for result in top_failure_results %}
-              <tr>
-                <td>{{ result.case.case_id }}</td>
-                <td>{{ result.status }}</td>
-                <td>{{ result.case.scenario }}</td>
-                <td>{{ result.case.expected_mode }}</td>
-                <td>{{ result.failure_taxonomy|default:"unclassified" }}</td>
-              </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      {% else %}
-        <p class="benchmark-muted">No failed case results found.</p>
-      {% endif %}
-    </section>
   </div>
 {% endblock %}

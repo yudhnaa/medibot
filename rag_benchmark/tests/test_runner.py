@@ -3,16 +3,19 @@ from unittest.mock import MagicMock, patch
 from django.test import TestCase
 
 from rag_benchmark.models import BenchmarkCaseResult, BenchmarkRunStatus
+from rag_benchmark.services.constants import RAGAS_RELEASE_GATE_THRESHOLDS
 from rag_benchmark.services.runner import OfflineBenchmarkRunner
 
 
 class OfflineBenchmarkRunnerTests(TestCase):
+    @patch("rag_benchmark.services.runner.RagasJudgeEvaluator")
     @patch("rag_benchmark.services.runner.EmbeddingService.resolve_provider")
     @patch("rag_benchmark.services.runner.ChatbotService")
     def test_runner_executes_cases_and_persists_results(
         self,
         mock_chatbot_service: MagicMock,
         mock_resolve_provider: MagicMock,
+        mock_judge_cls: MagicMock,
     ):
         mock_resolve_provider.return_value = "transformers"
         service_instance = mock_chatbot_service.return_value
@@ -38,6 +41,26 @@ class OfflineBenchmarkRunnerTests(TestCase):
                 "total_latency": 47,
             },
         }
+        judge = mock_judge_cls.return_value
+        judge.evaluate_batch.return_value = [
+            {
+                "available": True,
+                "selected_metrics": [
+                    "faithfulness",
+                    "answer_relevancy",
+                    "context_precision",
+                    "context_recall",
+                    "answer_correctness",
+                ],
+                "scores": {
+                    "faithfulness": 0.9,
+                    "answer_relevancy": 0.84,
+                    "context_precision": 0.88,
+                    "context_recall": 0.89,
+                    "answer_correctness": 0.9,
+                },
+            }
+        ]
 
         dataset = self._create_dataset_with_cases()
         runner = OfflineBenchmarkRunner()
@@ -92,4 +115,39 @@ class OfflineBenchmarkRunnerTests(TestCase):
             total_cases=2,
             split_counts={"dev": 1, "test": 1},
             composition_stats={},
+        )
+
+    @patch("rag_benchmark.services.runner.ChatbotConfig.get_config")
+    def test_build_run_scorer_applies_threshold_overrides_from_db_config(
+        self,
+        mock_get_config: MagicMock,
+    ) -> None:
+        config = {
+            "RAGAS_RELEASE_GATE_THRESHOLDS": {
+                "answer_relevancy": [">=", 0.82],
+                "context_precision": {"operator": ">=", "threshold": 0.74},
+            }
+        }
+        mock_get_config.side_effect = lambda key, default=None: config.get(key, default)
+
+        runner = OfflineBenchmarkRunner()
+        scorer = runner._build_run_scorer(
+            active_metrics=[
+                "answer_relevancy",
+                "context_precision",
+                "faithfulness",
+            ]
+        )
+
+        self.assertEqual(
+            scorer.release_thresholds["answer_relevancy"],
+            (">=", 0.82),
+        )
+        self.assertEqual(
+            scorer.release_thresholds["context_precision"],
+            (">=", 0.74),
+        )
+        self.assertEqual(
+            scorer.release_thresholds["faithfulness"],
+            RAGAS_RELEASE_GATE_THRESHOLDS["faithfulness"],
         )

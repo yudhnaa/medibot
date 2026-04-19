@@ -5,7 +5,10 @@ from rag_benchmark.services.dataset_importer import (
 )
 from rag_benchmark.services.ragas import RagasJudgeEvaluator
 from rag_benchmark.services.runner import OfflineBenchmarkRunner
-from rag_benchmark.services.scoring import DeterministicBenchmarkScorer
+from rag_benchmark.services.scoring import (
+    DeterministicBenchmarkScorer,
+    RagasBenchmarkScorer,
+)
 
 __all__ = [
     "BenchmarkDatasetImporter",
@@ -13,5 +16,6 @@ __all__ = [
     "DatasetValidationError",
     "DeterministicBenchmarkScorer",
     "OfflineBenchmarkRunner",
+    "RagasBenchmarkScorer",
     "RagasJudgeEvaluator",
 ]

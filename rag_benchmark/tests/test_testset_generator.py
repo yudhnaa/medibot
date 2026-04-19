@@ -54,6 +54,66 @@ class RagasBenchmarkDatasetGeneratorTests(SimpleTestCase):
         self.assertEqual(case["expected_behavior"], "answer")
         self.assertEqual(case["must_have_sections"], ["risk", "symptom"])
 
+    def test_build_case_payload_normalizes_ambiguous_cause_question(self):
+        row = {
+            "user_input": "What cause sars-cov-2?",
+            "reference_contexts": [
+                "Title: coronavirus disease (covid-19)\n"
+                "Section[aetiologies]: sars-cov-2 virus"
+            ],
+            "reference": "The sars-cov-2 virus is the cause of COVID-19.",
+            "query_style": "POOR_GRAMMAR",
+            "query_length": "SHORT",
+            "synthesizer_name": "single_hop_specific_query_synthesizer",
+        }
+
+        case = self.generator._build_case_payload(
+            row=row,
+            case_no=4,
+            split="dev",
+            dataset_version="v1",
+            fallback_title="fallback-title",
+        )
+
+        self.assertEqual(case["question"], "What cause covid-19?")
+        self.assertEqual(
+            case["reference_answer"],
+            "The sars-cov-2 virus is the cause of COVID-19.",
+        )
+
+    def test_build_case_payload_normalizes_overbroad_reference_for_cause_question(self):
+        row = {
+            "user_input": (
+                "What is the main cause of the disease that is called covid-19, "
+                "and what is the name of the virus that causes it, the sars-cov-2?"
+            ),
+            "reference_contexts": [
+                "Title: coronavirus disease (covid-19)\n"
+                "Section[general]: covid-19 is an infectious disease caused by the "
+                "sars-cov-2 virus."
+            ],
+            "reference": (
+                "COVID-19 is an infectious disease caused by the sars-cov-2 virus. "
+                "Most people experience mild to moderate respiratory illness."
+            ),
+            "query_style": "MISSPELLED",
+            "query_length": "LONG",
+            "synthesizer_name": "single_hop_specific_query_synthesizer",
+        }
+
+        case = self.generator._build_case_payload(
+            row=row,
+            case_no=5,
+            split="dev",
+            dataset_version="v1",
+            fallback_title="fallback-title",
+        )
+
+        self.assertEqual(
+            case["reference_answer"],
+            "COVID-19 is caused by the SARS-CoV-2 virus.",
+        )
+
     def test_resolve_provider_accepts_openrouter(self):
         provider = self.generator._resolve_provider("openrouter")
         self.assertEqual(provider, "openrouter")

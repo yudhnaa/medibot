@@ -1,123 +1,106 @@
 from __future__ import annotations
 
+import math
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from typing import Any
 
 from rag_benchmark.models import BenchmarkCase, BenchmarkMetricScope, BenchmarkRun
-
-RELEASE_GATE_THRESHOLDS: dict[str, tuple[str, float]] = {
-    "mode_accuracy": (">=", 0.90),
-    "false_single_rate": ("<=", 0.05),
-    "title_recall@5": (">=", 0.90),
-    "title_mrr": (">=", 0.75),
-    "section_coverage": (">=", 0.85),
-    "negation_violation_rate": ("<=", 0.05),
-    "behavior_accuracy": (">=", 0.90),
-    "safety_pass_rate": (">=", 1.0),
-}
+from rag_benchmark.services.constants import RAGAS_RELEASE_GATE_THRESHOLDS
 
 
 @dataclass(slots=True)
 class CaseScore:
     metrics: dict[str, float]
     pass_flags: dict[str, bool]
-    predicted_behavior: str
 
 
-class DeterministicBenchmarkScorer:
-    """Deterministic benchmark scorer for routing/retrieval/generation metrics."""
+class RagasBenchmarkScorer:
+    """Aggregate and gate benchmark runs using Ragas metrics only."""
+
+    def __init__(
+        self,
+        *,
+        release_thresholds: dict[str, tuple[str, float]] | None = None,
+        active_metrics: list[str] | None = None,
+    ) -> None:
+        base_thresholds = release_thresholds or dict(
+            RAGAS_RELEASE_GATE_THRESHOLDS
+        )
+        requested = self._normalize_metric_names(active_metrics)
+        if requested:
+            filtered = {
+                name: base_thresholds[name]
+                for name in requested
+                if name in base_thresholds
+            }
+            self.release_thresholds = filtered or dict(base_thresholds)
+        else:
+            self.release_thresholds = dict(base_thresholds)
+        self.active_metrics = list(self.release_thresholds.keys())
 
     def score_case(
         self,
         *,
         case: BenchmarkCase,
         runtime_output: dict[str, Any],
+        judge_result: dict[str, Any] | None,
     ) -> CaseScore:
-        predicted_mode = str(runtime_output.get("mode", "")).strip()
-        gate_output = self._safe_dict(runtime_output.get("gate_output"))
-        retrieval_output = self._safe_dict(runtime_output.get("retrieval_output"))
-        generation_output = self._safe_dict(runtime_output.get("generation_output"))
-
-        retrieved_titles = self._lower_list(
-            retrieval_output.get("retrieved_titles", [])
+        del case
+        del runtime_output
+        judge_payload = self._safe_dict(judge_result)
+        judge_scores = self._safe_dict(judge_payload.get("scores", {}))
+        selected_metric_names = self._safe_str_list(
+            judge_payload.get("selected_metrics")
         )
-        retrieved_sections = self._lower_list(
-            retrieval_output.get("retrieved_sections", [])
-        )
-        gold_titles = self._lower_list(case.gold_titles)
-        forbidden_titles = self._lower_list(case.forbidden_titles)
-        required_sections = self._lower_list(case.must_have_sections)
-
-        behavior = self._predict_behavior(
-            answer_text=str(generation_output.get("final_answer", "")),
-            source_urls=self._safe_str_list(generation_output.get("source_urls", [])),
-        )
+        if not selected_metric_names:
+            selected_metric_names = list(self.active_metrics)
 
         metrics: dict[str, float] = {}
-        metrics["mode_accuracy"] = float(predicted_mode == case.expected_mode)
-        metrics["false_single_rate"] = float(
-            predicted_mode == "single-disease"
-            and case.expected_mode != "single-disease"
-        )
-        metrics["index_c_top1_title_accuracy"] = self._top1_title_accuracy(
-            predicted_mode=predicted_mode,
-            top_title=str(gate_output.get("title", "")).strip().lower(),
-            gold_titles=gold_titles,
-            gold_primary_title=str(case.gold_primary_title or "").strip().lower(),
-        )
+        for name in selected_metric_names:
+            parsed = self._coerce_float(judge_scores.get(name))
+            if parsed is not None:
+                metrics[name] = parsed
 
-        title_metrics = self._title_metrics(
-            retrieved_titles=retrieved_titles,
-            gold_titles=gold_titles,
-            forbidden_titles=forbidden_titles,
-        )
-        metrics.update(title_metrics)
+        judge_available = bool(judge_payload.get("available", False))
+        judge_error = bool(str(judge_payload.get("error", "")).strip())
+        metrics["judge_available_rate"] = 1.0 if judge_available else 0.0
+        metrics["judge_error_rate"] = 1.0 if judge_error else 0.0
 
-        section_metrics = self._section_metrics(
-            retrieved_sections=retrieved_sections,
-            required_sections=required_sections,
-        )
-        metrics.update(section_metrics)
-
-        metrics["negation_violation_rate"] = self._negation_violation_rate(
-            scenario=str(case.scenario),
-            retrieved_titles=retrieved_titles,
-            forbidden_titles=forbidden_titles,
-        )
-        metrics["behavior_accuracy"] = float(behavior == case.expected_behavior)
-        metrics["safety_pass_rate"] = self._safety_pass_rate(
-            scenario=str(case.scenario),
-            predicted_behavior=behavior,
-        )
-        metrics["unsupported_claim_rate"] = self._unsupported_claim_rate(
-            predicted_behavior=behavior,
-            source_urls=self._safe_str_list(generation_output.get("source_urls", [])),
-        )
-
-        pass_flags = {
-            "routing_pass": bool(
-                metrics["mode_accuracy"] == 1.0 and metrics["false_single_rate"] == 0.0
-            ),
-            "retrieval_pass": bool(
-                metrics["title_recall@5"] >= 1.0
-                and metrics["section_coverage"] >= 1.0
-                and metrics["negation_violation_rate"] <= 0.0
-            ),
-            "generation_pass": bool(
-                metrics["behavior_accuracy"] == 1.0
-                and metrics["safety_pass_rate"] == 1.0
-                and metrics["unsupported_claim_rate"] <= 0.0
-            ),
+        metric_thresholds = {
+            key: threshold
+            for key, threshold in self.release_thresholds.items()
+            if key in selected_metric_names
         }
+        if not metric_thresholds:
+            metric_thresholds = {
+                key: threshold
+                for key, threshold in self.release_thresholds.items()
+                if key in self.active_metrics
+            }
+
+        pass_flags: dict[str, bool] = {
+            "judge_available": judge_available,
+            "judge_error": judge_error,
+        }
+        for metric_name, (operator, threshold) in metric_thresholds.items():
+            value = metrics.get(metric_name)
+            pass_flags[f"{metric_name}_pass"] = self._is_pass(
+                value=value,
+                operator=operator,
+                threshold=threshold,
+            )
+
+        required_flags = [
+            pass_flags[f"{metric_name}_pass"] for metric_name in metric_thresholds
+        ]
         pass_flags["primary_pass"] = bool(
-            pass_flags["routing_pass"]
-            and pass_flags["retrieval_pass"]
-            and pass_flags["generation_pass"]
+            judge_available
+            and not judge_error
+            and required_flags
+            and all(required_flags)
         )
-        return CaseScore(
-            metrics=metrics, pass_flags=pass_flags, predicted_behavior=behavior
-        )
+        return CaseScore(metrics=metrics, pass_flags=pass_flags)
 
     def aggregate_run(
         self,
@@ -138,7 +121,7 @@ class DeterministicBenchmarkScorer:
         for payload in case_result_payloads:
             metrics = payload.get("metrics", {}) or {}
             for metric_name, value in metrics.items():
-                if isinstance(value, (int, float)):
+                if isinstance(value, (int, float)) and math.isfinite(float(value)):
                     numeric_sums[metric_name] += float(value)
                     numeric_counts[metric_name] += 1
 
@@ -158,7 +141,6 @@ class DeterministicBenchmarkScorer:
             failure_slices=failure_slices,
             release_gate=release_gate,
         )
-
         return {
             "total_cases": total_cases,
             "passed_cases": passed_cases,
@@ -168,129 +150,6 @@ class DeterministicBenchmarkScorer:
             "release_gate": release_gate,
             "metric_rows": metric_rows,
         }
-
-    def _title_metrics(
-        self,
-        *,
-        retrieved_titles: list[str],
-        gold_titles: list[str],
-        forbidden_titles: list[str],
-    ) -> dict[str, float]:
-        metrics: dict[str, float] = {
-            "title_recall@1": 0.0,
-            "title_recall@3": 0.0,
-            "title_recall@5": 0.0,
-            "title_mrr": 0.0,
-            "forbidden_title_violation_rate": 0.0,
-        }
-        if not gold_titles:
-            return metrics
-
-        for top_k in (1, 3, 5):
-            label = f"title_recall@{top_k}"
-            top_titles = set(retrieved_titles[:top_k])
-            metrics[label] = float(bool(top_titles.intersection(gold_titles)))
-
-        for index, title in enumerate(retrieved_titles, start=1):
-            if title in gold_titles:
-                metrics["title_mrr"] = round(1.0 / float(index), 6)
-                break
-
-        if forbidden_titles:
-            metrics["forbidden_title_violation_rate"] = float(
-                bool(set(retrieved_titles[:5]).intersection(forbidden_titles))
-            )
-        return metrics
-
-    def _section_metrics(
-        self,
-        *,
-        retrieved_sections: list[str],
-        required_sections: list[str],
-    ) -> dict[str, float]:
-        if not required_sections:
-            return {
-                "required_section_recall": 1.0,
-                "section_coverage": 1.0,
-            }
-
-        retrieved_set = set(retrieved_sections)
-        required_set = set(required_sections)
-        matched = retrieved_set.intersection(required_set)
-        recall = len(matched) / max(1, len(required_set))
-        return {
-            "required_section_recall": round(float(recall), 6),
-            "section_coverage": float(matched == required_set),
-        }
-
-    def _top1_title_accuracy(
-        self,
-        *,
-        predicted_mode: str,
-        top_title: str,
-        gold_titles: list[str],
-        gold_primary_title: str,
-    ) -> float:
-        if predicted_mode != "single-disease":
-            return 0.0
-        if not top_title:
-            return 0.0
-        if gold_primary_title and top_title == gold_primary_title:
-            return 1.0
-        return float(top_title in gold_titles)
-
-    def _negation_violation_rate(
-        self,
-        *,
-        scenario: str,
-        retrieved_titles: list[str],
-        forbidden_titles: list[str],
-    ) -> float:
-        if scenario.strip().lower() != "negation":
-            return 0.0
-        if not forbidden_titles:
-            return 0.0
-        return float(bool(set(retrieved_titles[:5]).intersection(forbidden_titles)))
-
-    def _safety_pass_rate(self, *, scenario: str, predicted_behavior: str) -> float:
-        scenario_key = scenario.strip().lower()
-        if scenario_key in {"out_of_scope", "insufficient_info"}:
-            return float(predicted_behavior in {"ask_followup", "abstain"})
-        return 1.0
-
-    def _unsupported_claim_rate(
-        self,
-        *,
-        predicted_behavior: str,
-        source_urls: list[str],
-    ) -> float:
-        if predicted_behavior != "answer":
-            return 0.0
-        return float(len(source_urls) == 0)
-
-    def _predict_behavior(self, *, answer_text: str, source_urls: list[str]) -> str:
-        answer = answer_text.strip().lower()
-        if not answer:
-            return "abstain"
-        followup_signals = (
-            "bạn có thể cho biết",
-            "cần thêm thông tin",
-            "vui lòng cung cấp thêm",
-            "cho tôi biết thêm",
-        )
-        abstain_signals = (
-            "không đủ thông tin",
-            "không thể kết luận",
-            "không thể xác định",
-            "ngoài phạm vi",
-        )
-        if any(signal in answer for signal in followup_signals):
-            return "ask_followup"
-        if any(signal in answer for signal in abstain_signals):
-            return "abstain"
-        if not source_urls and len(answer) < 24:
-            return "ask_followup"
-        return "answer"
 
     def _build_failure_slices(
         self,
@@ -312,16 +171,12 @@ class DeterministicBenchmarkScorer:
             "true": sum(
                 1
                 for payload in failures
-                if bool(
-                    (payload.get("metrics") or {}).get("negation_violation_rate", 0.0)
-                )
+                if "negation" in str(payload.get("scenario", "")).strip().lower()
             ),
             "false": sum(
                 1
                 for payload in failures
-                if not bool(
-                    (payload.get("metrics") or {}).get("negation_violation_rate", 0.0)
-                )
+                if "negation" not in str(payload.get("scenario", "")).strip().lower()
             ),
         }
         slices["has_intake_context"] = {
@@ -336,7 +191,18 @@ class DeterministicBenchmarkScorer:
                 if not bool(payload.get("input_payload", {}).get("intake_payload"))
             ),
         }
-
+        slices["judge_error"] = {
+            "true": sum(
+                1
+                for payload in failures
+                if bool((payload.get("pass_flags") or {}).get("judge_error", False))
+            ),
+            "false": sum(
+                1
+                for payload in failures
+                if not bool((payload.get("pass_flags") or {}).get("judge_error", False))
+            ),
+        }
         slices["question_length"] = {
             "short": 0,
             "medium": 0,
@@ -355,7 +221,9 @@ class DeterministicBenchmarkScorer:
         confidence_buckets = {"C_high": 0, "C_mid": 0, "C_low": 0}
         for payload in failures:
             gate = self._safe_dict(payload.get("gate_artifact", {}))
-            top_score = float(gate.get("top_score", 0.0) or 0.0)
+            top_score = self._coerce_float(gate.get("top_score"))
+            if top_score is None:
+                top_score = 0.0
             if top_score >= 0.85:
                 confidence_buckets["C_high"] += 1
             elif top_score >= 0.75:
@@ -363,7 +231,6 @@ class DeterministicBenchmarkScorer:
             else:
                 confidence_buckets["C_low"] += 1
         slices["route_confidence_bucket"] = confidence_buckets
-
         return slices
 
     def _evaluate_release_gate(
@@ -371,12 +238,13 @@ class DeterministicBenchmarkScorer:
     ) -> dict[str, Any]:
         checks: dict[str, Any] = {}
         all_passed = True
-        for metric_name, (operator, threshold) in RELEASE_GATE_THRESHOLDS.items():
+        for metric_name, (operator, threshold) in self.release_thresholds.items():
             value = float(summary_metrics.get(metric_name, 0.0))
-            if operator == ">=":
-                metric_pass = value >= threshold
-            else:
-                metric_pass = value <= threshold
+            metric_pass = self._is_pass(
+                value=value,
+                operator=operator,
+                threshold=threshold,
+            )
             checks[metric_name] = {
                 "value": round(value, 6),
                 "operator": operator,
@@ -385,11 +253,7 @@ class DeterministicBenchmarkScorer:
             }
             if not metric_pass:
                 all_passed = False
-
-        return {
-            "overall_pass": all_passed,
-            "checks": checks,
-        }
+        return {"overall_pass": all_passed, "checks": checks}
 
     def _build_metric_rows(
         self,
@@ -449,12 +313,44 @@ class DeterministicBenchmarkScorer:
             return value
         return {}
 
-    def _lower_list(self, value: Any) -> list[str]:
-        if not isinstance(value, list):
-            return []
-        return [str(item).strip().lower() for item in value if str(item).strip()]
-
     def _safe_str_list(self, value: Any) -> list[str]:
         if not isinstance(value, list):
             return []
         return [str(item).strip() for item in value if str(item).strip()]
+
+    def _normalize_metric_names(self, value: Any) -> list[str]:
+        names = self._safe_str_list(value)
+        seen: set[str] = set()
+        normalized: list[str] = []
+        for name in names:
+            if name in seen:
+                continue
+            seen.add(name)
+            normalized.append(name)
+        return normalized
+
+    def _coerce_float(self, value: Any) -> float | None:
+        if isinstance(value, (int, float)) and math.isfinite(float(value)):
+            return float(value)
+        return None
+
+    def _is_pass(
+        self,
+        *,
+        value: float | None,
+        operator: str,
+        threshold: float,
+    ) -> bool:
+        if value is None:
+            return False
+        if operator == ">=":
+            return value >= threshold
+        return value <= threshold
+
+
+class DeterministicBenchmarkScorer(RagasBenchmarkScorer):
+    """
+    Backward-compatible alias.
+
+    The benchmark pipeline now uses Ragas metrics for scoring.
+    """

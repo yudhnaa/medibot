@@ -318,3 +318,53 @@ class BenchmarkIntakeTests(SimpleTestCase):
 
         service._apply_benchmark_intake_payload.assert_called_once_with({})
         self.assertEqual(result["generation_output"]["error"], "boom")
+
+
+class BenchmarkLanguagePolicyTests(SimpleTestCase):
+    @patch("chatbot.services.chatbot_service.ChatbotConfig.get_config")
+    def test_get_benchmark_output_language_normalizes_alias(
+        self,
+        mock_get_config: MagicMock,
+    ) -> None:
+        mock_get_config.return_value = "english"
+        service = object.__new__(ChatbotService)
+
+        output_language = ChatbotService._get_benchmark_output_language(
+            service,
+            "What causes COVID-19?",
+        )
+
+        self.assertEqual(output_language, "en")
+
+    def test_build_benchmark_answer_policy_includes_english_rule(self) -> None:
+        service = object.__new__(ChatbotService)
+
+        policy = ChatbotService._build_benchmark_answer_policy(
+            service,
+            question="Is cancer a risk factor for COVID-19?",
+            retrieval_output={"rerank": {"insufficient_evidence": False}},
+            output_language="en",
+        )
+
+        self.assertIn("Output language: English only.", policy)
+        self.assertIn("start with `Yes.` or `No.`", policy)
+
+    def test_enforce_benchmark_output_language_rewrites_vietnamese_to_english(self) -> None:
+        service = object.__new__(ChatbotService)
+        service.llm = MagicMock(
+            invoke=MagicMock(
+                return_value=SimpleNamespace(
+                    content="COVID-19 is caused by the SARS-CoV-2 virus."
+                )
+            )
+        )
+
+        rewritten = ChatbotService._enforce_benchmark_output_language(
+            service,
+            question="What causes COVID-19?",
+            answer="COVID-19 là bệnh do virus SARS-CoV-2 gây ra.",
+            output_language="en",
+        )
+
+        self.assertEqual(rewritten, "COVID-19 is caused by the SARS-CoV-2 virus.")
+        service.llm.invoke.assert_called_once()

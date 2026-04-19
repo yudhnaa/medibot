@@ -1,6 +1,7 @@
 from django import forms
 
 from rag_benchmark.models import BenchmarkDataset, BenchmarkSplit, DatasetSourceFormat
+from rag_benchmark.services.constants import DEFAULT_RAGAS_METRICS
 
 
 class BenchmarkDatasetImportForm(forms.Form):
@@ -26,6 +27,8 @@ class BenchmarkDatasetImportForm(forms.Form):
 
 
 class BenchmarkRunAdminForm(forms.Form):
+    metric_choices = [(metric, metric) for metric in DEFAULT_RAGAS_METRICS]
+
     dataset = forms.ModelChoiceField(
         queryset=BenchmarkDataset.objects.order_by("name", "version"),
         required=True,
@@ -35,5 +38,14 @@ class BenchmarkRunAdminForm(forms.Form):
         choices=BenchmarkSplit.choices,
         initial=BenchmarkSplit.DEV,
     )
-    enable_ragas = forms.BooleanField(required=False, initial=False)
     code_version = forms.CharField(required=False, max_length=128)
+    ragas_metrics = forms.MultipleChoiceField(
+        choices=metric_choices,
+        required=False,
+        help_text="Leave empty to use default metric set.",
+    )
+    disabled_ragas_metrics = forms.MultipleChoiceField(
+        choices=metric_choices,
+        required=False,
+        help_text="Optional metrics to disable from the active set.",
+    )

@@ -19,10 +19,29 @@ class Command(BaseCommand):
             help="Dataset split",
         )
         parser.add_argument(
+            "--ragas-metrics",
+            nargs="+",
+            default=None,
+            help=(
+                "Optional ragas metric names "
+                "(default: faithfulness answer_relevancy context_precision "
+                "context_recall)"
+            ),
+        )
+        parser.add_argument(
+            "--disable-ragas-metrics",
+            nargs="+",
+            default=None,
+            help=(
+                "Optional metric names to disable from active set "
+                "(applied after --ragas-metrics or defaults)."
+            ),
+        )
+        parser.add_argument(
             "--enable-ragas",
             action="store_true",
-            default=False,
-            help="Enable optional ragas judge layer",
+            default=True,
+            help="Deprecated: Ragas judge is always enabled.",
         )
 
     def handle(self, *args, **options):
@@ -40,7 +59,11 @@ class Command(BaseCommand):
         run = runner.run(
             dataset=dataset,
             split=options["split"],
-            judge_configuration={"enable_ragas": bool(options["enable_ragas"])},
+            judge_configuration={
+                "enable_ragas": True,
+                "ragas_metrics": options.get("ragas_metrics"),
+                "disabled_ragas_metrics": options.get("disable_ragas_metrics"),
+            },
         )
         self.stdout.write(
             self.style.SUCCESS(

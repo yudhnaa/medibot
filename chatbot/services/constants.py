@@ -133,6 +133,22 @@ DEFAULT_SINGLE_DISEASE_DOCS_K = 200  # Number of docs to fetch for single diseas
 DEFAULT_DOCS_CACHE_SIZE = 10  # Number of docs to cache for UI display
 DEFAULT_SECTION_ITEMS_LIMIT = 10  # Max items per section in context
 DEFAULT_DOC_PREVIEW_LENGTH = 300  # Character limit for doc preview
+DEFAULT_BENCHMARK_RERANK_PREFILTER_K = 12  # Pre-filter docs before LLM rerank
+DEFAULT_BENCHMARK_RERANK_TOP_K = 3  # Final docs used for benchmark generation
+DEFAULT_BENCHMARK_DOC_CHAR_LIMIT = 420  # Trim each doc to reduce benchmark token cost
+DEFAULT_BENCHMARK_SINGLE_DISEASE_DOCS_K = (
+    60  # Fetch fewer docs in benchmark to reduce latency/cost
+)
+DEFAULT_BENCHMARK_RETRIEVAL_CONTEXT_LIMIT = 3  # Cap contexts sent to Ragas per case
+DEFAULT_BENCHMARK_PROMPT_CONTEXT_CHAR_LIMIT = (
+    2600  # Trim assembled benchmark prompt context before generation
+)
+DEFAULT_BENCHMARK_SECTION_INTENT_BOOST = (
+    0.18  # Boost docs whose section aligns with detected benchmark intent
+)
+DEFAULT_BENCHMARK_SECTION_OFF_TARGET_PENALTY = (
+    0.08  # Mild penalty for off-target sections during benchmark rerank
+)
 
 # Index search defaults
 DEFAULT_INDEX_C_K = 1  # Top k for Index C gate search

@@ -1,27 +1,45 @@
 from __future__ import annotations
 
+import asyncio
+import copy
+import logging
+import math
+import os
+import re
 from typing import Any
 
-from rag_benchmark.models import BenchmarkCase
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+from pydantic import SecretStr
 
-DEFAULT_RAGAS_METRICS = (
-    "faithfulness",
-    "response_relevancy",
-    "context_precision",
-    "context_recall",
-    "answer_correctness",
+from chatbot.models import ChatbotConfig
+from chatbot.services.gemini_manager import get_gemini_manager
+from rag_benchmark.models import BenchmarkCase
+from rag_benchmark.services.constants import (
+    DEFAULT_ANSWER_RELEVANCY_STRICTNESS,
+    DEFAULT_RAGAS_BATCH_SIZE,
+    DEFAULT_RAGAS_CONTEXT_CHAR_LIMIT,
+    DEFAULT_RAGAS_CONTEXT_TOP_K,
+    DEFAULT_RAGAS_MAX_TOKENS,
+    DEFAULT_RAGAS_MAX_WORKERS,
+    DEFAULT_RAGAS_METRICS,
+    DEFAULT_RAGAS_RETRY_MAX_TOKENS,
+    DEFAULT_RAGAS_TIMEOUT_SECONDS,
 )
+from vector_store.services.constants import (
+    DEFAULT_OPENROUTER_BASE_URL,
+    DEFAULT_OPENROUTER_MODEL,
+    OPENROUTER_API_KEY_ENV_NAME,
+    OPENROUTER_BASE_URL_ENV_NAME,
+)
+
+logger = logging.getLogger(__name__)
 
 
 class RagasJudgeEvaluator:
-    """
-    Optional Ragas-based judge layer.
+    """Ragas-based LLM judge used as the primary benchmark scorer."""
 
-    This layer is explicitly supplemental and must not replace deterministic release gates.
-    """
-
-    def __init__(self, *, enabled: bool, metrics: list[str] | None = None) -> None:
-        self.enabled = enabled
+    def __init__(self, *, metrics: list[str] | None = None) -> None:
         self.metric_names = metrics or list(DEFAULT_RAGAS_METRICS)
 
     def evaluate_case(
@@ -30,79 +48,640 @@ class RagasJudgeEvaluator:
         case: BenchmarkCase,
         runtime_output: dict[str, Any],
     ) -> dict[str, Any]:
-        if not self.enabled:
-            return {}
+        batch_results = self.evaluate_batch(
+            cases=[case],
+            runtime_outputs=[runtime_output],
+        )
+        if batch_results:
+            return batch_results[0]
+        return {
+            "enabled": True,
+            "available": False,
+            "error": "ragas_evaluation_failed: empty_batch_result",
+        }
+
+    def evaluate_batch(
+        self,
+        *,
+        cases: list[BenchmarkCase],
+        runtime_outputs: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        if not cases or not runtime_outputs:
+            return []
+        if len(cases) != len(runtime_outputs):
+            raise ValueError("cases and runtime_outputs must have the same length")
 
         try:
             from datasets import Dataset
-            from ragas import evaluate
+            from ragas import aevaluate
             from ragas.metrics import (
-                answer_correctness,
+                answer_relevancy,
                 context_precision,
                 context_recall,
                 faithfulness,
-                response_relevancy,
             )
+            from ragas.run_config import RunConfig
         except Exception as exc:
-            return {
-                "enabled": True,
-                "available": False,
-                "error": f"ragas_unavailable: {exc}",
-            }
+            return [
+                {
+                    "enabled": True,
+                    "available": False,
+                    "error": f"ragas_unavailable: {exc}",
+                }
+                for _ in cases
+            ]
 
-        metric_registry = {
-            "faithfulness": faithfulness,
-            "response_relevancy": response_relevancy,
-            "context_precision": context_precision,
-            "context_recall": context_recall,
-            "answer_correctness": answer_correctness,
-        }
+        answer_relevancy_strictness = self._get_int_config(
+            key="RAGAS_ANSWER_RELEVANCY_STRICTNESS",
+            default=DEFAULT_ANSWER_RELEVANCY_STRICTNESS,
+            minimum=1,
+            maximum=5,
+        )
+        metric_registry = self._build_metric_registry(
+            faithfulness=faithfulness,
+            answer_relevancy=answer_relevancy,
+            context_precision=context_precision,
+            context_recall=context_recall,
+            answer_relevancy_strictness=answer_relevancy_strictness,
+        )
         selected_metrics = [
             metric_registry[name]
             for name in self.metric_names
             if name in metric_registry
         ]
+        selected_metric_names = [metric.name for metric in selected_metrics]
         if not selected_metrics:
-            return {
-                "enabled": True,
-                "available": True,
-                "scores": {},
-                "warning": "No valid ragas metrics configured",
-            }
+            return [
+                {
+                    "enabled": True,
+                    "available": True,
+                    "selected_metrics": [],
+                    "scores": {},
+                    "warning": "No valid ragas metrics configured",
+                }
+                for _ in cases
+            ]
 
-        generation_output = runtime_output.get("generation_output", {}) or {}
-        retrieval_output = runtime_output.get("retrieval_output", {}) or {}
-        contexts = retrieval_output.get("retrieved_context_texts", []) or []
-        answer_text = str(generation_output.get("final_answer", "")).strip()
+        question_texts: list[str] = []
+        answer_texts: list[str] = []
+        reference_texts: list[str] = []
+        contexts_batch: list[list[str]] = []
+        ragas_context_top_k = self._get_int_config(
+            key="RAGAS_CONTEXT_TOP_K",
+            default=DEFAULT_RAGAS_CONTEXT_TOP_K,
+            minimum=1,
+            maximum=32,
+        )
+        ragas_context_char_limit = self._get_int_config(
+            key="RAGAS_CONTEXT_CHAR_LIMIT",
+            default=DEFAULT_RAGAS_CONTEXT_CHAR_LIMIT,
+            minimum=120,
+            maximum=4000,
+        )
+        for case, runtime_output in zip(cases, runtime_outputs):
+            generation_output = runtime_output.get("generation_output", {}) or {}
+            raw_contexts = self._collect_runtime_contexts(runtime_output)
+            contexts = self._prepare_ragas_contexts(
+                raw_contexts=raw_contexts,
+                top_k=ragas_context_top_k,
+                char_limit=ragas_context_char_limit,
+            )
+            question_texts.append(str(case.question or "").strip())
+            answer_texts.append(str(generation_output.get("final_answer", "")).strip())
+            reference_texts.append(str(case.reference_answer or "").strip())
+            contexts_batch.append(contexts)
 
-        dataset = Dataset.from_dict(
-            {
-                "question": [str(case.question).strip()],
-                "answer": [answer_text],
-                "contexts": [contexts],
-                "ground_truth": [str(case.reference_answer or "").strip()],
-            }
+        timeout_seconds = self._get_int_config(
+            key="RAGAS_TIMEOUT_SECONDS",
+            default=DEFAULT_RAGAS_TIMEOUT_SECONDS,
+            minimum=30,
+            maximum=900,
+        )
+        max_tokens = self._get_int_config(
+            key="RAGAS_LLM_MAX_TOKENS",
+            default=DEFAULT_RAGAS_MAX_TOKENS,
+            minimum=512,
+            maximum=32768,
+        )
+        retry_max_tokens = self._get_int_config(
+            key="RAGAS_LLM_RETRY_MAX_TOKENS",
+            default=max(DEFAULT_RAGAS_RETRY_MAX_TOKENS, max_tokens),
+            minimum=max_tokens,
+            maximum=65536,
+        )
+        max_workers = self._get_int_config(
+            key="RAGAS_MAX_WORKERS",
+            default=DEFAULT_RAGAS_MAX_WORKERS,
+            minimum=1,
+            maximum=16,
+        )
+        batch_size = self._get_int_config(
+            key="RAGAS_BATCH_SIZE",
+            default=min(DEFAULT_RAGAS_BATCH_SIZE, len(cases)),
+            minimum=1,
+            maximum=128,
         )
 
         try:
-            result = evaluate(dataset=dataset, metrics=selected_metrics)
-            score_payload = result.to_pandas().to_dict(orient="records")
+            llm, embeddings = self._create_ragas_models(max_tokens=max_tokens)
         except Exception as exc:
-            return {
-                "enabled": True,
-                "available": True,
-                "error": f"ragas_evaluation_failed: {exc}",
-            }
+            return [
+                {
+                    "enabled": True,
+                    "available": False,
+                    "selected_metrics": selected_metric_names,
+                    "error": f"ragas_runtime_unavailable: {exc}",
+                }
+                for _ in cases
+            ]
 
-        scores: dict[str, float] = {}
-        if score_payload:
-            first = score_payload[0]
-            for key, value in first.items():
-                if isinstance(value, (int, float)):
-                    scores[str(key)] = float(value)
-
-        return {
-            "enabled": True,
-            "available": True,
-            "scores": scores,
+        dataset_payload = {
+            "user_input": question_texts,
+            "response": answer_texts,
+            "retrieved_contexts": contexts_batch,
+            "reference": reference_texts,
         }
+        dataset = Dataset.from_dict(dataset_payload)
+
+        retry_used = False
+        try:
+            result = self._run_ragas_evaluate(
+                aevaluate=aevaluate,
+                run_config_cls=RunConfig,
+                dataset=dataset,
+                metrics=selected_metrics,
+                llm=llm,
+                embeddings=embeddings,
+                timeout_seconds=timeout_seconds,
+                max_workers=max_workers,
+                batch_size=batch_size,
+            )
+        except Exception as exc:
+            if (
+                self._is_incomplete_generation_error(exc)
+                and retry_max_tokens > max_tokens
+            ):
+                retry_used = True
+                try:
+                    retry_llm, retry_embeddings = self._create_ragas_models(
+                        max_tokens=retry_max_tokens
+                    )
+                    result = self._run_ragas_evaluate(
+                        aevaluate=aevaluate,
+                        run_config_cls=RunConfig,
+                        dataset=dataset,
+                        metrics=selected_metrics,
+                        llm=retry_llm,
+                        embeddings=retry_embeddings,
+                        timeout_seconds=timeout_seconds,
+                        max_workers=max_workers,
+                        batch_size=batch_size,
+                    )
+                    max_tokens = retry_max_tokens
+                except Exception as retry_exc:
+                    return [
+                        {
+                            "enabled": True,
+                            "available": True,
+                            "selected_metrics": selected_metric_names,
+                            "llm_max_tokens": retry_max_tokens,
+                            "answer_relevancy_strictness": answer_relevancy_strictness,
+                            "retry_used": True,
+                            "error": f"ragas_evaluation_failed: {retry_exc}",
+                        }
+                        for _ in cases
+                    ]
+            else:
+                return [
+                    {
+                        "enabled": True,
+                        "available": True,
+                        "selected_metrics": selected_metric_names,
+                        "llm_max_tokens": max_tokens,
+                        "answer_relevancy_strictness": answer_relevancy_strictness,
+                        "retry_used": retry_used,
+                        "error": f"ragas_evaluation_failed: {exc}",
+                    }
+                    for _ in cases
+                ]
+
+        score_payload = result.to_pandas().to_dict(orient="records")
+
+        if not score_payload:
+            return [
+                {
+                    "enabled": True,
+                    "available": True,
+                    "selected_metrics": selected_metric_names,
+                    "llm_max_tokens": max_tokens,
+                    "answer_relevancy_strictness": answer_relevancy_strictness,
+                    "retry_used": retry_used,
+                    "error": "ragas_evaluation_failed: empty_result",
+                }
+                for _ in cases
+            ]
+
+        if len(score_payload) < len(cases):
+            score_payload.extend([{} for _ in range(len(cases) - len(score_payload))])
+
+        parsed_scores = [
+            self._extract_numeric_scores(row)
+            for row in score_payload[: len(cases)]
+        ]
+        fallback_retry_used = False
+        fallback_single_case_count = 0
+        for idx, scores in enumerate(parsed_scores):
+            missing_metric_names = [
+                metric_name
+                for metric_name in selected_metric_names
+                if metric_name not in scores
+            ]
+            if not missing_metric_names:
+                continue
+
+            fallback_single_case_count += 1
+            try:
+                fallback_scores, used_retry = self._evaluate_single_case_fallback(
+                    dataset_cls=Dataset,
+                    aevaluate=aevaluate,
+                    run_config_cls=RunConfig,
+                    metrics=selected_metrics,
+                    llm=llm,
+                    embeddings=embeddings,
+                    timeout_seconds=timeout_seconds,
+                    max_workers=max_workers,
+                    max_tokens=max_tokens,
+                    retry_max_tokens=retry_max_tokens,
+                    user_input=question_texts[idx],
+                    response=answer_texts[idx],
+                    retrieved_contexts=contexts_batch[idx],
+                    reference=reference_texts[idx],
+                )
+                if used_retry:
+                    fallback_retry_used = True
+                for metric_name in missing_metric_names:
+                    metric_value = fallback_scores.get(metric_name)
+                    if metric_value is not None:
+                        scores[metric_name] = metric_value
+            except Exception as exc:
+                logger.warning(
+                    "Ragas single-case fallback failed for case index %s "
+                    "(missing=%s): %s",
+                    idx,
+                    ",".join(missing_metric_names),
+                    exc,
+                )
+
+        if fallback_single_case_count:
+            logger.warning(
+                "Ragas single-case fallback applied for %s/%s cases with missing metrics.",
+                fallback_single_case_count,
+                len(cases),
+            )
+
+        results: list[dict[str, Any]] = []
+        for scores in parsed_scores:
+            results.append(
+                {
+                    "enabled": True,
+                    "available": True,
+                    "selected_metrics": selected_metric_names,
+                    "llm_max_tokens": max_tokens,
+                    "answer_relevancy_strictness": answer_relevancy_strictness,
+                    "retry_used": retry_used or fallback_retry_used,
+                    "scores": scores,
+                }
+            )
+        return results
+
+    def _run_ragas_evaluate(
+        self,
+        *,
+        aevaluate: Any,
+        run_config_cls: Any,
+        dataset: Any,
+        metrics: list[Any],
+        llm: Any,
+        embeddings: Any,
+        timeout_seconds: int,
+        max_workers: int,
+        batch_size: int,
+    ) -> Any:
+        return self._run_in_isolated_loop(
+            aevaluate(
+                dataset=dataset,
+                metrics=metrics,
+                llm=llm,
+                embeddings=embeddings,
+                run_config=run_config_cls(
+                    timeout=timeout_seconds,
+                    max_retries=3,
+                    max_wait=30,
+                    max_workers=max_workers,
+                ),
+                raise_exceptions=False,
+                show_progress=False,
+                batch_size=batch_size,
+            )
+        )
+
+    def _evaluate_single_case_fallback(
+        self,
+        *,
+        dataset_cls: Any,
+        aevaluate: Any,
+        run_config_cls: Any,
+        metrics: list[Any],
+        llm: Any,
+        embeddings: Any,
+        timeout_seconds: int,
+        max_workers: int,
+        max_tokens: int,
+        retry_max_tokens: int,
+        user_input: str,
+        response: str,
+        retrieved_contexts: list[str],
+        reference: str,
+    ) -> tuple[dict[str, float], bool]:
+        dataset = dataset_cls.from_dict(
+            {
+                "user_input": [user_input],
+                "response": [response],
+                "retrieved_contexts": [retrieved_contexts],
+                "reference": [reference],
+            }
+        )
+        try:
+            result = self._run_ragas_evaluate(
+                aevaluate=aevaluate,
+                run_config_cls=run_config_cls,
+                dataset=dataset,
+                metrics=metrics,
+                llm=llm,
+                embeddings=embeddings,
+                timeout_seconds=timeout_seconds,
+                max_workers=max_workers,
+                batch_size=1,
+            )
+            return self._extract_numeric_scores_from_result(result), False
+        except Exception as exc:
+            if (
+                self._is_incomplete_generation_error(exc)
+                and retry_max_tokens > max_tokens
+            ):
+                retry_llm, retry_embeddings = self._create_ragas_models(
+                    max_tokens=retry_max_tokens
+                )
+                retry_result = self._run_ragas_evaluate(
+                    aevaluate=aevaluate,
+                    run_config_cls=run_config_cls,
+                    dataset=dataset,
+                    metrics=metrics,
+                    llm=retry_llm,
+                    embeddings=retry_embeddings,
+                    timeout_seconds=timeout_seconds,
+                    max_workers=max_workers,
+                    batch_size=1,
+                )
+                return self._extract_numeric_scores_from_result(retry_result), True
+            raise
+
+    def _extract_numeric_scores_from_result(self, result: Any) -> dict[str, float]:
+        rows = result.to_pandas().to_dict(orient="records")
+        if not rows:
+            return {}
+        return self._extract_numeric_scores(rows[0])
+
+    def _extract_numeric_scores(self, row: dict[str, Any]) -> dict[str, float]:
+        scores: dict[str, float] = {}
+        for key, value in (row or {}).items():
+            if isinstance(value, (int, float)) and math.isfinite(float(value)):
+                scores[str(key)] = round(float(value), 6)
+        return scores
+
+    def _run_in_isolated_loop(self, coro: Any) -> Any:
+        loop = asyncio.new_event_loop()
+
+        def _loop_exception_handler(
+            loop_obj: asyncio.AbstractEventLoop, context: dict[str, Any]
+        ) -> None:
+            exc = context.get("exception")
+            message = str(context.get("message", "")).strip().lower()
+            if self._is_ignorable_asyncio_shutdown_error(exc=exc, message=message):
+                logger.debug(
+                    "Suppressed asyncio shutdown noise during ragas evaluation: %s",
+                    exc or message,
+                )
+                return
+            loop_obj.default_exception_handler(context)
+
+        loop.set_exception_handler(_loop_exception_handler)
+        try:
+            asyncio.set_event_loop(loop)
+            return loop.run_until_complete(coro)
+        finally:
+            try:
+                pending = list(asyncio.all_tasks(loop))
+                for task in pending:
+                    task.cancel()
+                if pending:
+                    loop.run_until_complete(
+                        asyncio.gather(*pending, return_exceptions=True)
+                    )
+                loop.run_until_complete(loop.shutdown_asyncgens())
+                if hasattr(loop, "shutdown_default_executor"):
+                    loop.run_until_complete(loop.shutdown_default_executor())
+            except Exception as cleanup_exc:
+                logger.debug(
+                    "Async loop cleanup warning in ragas evaluator: %s", cleanup_exc
+                )
+            finally:
+                asyncio.set_event_loop(None)
+                loop.close()
+
+    def _build_metric_registry(
+        self,
+        *,
+        faithfulness: Any,
+        answer_relevancy: Any,
+        context_precision: Any,
+        context_recall: Any,
+        answer_relevancy_strictness: int,
+    ) -> dict[str, Any]:
+        metrics = {
+            "faithfulness": copy.deepcopy(faithfulness),
+            "answer_relevancy": copy.deepcopy(answer_relevancy),
+            "context_precision": copy.deepcopy(context_precision),
+            "context_recall": copy.deepcopy(context_recall),
+        }
+        answer_relevancy_metric = metrics.get("answer_relevancy")
+        if answer_relevancy_metric is not None:
+            try:
+                answer_relevancy_metric.strictness = answer_relevancy_strictness
+            except Exception:
+                pass
+        return metrics
+
+    def _create_ragas_models(self, *, max_tokens: int):
+        manager = get_gemini_manager()
+        provider = str(ChatbotConfig.get_config("LLM_PROVIDER", "gemini")).strip()
+        if provider.lower() == "openrouter":
+            return (
+                self._create_openrouter_llm(max_tokens=max_tokens),
+                self._create_openrouter_embeddings(),
+            )
+        llm_model = str(ChatbotConfig.get_config("LLM_MODEL", "gemini-2.5-flash"))
+        llm = ChatGoogleGenerativeAI(
+            model=llm_model,
+            google_api_key=manager.get_current_key(),
+            temperature=0.0,
+            max_output_tokens=max_tokens,
+            streaming=False,
+        )
+        return llm, manager.create_embeddings(normalized=True)
+
+    def _create_openrouter_llm(self, *, max_tokens: int) -> ChatOpenAI:
+        api_key = self._resolve_openrouter_api_key()
+        base_url = self._resolve_openrouter_base_url()
+        llm_model = str(ChatbotConfig.get_config("LLM_MODEL", "openai/gpt-4.1-mini"))
+        return ChatOpenAI(
+            model=llm_model,
+            api_key=SecretStr(api_key),
+            base_url=base_url,
+            temperature=0.0,
+            model_kwargs={"max_tokens": max_tokens},
+            streaming=False,
+        )
+
+    def _create_openrouter_embeddings(self) -> OpenAIEmbeddings:
+        api_key = self._resolve_openrouter_api_key()
+        base_url = self._resolve_openrouter_base_url()
+        model = str(
+            ChatbotConfig.get_config("EMBEDDING_MODEL", DEFAULT_OPENROUTER_MODEL)
+        )
+        return OpenAIEmbeddings(
+            model=model,
+            api_key=SecretStr(api_key),
+            base_url=base_url,
+        )
+
+    def _resolve_openrouter_api_key(self) -> str:
+        api_key_raw = ChatbotConfig.get_config(OPENROUTER_API_KEY_ENV_NAME, None)
+        api_key = (
+            api_key_raw.strip()
+            if isinstance(api_key_raw, str) and api_key_raw.strip()
+            else os.getenv(OPENROUTER_API_KEY_ENV_NAME)
+        )
+        if not api_key:
+            raise ValueError(
+                f"{OPENROUTER_API_KEY_ENV_NAME} is required for LLM_PROVIDER=openrouter"
+            )
+        return api_key
+
+    def _resolve_openrouter_base_url(self) -> str:
+        db_base_url = ChatbotConfig.get_config("OPENROUTER_BASE_URL", None)
+        return (
+            db_base_url.strip()
+            if isinstance(db_base_url, str) and db_base_url.strip()
+            else os.getenv(OPENROUTER_BASE_URL_ENV_NAME) or DEFAULT_OPENROUTER_BASE_URL
+        )
+
+    def _is_incomplete_generation_error(self, exc: Exception) -> bool:
+        terms = (
+            "llmdidnotfinishexception",
+            "generation was not completed",
+            "increase the max_tokens",
+            "max tokens",
+        )
+        cursor: BaseException | None = exc
+        seen: set[int] = set()
+        while cursor is not None and id(cursor) not in seen:
+            seen.add(id(cursor))
+            message = str(cursor).lower()
+            if any(term in message for term in terms):
+                return True
+            cursor = cursor.__cause__ or cursor.__context__
+        return False
+
+    def _is_ignorable_asyncio_shutdown_error(
+        self, *, exc: BaseException | None, message: str
+    ) -> bool:
+        if isinstance(exc, RuntimeError) and "event loop is closed" in str(exc).lower():
+            return True
+        if "task exception was never retrieved" in message:
+            return True
+        if "event loop is closed" in message:
+            return True
+        return False
+
+    def _get_int_config(
+        self,
+        *,
+        key: str,
+        default: int,
+        minimum: int,
+        maximum: int,
+    ) -> int:
+        raw = ChatbotConfig.get_config(key, default)
+        try:
+            value = int(str(raw).strip()) if raw is not None else default
+        except (TypeError, ValueError):
+            value = default
+        if value < minimum:
+            return minimum
+        if value > maximum:
+            return maximum
+        return value
+
+    def _prepare_ragas_contexts(
+        self,
+        *,
+        raw_contexts: list[str],
+        top_k: int,
+        char_limit: int,
+    ) -> list[str]:
+        contexts: list[str] = []
+        seen: set[str] = set()
+        for raw in raw_contexts:
+            normalized = re.sub(r"\s+", " ", str(raw or "")).strip()
+            if not normalized:
+                continue
+            trimmed = normalized[:char_limit]
+            if trimmed in seen:
+                continue
+            seen.add(trimmed)
+            contexts.append(trimmed)
+            if len(contexts) >= top_k:
+                break
+        return contexts
+
+    def _collect_runtime_contexts(self, runtime_output: dict[str, Any]) -> list[str]:
+        """
+        Build judge contexts from the same sources generation used.
+
+        Priority order:
+        1) generation context snapshot
+        2) retrieval summaries
+        3) retrieved evidence snippets
+        """
+        retrieval_output = runtime_output.get("retrieval_output", {}) or {}
+        generation_output = runtime_output.get("generation_output", {}) or {}
+        raw_contexts: list[str] = []
+
+        context_snapshot = str(generation_output.get("context_snapshot", "")).strip()
+        if context_snapshot:
+            raw_contexts.append(context_snapshot)
+
+        summaries = retrieval_output.get("summaries", {})
+        if isinstance(summaries, dict):
+            for summary in summaries.values():
+                text = str(summary).strip()
+                if text:
+                    raw_contexts.append(text)
+
+        raw_contexts.extend(
+            str(item).strip()
+            for item in (retrieval_output.get("retrieved_context_texts", []) or [])
+            if str(item).strip()
+        )
+        return raw_contexts

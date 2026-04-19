@@ -172,13 +172,20 @@ class BenchmarkDatasetAdmin(admin.ModelAdmin):
                 runner = OfflineBenchmarkRunner()
                 dataset = form.cleaned_data["dataset"]
                 split = form.cleaned_data["split"]
-                enable_ragas = bool(form.cleaned_data["enable_ragas"])
                 code_version = str(form.cleaned_data.get("code_version", "")).strip()
+                ragas_metrics = form.cleaned_data.get("ragas_metrics") or []
+                disabled_ragas_metrics = (
+                    form.cleaned_data.get("disabled_ragas_metrics") or []
+                )
                 try:
                     run = runner.run(
                         dataset=dataset,
                         split=split,
-                        judge_configuration={"enable_ragas": enable_ragas},
+                        judge_configuration={
+                            "enable_ragas": True,
+                            "ragas_metrics": ragas_metrics,
+                            "disabled_ragas_metrics": disabled_ragas_metrics,
+                        },
                         code_version=code_version,
                     )
                 except Exception as exc:
@@ -327,16 +334,19 @@ class BenchmarkRunAdmin(admin.ModelAdmin):
             failure_slices.get("question_length", {})
         )
 
-        primary_metric_keys = [
-            "mode_accuracy",
-            "false_single_rate",
-            "title_recall@5",
-            "title_mrr",
-            "section_coverage",
-            "negation_violation_rate",
-            "behavior_accuracy",
-            "safety_pass_rate",
-        ]
+        primary_metric_keys = list(release_checks.keys())
+        if not primary_metric_keys:
+            primary_metric_keys = [
+                key
+                for key in (
+                    "faithfulness",
+                    "answer_relevancy",
+                    "context_precision",
+                    "context_recall",
+                    "primary_pass_rate",
+                )
+                if key in summary_metrics
+            ]
 
         metric_cards = [
             self._build_metric_card(

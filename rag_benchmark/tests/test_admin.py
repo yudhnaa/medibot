@@ -88,7 +88,6 @@ class BenchmarkAdminImportTests(TestCase):
             data={
                 "dataset": dataset.pk,
                 "split": "dev",
-                "enable_ragas": "on",
                 "code_version": "abc123",
             },
         )
@@ -186,9 +185,13 @@ class BenchmarkAdminDashboardTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Primary Metrics")
         self.assertContains(response, "Release Gate Checks")
-        self.assertContains(response, "Recent Failed Cases")
-        self.assertContains(response, self.case.case_id)
-        self.assertContains(response, "Retrieval miss")
+        self.assertNotContains(response, "Pass / Fail")
+        self.assertNotContains(response, "Recent Failed Cases")
+        self.assertNotContains(response, "Scenario Failures")
+        self.assertNotContains(response, "Mode Failures")
+        self.assertNotContains(response, "Confidence Buckets")
+        self.assertNotContains(response, "Question Length")
+        self.assertNotContains(response, "Review Taxonomy")
 
     def test_change_form_includes_dashboard_link(self):
         change_url = reverse(

@@ -15,42 +15,11 @@ from rag_benchmark.models import (
     ExpectedBehavior,
     ExpectedMode,
 )
-
-REQUIRED_CASE_FIELDS = (
-    "case_id",
-    "dataset_version",
-    "split",
-    "question",
-    "intake_payload",
-    "scenario",
-    "expected_mode",
-    "gold_titles",
-    "forbidden_titles",
-    "must_have_sections",
-    "expected_behavior",
-    "reference_answer",
-    "notes",
+from rag_benchmark.services.constants import (
+    LIST_FIELDS,
+    REQUIRED_CASE_FIELDS,
+    REQUIRED_SCENARIOS,
 )
-
-LIST_FIELDS = (
-    "gold_titles",
-    "forbidden_titles",
-    "must_have_sections",
-    "must_not_sections",
-    "reference_context_ids",
-)
-
-REQUIRED_SCENARIOS = {
-    "single_clear",
-    "multi_ambiguous",
-    "negation",
-    "demographic",
-    "insufficient_info",
-    "out_of_scope",
-    "followup_context",
-    "paraphrase",
-    "noisy_query",
-}
 
 
 @dataclass(slots=True)
