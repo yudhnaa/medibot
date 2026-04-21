@@ -1,5 +1,5 @@
 services:
-  web:
+  medibot-web:
     build:
       context: ./
       dockerfile: Dockerfile
@@ -26,25 +26,25 @@ services:
       SECRET_KEY: ${SECRET_KEY}
       DEBUG: "False"
       DJANGO_SETTINGS_MODULE: django_template.settings.prod
-      DB_HOST: db
+      DB_HOST: medibot-db
       DB_PORT: 5432
-      BROKER_URL: redis://redis:6379/0
-      CELERY_RESULT_BACKEND: redis://redis:6379/1
-      CELERY_CACHE_BACKEND: redis://redis:6379/2
-      REDIS_HOST: redis
+      BROKER_URL: redis://medibot-redis:6379/0
+      CELERY_RESULT_BACKEND: redis://medibot-redis:6379/1
+      CELERY_CACHE_BACKEND: redis://medibot-redis:6379/2
+      REDIS_HOST: medibot-redis
       ALLOWED_HOSTS: ${ALLOWED_HOSTS:-localhost,127.0.0.1}
       RUN_DB_MIGRATIONS: "true"
       RUN_COLLECTSTATIC: "true"
     depends_on:
-      db:
+      medibot-db:
         condition: service_healthy
-      redis:
+      medibot-redis:
         condition: service_healthy
     restart: unless-stopped
     networks:
       - medibot_app_internal
       - homelab
-  db:
+  medibot-db:
     image: pgvector/pgvector:pg16
     volumes:
       - django_template_db:/var/lib/postgresql/data
@@ -65,7 +65,7 @@ services:
     restart: unless-stopped
     networks:
       - medibot_app_internal
-  redis:
+  medibot-redis:
     image: redis:7.2.3-alpine
     command: ["redis-server", "--appendonly", "yes"]
     volumes:
@@ -79,7 +79,7 @@ services:
     restart: unless-stopped
     networks:
       - medibot_app_internal
-  worker:
+  medibot-worker:
     build:
       context: ./
       dockerfile: Dockerfile
@@ -95,21 +95,21 @@ services:
     environment:
       DEBUG: "False"
       DJANGO_SETTINGS_MODULE: django_template.settings.prod
-      DB_HOST: db
+      DB_HOST: medibot-db
       DB_PORT: 5432
-      BROKER_URL: redis://redis:6379/0
-      CELERY_RESULT_BACKEND: redis://redis:6379/1
-      CELERY_CACHE_BACKEND: redis://redis:6379/2
-      REDIS_HOST: redis
+      BROKER_URL: redis://medibot-redis:6379/0
+      CELERY_RESULT_BACKEND: redis://medibot-redis:6379/1
+      CELERY_CACHE_BACKEND: redis://medibot-redis:6379/2
+      REDIS_HOST: medibot-redis
     depends_on:
-      db:
+      medibot-db:
         condition: service_healthy
-      redis:
+      medibot-redis:
         condition: service_healthy
     restart: unless-stopped
     networks:
       - medibot_app_internal
-  beat:
+  medibot-beat:
     build:
       context: ./
       dockerfile: Dockerfile
@@ -131,21 +131,21 @@ services:
     environment:
       DEBUG: "False"
       DJANGO_SETTINGS_MODULE: django_template.settings.prod
-      DB_HOST: db
+      DB_HOST: medibot-db
       DB_PORT: 5432
-      BROKER_URL: redis://redis:6379/0
-      CELERY_RESULT_BACKEND: redis://redis:6379/1
-      CELERY_CACHE_BACKEND: redis://redis:6379/2
-      REDIS_HOST: redis
+      BROKER_URL: redis://medibot-redis:6379/0
+      CELERY_RESULT_BACKEND: redis://medibot-redis:6379/1
+      CELERY_CACHE_BACKEND: redis://medibot-redis:6379/2
+      REDIS_HOST: medibot-redis
     depends_on:
-      db:
+      medibot-db:
         condition: service_healthy
-      redis:
+      medibot-redis:
         condition: service_healthy
     restart: unless-stopped
     networks:
       - medibot_app_internal
-  flower:
+  medibot-flower:
     build:
       context: ./
       dockerfile: Dockerfile
@@ -161,13 +161,13 @@ services:
     environment:
       DEBUG: "False"
       DJANGO_SETTINGS_MODULE: django_template.settings.prod
-      BROKER_URL: redis://redis:6379/0
-      CELERY_RESULT_BACKEND: redis://redis:6379/1
+      BROKER_URL: redis://medibot-redis:6379/0
+      CELERY_RESULT_BACKEND: redis://medibot-redis:6379/1
       ENABLE_STARTUP_WARMUP: "False"
     depends_on:
-      worker:
+      medibot-worker:
         condition: service_started
-      redis:
+      medibot-redis:
         condition: service_healthy
     restart: unless-stopped
     networks:
