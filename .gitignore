@@ -76,3 +76,6 @@ celerybeat-schedule.db
 vector_store/services/embedding_docs_pipeline/covid_qa_extraction_dataset.json
 .gitnexus
 .claude
+
+# backup files
+backups/

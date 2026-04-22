@@ -21,6 +21,10 @@ load_dotenv()
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
+def _env_bool(name: str, default: str) -> bool:
+    return os.getenv(name, default).lower() in ("true", "1", "yes")
+
+
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/2.0/howto/deployment/checklist/
 
@@ -31,7 +35,7 @@ SECRET_KEY = os.getenv("SECRET_KEY")
 
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": (
-        "rest_framework_simplejwt.authentication.JWTAuthentication",
+        "authentication.authentication.CookieJWTAuthentication",
     ),
     "DEFAULT_FILTER_BACKENDS": ("django_filters.rest_framework.DjangoFilterBackend",),
     "DEFAULT_RENDERER_CLASSES": ("django_core.renderers.CustomJSONRenderer",),
@@ -100,6 +104,27 @@ SIMPLE_JWT = {
     ),
     "REFRESH_TOKEN_LIFETIME": timedelta(
         days=int(os.getenv("REFRESH_TOKEN_LIFETIME", "1"))
+    ),
+}
+
+_auth_cookie_domain = os.getenv("AUTH_COOKIE_DOMAIN", "").strip() or None
+_auth_cookie_samesite = os.getenv("AUTH_COOKIE_SAMESITE", "Lax")
+if _auth_cookie_samesite not in {"Lax", "Strict", "None"}:
+    _auth_cookie_samesite = "Lax"
+
+AUTH_SESSION = {
+    "ACCESS_COOKIE_NAME": os.getenv("AUTH_ACCESS_COOKIE_NAME", "medibot_access"),
+    "REFRESH_COOKIE_NAME": os.getenv("AUTH_REFRESH_COOKIE_NAME", "medibot_refresh"),
+    "ACCESS_COOKIE_PATH": os.getenv("AUTH_ACCESS_COOKIE_PATH", "/"),
+    "REFRESH_COOKIE_PATH": os.getenv("AUTH_REFRESH_COOKIE_PATH", "/api/v1/auth/"),
+    "COOKIE_DOMAIN": _auth_cookie_domain,
+    "COOKIE_SECURE": _env_bool("AUTH_COOKIE_SECURE", "False"),
+    "COOKIE_SAMESITE": _auth_cookie_samesite,
+    "ACCESS_COOKIE_MAX_AGE": int(
+        SIMPLE_JWT["ACCESS_TOKEN_LIFETIME"].total_seconds()
+    ),
+    "REFRESH_COOKIE_MAX_AGE": int(
+        SIMPLE_JWT["REFRESH_TOKEN_LIFETIME"].total_seconds()
     ),
 }
 

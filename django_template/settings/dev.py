@@ -8,9 +8,21 @@ DEBUG = os.getenv("DEBUG", "True").lower() in ("true", "1", "yes")
 
 # CORS Settings for Development
 CORS_ALLOWED_ORIGINS = ["http://localhost:3001", "http://127.0.0.1:3001"]
+CSRF_TRUSTED_ORIGINS = ["http://localhost:3001", "http://127.0.0.1:3001"]
 
 # Allow credentials (cookies, authorization headers)
 CORS_ALLOW_CREDENTIALS = True
+
+_auth_cookie_samesite = os.getenv("AUTH_COOKIE_SAMESITE", AUTH_SESSION["COOKIE_SAMESITE"])
+if _auth_cookie_samesite not in {"Lax", "Strict", "None"}:
+    _auth_cookie_samesite = AUTH_SESSION["COOKIE_SAMESITE"]
+
+AUTH_SESSION = {
+    **AUTH_SESSION,
+    "COOKIE_SECURE": os.getenv("AUTH_COOKIE_SECURE", "False").lower()
+    in ("true", "1", "yes"),
+    "COOKIE_SAMESITE": _auth_cookie_samesite,
+}
 
 STATIC_ROOT = os.path.join(BASE_DIR, "static_root")
 

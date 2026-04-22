@@ -18,8 +18,19 @@ ALLOWED_HOSTS = _split_csv_env("ALLOWED_HOSTS") or ["localhost", "127.0.0.1"]
 CORS_ALLOWED_ORIGINS = _split_csv_env("CORS_ALLOWED_ORIGINS")
 CSRF_TRUSTED_ORIGINS = _split_csv_env("CSRF_TRUSTED_ORIGINS")
 CORS_ALLOW_CREDENTIALS = (
-    os.getenv("CORS_ALLOW_CREDENTIALS", "False").lower() in ("true", "1", "yes")
+    os.getenv("CORS_ALLOW_CREDENTIALS", "True").lower() in ("true", "1", "yes")
 )
+
+_auth_cookie_samesite = os.getenv("AUTH_COOKIE_SAMESITE", AUTH_SESSION["COOKIE_SAMESITE"])
+if _auth_cookie_samesite not in {"Lax", "Strict", "None"}:
+    _auth_cookie_samesite = AUTH_SESSION["COOKIE_SAMESITE"]
+
+AUTH_SESSION = {
+    **AUTH_SESSION,
+    "COOKIE_SECURE": os.getenv("AUTH_COOKIE_SECURE", "True").lower()
+    in ("true", "1", "yes"),
+    "COOKIE_SAMESITE": _auth_cookie_samesite,
+}
 
 DEBUG = os.getenv("DEBUG", "False").lower() in ("true", "1", "yes")
 
