@@ -185,13 +185,15 @@ class BenchmarkAdminDashboardTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Primary Metrics")
         self.assertContains(response, "Release Gate Checks")
-        self.assertNotContains(response, "Pass / Fail")
-        self.assertNotContains(response, "Recent Failed Cases")
-        self.assertNotContains(response, "Scenario Failures")
-        self.assertNotContains(response, "Mode Failures")
-        self.assertNotContains(response, "Confidence Buckets")
-        self.assertNotContains(response, "Question Length")
-        self.assertNotContains(response, "Review Taxonomy")
+        self.assertContains(response, "Pass / Fail")
+        self.assertContains(response, "2 pass · 1 fail / 3 total")
+        self.assertContains(response, "Recent Failed Cases")
+        self.assertContains(response, "Scenario Failures")
+        self.assertContains(response, "Mode Failures")
+        self.assertContains(response, "Confidence Buckets")
+        self.assertContains(response, "Question Length")
+        self.assertContains(response, "Review Taxonomy")
+        self.assertContains(response, "Retrieval miss")
 
     def test_change_form_includes_dashboard_link(self):
         change_url = reverse(

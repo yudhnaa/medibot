@@ -107,8 +107,9 @@
         <div class="benchmark-muted">Primary pass: {% if run.primary_pass %}Yes{% else %}No{% endif %}</div>
       </article>
       <article class="benchmark-card">
-        <h3>Total Cases</h3>
-        <strong>{{ run.total_cases }}</strong>
+        <h3>Pass / Fail</h3>
+        <strong>{{ pass_count }} pass · {{ fail_count }} fail / {{ total_case_count }} total</strong>
+        <div class="benchmark-muted">Pass rate: {{ pass_rate }}% · Fail rate: {{ fail_rate }}%</div>
       </article>
     </section>
 
@@ -147,6 +148,32 @@
     </section>
 
     <section class="benchmark-card">
+      <h3>Recent Failed Cases</h3>
+      {% if top_failure_rows %}
+        <table class="benchmark-bar-table">
+          <thead>
+            <tr>
+              <th>Case ID</th>
+              <th>Status</th>
+              <th>Fail Reason</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in top_failure_rows %}
+              <tr>
+                <td>{{ row.result.case.case_id }}</td>
+                <td>{{ row.result.status|title }}</td>
+                <td>{{ row.reason }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% else %}
+        <p class="benchmark-muted">No failed cases in this run.</p>
+      {% endif %}
+    </section>
+
+    <section class="benchmark-card">
       <h3>Release Gate Checks</h3>
       {% if release_checks %}
         <table class="benchmark-bar-table">
@@ -180,5 +207,27 @@
       {% endif %}
     </section>
 
+    <section class="benchmark-grid">
+      <article class="benchmark-card">
+        <h3>Scenario Failures</h3>
+        {% include "admin/rag_benchmark/benchmarkrun/includes/bar_table.html" with rows=scenario_failures %}
+      </article>
+      <article class="benchmark-card">
+        <h3>Mode Failures</h3>
+        {% include "admin/rag_benchmark/benchmarkrun/includes/bar_table.html" with rows=mode_failures %}
+      </article>
+      <article class="benchmark-card">
+        <h3>Confidence Buckets</h3>
+        {% include "admin/rag_benchmark/benchmarkrun/includes/bar_table.html" with rows=confidence_failures %}
+      </article>
+      <article class="benchmark-card">
+        <h3>Question Length</h3>
+        {% include "admin/rag_benchmark/benchmarkrun/includes/bar_table.html" with rows=question_length_failures %}
+      </article>
+      <article class="benchmark-card">
+        <h3>Review Taxonomy</h3>
+        {% include "admin/rag_benchmark/benchmarkrun/includes/bar_table.html" with rows=review_distribution %}
+      </article>
+    </section>
   </div>
 {% endblock %}

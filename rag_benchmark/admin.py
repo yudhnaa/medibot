@@ -358,23 +358,30 @@ class BenchmarkRunAdmin(admin.ModelAdmin):
         ]
         metric_cards = [card for card in metric_cards if card is not None]
 
-        total_cases = max(1, int(run.total_cases or 0))
-        pass_rate = (
-            (float(run.passed_cases or 0) / float(total_cases)) * 100.0
-            if run.total_cases
-            else 0.0
-        )
-        fail_rate = (
-            (float(run.failed_cases or 0) / float(total_cases)) * 100.0
-            if run.total_cases
-            else 0.0
-        )
+        total_case_count = int(run.total_cases or 0)
+        pass_count = int(run.passed_cases or 0)
+        fail_count = int(run.failed_cases or 0)
+        rate_denominator = max(1, total_case_count)
+        pass_rate = (float(pass_count) / float(rate_denominator)) * 100.0
+        fail_rate = (float(fail_count) / float(rate_denominator)) * 100.0
 
         top_failure_results = list(
             BenchmarkCaseResult.objects.filter(run=run, status__in=["failed", "error"])
             .select_related("case")
             .order_by("-updated_at")[:20]
         )
+
+        taxonomy_labels = {item.value: item.label for item in BenchmarkFailureTaxonomy}
+        top_failure_rows = [
+            {
+                "result": result,
+                "reason": self._build_failure_reason(
+                    result=result,
+                    taxonomy_labels=taxonomy_labels,
+                ),
+            }
+            for result in top_failure_results
+        ]
 
         review_counts_qs = (
             BenchmarkCaseResult.objects.filter(run=run)
@@ -386,7 +393,6 @@ class BenchmarkRunAdmin(admin.ModelAdmin):
             key = str(row.get("failure_taxonomy") or "").strip() or "unclassified"
             review_counts[key] = review_counts.get(key, 0) + 1
         review_distribution = self._to_slice_rows(review_counts)
-        taxonomy_labels = {item.value: item.label for item in BenchmarkFailureTaxonomy}
         for row in review_distribution:
             row["label"] = taxonomy_labels.get(row["key"], row["label"])
 
@@ -402,7 +408,10 @@ class BenchmarkRunAdmin(admin.ModelAdmin):
             "confidence_failures": confidence_failures,
             "question_length_failures": question_length_failures,
             "review_distribution": review_distribution,
-            "top_failure_results": top_failure_results,
+            "top_failure_rows": top_failure_rows,
+            "total_case_count": total_case_count,
+            "pass_count": pass_count,
+            "fail_count": fail_count,
             "pass_rate": round(pass_rate, 2),
             "fail_rate": round(fail_rate, 2),
             "change_url": reverse(
@@ -527,6 +536,37 @@ class BenchmarkRunAdmin(admin.ModelAdmin):
                 }
             )
         return sorted(rows, key=lambda item: item["value"], reverse=True)
+
+    def _build_failure_reason(
+        self,
+        *,
+        result: BenchmarkCaseResult,
+        taxonomy_labels: dict[str, str],
+    ) -> str:
+        taxonomy_key = str(result.failure_taxonomy or "").strip()
+        if taxonomy_key:
+            return taxonomy_labels.get(
+                taxonomy_key,
+                self._humanize_metric_name(taxonomy_key),
+            )
+
+        error_payload = result.error_payload if isinstance(result.error_payload, dict) else {}
+        error_message = str(error_payload.get("message") or "").strip()
+        if error_message:
+            return error_message
+
+        pass_flags = result.pass_flags if isinstance(result.pass_flags, dict) else {}
+        failed_checks = [
+            self._humanize_metric_name(str(key).removesuffix("_pass"))
+            for key, value in pass_flags.items()
+            if str(key).endswith("_pass") and value is False
+        ]
+        if failed_checks:
+            return ", ".join(failed_checks)
+
+        if result.status == "error":
+            return "Runtime error"
+        return "Primary gate failed"
 
     def _humanize_metric_name(self, key: str) -> str:
         text = key.replace("_", " ").replace("@", " @ ")
