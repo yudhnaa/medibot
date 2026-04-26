@@ -11,7 +11,7 @@ from django.db.models import Count, Max
 from django.utils import timezone
 
 from chatbot.models import ChatSession, ChatbotConfig, MedicalDocument
-from chatbot.services.chatbot_service import ChatbotService
+from chatbot.services.chatbot_benchmark_service import ChatbotBenchmarkService
 from rag_benchmark.models import (
     BenchmarkCase,
     BenchmarkCaseResult,
@@ -185,7 +185,7 @@ class OfflineBenchmarkRunner:
         self,
         *,
         case: BenchmarkCase,
-        service: ChatbotService,
+        service: ChatbotBenchmarkService,
     ) -> dict[str, Any]:
         base_payload = {
             "question": str(case.question),
@@ -413,7 +413,7 @@ class OfflineBenchmarkRunner:
             serialized[str(metric_name)] = [str(operator), float(threshold)]
         return serialized
 
-    def _build_case_service(self, *, case: BenchmarkCase) -> ChatbotService:
+    def _build_case_service(self, *, case: BenchmarkCase) -> ChatbotBenchmarkService:
         customer = self._get_or_create_runner_customer()
         ChatSession.objects.filter(customer=customer, is_active=True).update(
             is_active=False
@@ -423,7 +423,7 @@ class OfflineBenchmarkRunner:
             title=f"Benchmark case {case.case_id}",
             is_active=True,
         )
-        return ChatbotService(session)
+        return ChatbotBenchmarkService(session)
 
     def _persist_run_aggregate(
         self,

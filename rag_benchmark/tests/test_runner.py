@@ -10,7 +10,7 @@ from rag_benchmark.services.runner import OfflineBenchmarkRunner
 class OfflineBenchmarkRunnerTests(TestCase):
     @patch("rag_benchmark.services.runner.RagasJudgeEvaluator")
     @patch("rag_benchmark.services.runner.EmbeddingService.resolve_provider")
-    @patch("rag_benchmark.services.runner.ChatbotService")
+    @patch("rag_benchmark.services.runner.ChatbotBenchmarkService")
     def test_runner_executes_cases_and_persists_results(
         self,
         mock_chatbot_service: MagicMock,
