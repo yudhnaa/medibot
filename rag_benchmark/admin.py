@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, Mapping
 
 from django.contrib import admin, messages
 from django.http import HttpRequest
 from django.shortcuts import redirect, render
 from django.urls import path, reverse
+from django.utils.functional import Promise
 from django.utils.html import format_html
 
 from rag_benchmark.forms import BenchmarkDatasetImportForm, BenchmarkRunAdminForm
@@ -23,6 +24,7 @@ from rag_benchmark.services import (
     DatasetValidationError,
     OfflineBenchmarkRunner,
 )
+from rag_benchmark.services.constants import RAGAS_RELEASE_GATE_THRESHOLDS
 
 
 class BenchmarkCaseInline(admin.TabularInline):
@@ -293,6 +295,11 @@ class BenchmarkRunAdmin(admin.ModelAdmin):
                 self.admin_site.admin_view(self.dashboard_view),
                 name="rag_benchmark_benchmarkrun_dashboard",
             ),
+            path(
+                "<path:object_id>/case-metrics/",
+                self.admin_site.admin_view(self.case_metrics_view),
+                name="rag_benchmark_benchmarkrun_case_metrics",
+            ),
         ]
         return custom_urls + urls
 
@@ -306,6 +313,9 @@ class BenchmarkRunAdmin(admin.ModelAdmin):
         context = extra_context or {}
         context["dashboard_url"] = reverse(
             "admin:rag_benchmark_benchmarkrun_dashboard", args=[object_id]
+        )
+        context["case_metrics_url"] = reverse(
+            "admin:rag_benchmark_benchmarkrun_case_metrics", args=[object_id]
         )
         return super().change_view(request, object_id, form_url, extra_context=context)
 
@@ -418,6 +428,10 @@ class BenchmarkRunAdmin(admin.ModelAdmin):
                 "admin:rag_benchmark_benchmarkrun_change",
                 args=[run.pk],
             ),
+            "case_metrics_url": reverse(
+                "admin:rag_benchmark_benchmarkrun_case_metrics",
+                args=[run.pk],
+            ),
             "case_results_url": (
                 reverse("admin:rag_benchmark_benchmarkcaseresult_changelist")
                 + f"?run__id__exact={run.pk}"
@@ -426,6 +440,101 @@ class BenchmarkRunAdmin(admin.ModelAdmin):
         return render(
             request,
             "admin/rag_benchmark/benchmarkrun/dashboard.html",
+            context,
+        )
+
+    def case_metrics_view(self, request: HttpRequest, object_id: str):
+        run = self.get_object(request, object_id)
+        if run is None:
+            messages.error(request, "Benchmark run not found.")
+            return redirect("admin:rag_benchmark_benchmarkrun_changelist")
+
+        results = list(
+            BenchmarkCaseResult.objects.filter(run=run)
+            .select_related("case")
+            .order_by("case__case_id", "-updated_at")
+        )
+
+        release_gate = run.release_gate if isinstance(run.release_gate, dict) else {}
+        checks = release_gate.get("checks", {}) if isinstance(release_gate, dict) else {}
+        release_checks = checks if isinstance(checks, dict) else {}
+        metric_thresholds: dict[str, str] = {}
+        for metric_key in (
+            "faithfulness",
+            "answer_relevancy",
+            "context_precision",
+            "context_recall",
+        ):
+            check_payload = (
+                release_checks.get(metric_key, {})
+                if isinstance(release_checks.get(metric_key, {}), dict)
+                else {}
+            )
+            operator = str(check_payload.get("operator", "")).strip()
+            threshold = check_payload.get("threshold")
+            if not operator or threshold is None:
+                fallback_operator, fallback_threshold = RAGAS_RELEASE_GATE_THRESHOLDS.get(
+                    metric_key,
+                    ("", None),
+                )
+                operator = str(fallback_operator).strip()
+                threshold = fallback_threshold
+            if operator and threshold is not None:
+                metric_thresholds[metric_key] = f"{operator} {threshold}"
+            else:
+                metric_thresholds[metric_key] = "-"
+
+        case_rows: list[dict[str, Any]] = []
+        for result in results:
+            pass_flags = result.pass_flags if isinstance(result.pass_flags, dict) else {}
+            metrics = result.metrics if isinstance(result.metrics, dict) else {}
+            failed_checks = [
+                self._humanize_metric_name(str(key).removesuffix("_pass"))
+                for key, value in pass_flags.items()
+                if str(key).endswith("_pass") and value is False
+            ]
+            case_rows.append(
+                {
+                    "result": result,
+                    "primary_pass": bool(pass_flags.get("primary_pass", False)),
+                    "faithfulness": metrics.get("faithfulness"),
+                    "answer_relevancy": metrics.get("answer_relevancy"),
+                    "context_precision": metrics.get("context_precision"),
+                    "context_recall": metrics.get("context_recall"),
+                    "failed_checks": failed_checks,
+                }
+            )
+
+        total_case_count = int(run.total_cases or 0)
+        pass_count = int(run.passed_cases or 0)
+        fail_count = int(run.failed_cases or 0)
+
+        context = {
+            **self.admin_site.each_context(request),
+            "opts": self.model._meta,
+            "title": f"Case Metrics · {run.run_id}",
+            "run": run,
+            "case_rows": case_rows,
+            "metric_thresholds": metric_thresholds,
+            "total_case_count": total_case_count,
+            "pass_count": pass_count,
+            "fail_count": fail_count,
+            "dashboard_url": reverse(
+                "admin:rag_benchmark_benchmarkrun_dashboard",
+                args=[run.pk],
+            ),
+            "change_url": reverse(
+                "admin:rag_benchmark_benchmarkrun_change",
+                args=[run.pk],
+            ),
+            "case_results_url": (
+                reverse("admin:rag_benchmark_benchmarkcaseresult_changelist")
+                + f"?run__id__exact={run.pk}"
+            ),
+        }
+        return render(
+            request,
+            "admin/rag_benchmark/benchmarkrun/case_metrics.html",
             context,
         )
 
@@ -541,14 +650,15 @@ class BenchmarkRunAdmin(admin.ModelAdmin):
         self,
         *,
         result: BenchmarkCaseResult,
-        taxonomy_labels: dict[str, str],
+        taxonomy_labels: Mapping[str, str | Promise],
     ) -> str:
         taxonomy_key = str(result.failure_taxonomy or "").strip()
         if taxonomy_key:
-            return taxonomy_labels.get(
+            label = taxonomy_labels.get(
                 taxonomy_key,
                 self._humanize_metric_name(taxonomy_key),
             )
+            return str(label)
 
         error_payload = result.error_payload if isinstance(result.error_payload, dict) else {}
         error_message = str(error_payload.get("message") or "").strip()

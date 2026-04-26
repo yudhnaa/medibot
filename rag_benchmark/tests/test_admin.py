@@ -1,8 +1,10 @@
+from typing import Any, cast
+from unittest.mock import MagicMock, patch
+
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
 from django.urls import reverse
-from unittest.mock import MagicMock, patch
 
 from rag_benchmark.models import (
     BenchmarkCase,
@@ -15,7 +17,7 @@ from rag_benchmark.models import (
 class BenchmarkAdminImportTests(TestCase):
     def setUp(self):
         User = get_user_model()
-        self.superuser = User.objects.create_superuser(
+        self.superuser = cast(Any, User.objects).create_superuser(
             username="admin_benchmark",
             email="admin_benchmark@example.com",
             password="test-password-123",
@@ -104,7 +106,7 @@ class BenchmarkAdminImportTests(TestCase):
 class BenchmarkAdminDashboardTests(TestCase):
     def setUp(self):
         User = get_user_model()
-        self.superuser = User.objects.create_superuser(
+        self.superuser = cast(Any, User.objects).create_superuser(
             username="admin_dashboard",
             email="admin_dashboard@example.com",
             password="test-password-123",
@@ -118,7 +120,7 @@ class BenchmarkAdminDashboardTests(TestCase):
             split_counts={"dev": 3},
             composition_stats={},
         )
-        self.run = BenchmarkRun.objects.create(
+        self.benchmark_run = BenchmarkRun.objects.create(
             dataset=self.dataset,
             split="dev",
             status="completed",
@@ -171,7 +173,7 @@ class BenchmarkAdminDashboardTests(TestCase):
             notes="",
         )
         BenchmarkCaseResult.objects.create(
-            run=self.run,
+            run=self.benchmark_run,
             case=self.case,
             status="failed",
             pass_flags={"primary_pass": False},
@@ -179,7 +181,10 @@ class BenchmarkAdminDashboardTests(TestCase):
         )
 
     def test_dashboard_view_renders_visualized_sections(self):
-        url = reverse("admin:rag_benchmark_benchmarkrun_dashboard", args=[self.run.pk])
+        url = reverse(
+            "admin:rag_benchmark_benchmarkrun_dashboard",
+            args=[self.benchmark_run.pk],
+        )
         response = self.client.get(url)
 
         self.assertEqual(response.status_code, 200)
@@ -197,13 +202,67 @@ class BenchmarkAdminDashboardTests(TestCase):
 
     def test_change_form_includes_dashboard_link(self):
         change_url = reverse(
-            "admin:rag_benchmark_benchmarkrun_change", args=[self.run.pk]
+            "admin:rag_benchmark_benchmarkrun_change", args=[self.benchmark_run.pk]
         )
         dashboard_url = reverse(
             "admin:rag_benchmark_benchmarkrun_dashboard",
-            args=[self.run.pk],
+            args=[self.benchmark_run.pk],
+        )
+        case_metrics_url = reverse(
+            "admin:rag_benchmark_benchmarkrun_case_metrics",
+            args=[self.benchmark_run.pk],
         )
         response = self.client.get(change_url)
 
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, dashboard_url)
+        self.assertContains(response, case_metrics_url)
+
+    def test_case_metrics_view_renders_case_level_metrics(self):
+        result = BenchmarkCaseResult.objects.get(
+            run=self.benchmark_run,
+            case=self.case,
+        )
+        result.metrics = {
+            "faithfulness": 1.0,
+            "answer_relevancy": 0.91,
+            "context_precision": 0.75,
+            "context_recall": 0.88,
+        }
+        result.pass_flags = {
+            "primary_pass": False,
+            "faithfulness_pass": True,
+            "answer_relevancy_pass": True,
+            "context_precision_pass": False,
+            "context_recall_pass": True,
+        }
+        result.save(update_fields=["metrics", "pass_flags", "updated_at"])
+
+        url = reverse(
+            "admin:rag_benchmark_benchmarkrun_case_metrics",
+            args=[self.benchmark_run.pk],
+        )
+        response = self.client.get(url)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Metric Thresholds")
+        self.assertContains(response, "&gt;= 0.8")
+        self.assertContains(response, "&gt;= 0.7")
+        self.assertContains(response, "&gt;= 0.6")
+        self.assertContains(response, "Per-case Metrics")
+        self.assertContains(response, self.case.case_id)
+        self.assertContains(response, "0.75")
+        self.assertContains(response, "Context Precision")
+
+    def test_case_metrics_view_redirects_to_login_for_anonymous_user(self):
+        self.client.logout()
+        url = reverse(
+            "admin:rag_benchmark_benchmarkrun_case_metrics",
+            args=[self.benchmark_run.pk],
+        )
+        response = self.client.get(url)
+        redirect_url = response.headers.get("Location", "")
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/admin/login/", redirect_url)
+        self.assertIn(url, redirect_url)

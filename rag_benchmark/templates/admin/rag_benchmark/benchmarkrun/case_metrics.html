@@ -1,0 +1,152 @@
+{% extends "admin/base_site.html" %}
+
+{% block extrastyle %}
+  {{ block.super }}
+  <style>
+    .benchmark-case-metrics {
+      display: grid;
+      gap: 16px;
+    }
+    .benchmark-card {
+      border: 1px solid #d7dbe0;
+      border-radius: 8px;
+      padding: 12px;
+      background: #fff;
+    }
+    .benchmark-card h3 {
+      margin: 0 0 6px;
+      font-size: 14px;
+      color: #3d4248;
+    }
+    .benchmark-card strong {
+      font-size: 20px;
+      color: #16181b;
+    }
+    .benchmark-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 12px;
+    }
+    .benchmark-actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .benchmark-status-pass {
+      color: #1f8a4d;
+      font-weight: 600;
+    }
+    .benchmark-status-fail {
+      color: #bf3b3b;
+      font-weight: 600;
+    }
+    .benchmark-muted {
+      color: #6b727a;
+      font-size: 12px;
+    }
+    .benchmark-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+    .benchmark-table th,
+    .benchmark-table td {
+      border-bottom: 1px solid #eceff3;
+      padding: 8px 6px;
+      text-align: left;
+      vertical-align: top;
+    }
+    .benchmark-table th {
+      white-space: nowrap;
+      color: #3d4248;
+    }
+  </style>
+{% endblock %}
+
+{% block content %}
+  <div id="content-main" class="benchmark-case-metrics">
+    <h1>{{ title }}</h1>
+    <div class="benchmark-actions">
+      <a href="{{ dashboard_url }}" class="button">Back to Dashboard</a>
+      <a href="{{ change_url }}" class="button">Edit Run</a>
+      <a href="{{ case_results_url }}" class="button">View Case Results</a>
+    </div>
+
+    <section class="benchmark-grid">
+      <article class="benchmark-card">
+        <h3>Run</h3>
+        <strong>{{ run.run_id }}</strong>
+        <div class="benchmark-muted">Status: {{ run.status|title }}</div>
+      </article>
+      <article class="benchmark-card">
+        <h3>Dataset</h3>
+        <strong>{{ run.dataset.name }}:{{ run.dataset.version }}</strong>
+        <div class="benchmark-muted">Split: {{ run.split }}</div>
+      </article>
+      <article class="benchmark-card">
+        <h3>Case Summary</h3>
+        <strong>{{ pass_count }} pass · {{ fail_count }} fail / {{ total_case_count }} total</strong>
+      </article>
+    </section>
+
+    <section class="benchmark-card">
+      <h3>Metric Thresholds</h3>
+      <div class="benchmark-muted">
+        Faithfulness: {{ metric_thresholds.faithfulness|default:"-" }} ·
+        Answer Relevancy: {{ metric_thresholds.answer_relevancy|default:"-" }} ·
+        Context Precision: {{ metric_thresholds.context_precision|default:"-" }} ·
+        Context Recall: {{ metric_thresholds.context_recall|default:"-" }}
+      </div>
+    </section>
+
+    <section class="benchmark-card">
+      <h3>Per-case Metrics</h3>
+      {% if case_rows %}
+        <table class="benchmark-table">
+          <thead>
+            <tr>
+              <th>Case ID</th>
+              <th>Status</th>
+              <th>Primary Pass</th>
+              <th>Faithfulness</th>
+              <th>Answer Relevancy</th>
+              <th>Context Precision</th>
+              <th>Context Recall</th>
+              <th>Failed Checks</th>
+              <th>Updated At</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in case_rows %}
+              <tr>
+                <td>{{ row.result.case.case_id }}</td>
+                <td>{{ row.result.status|title }}</td>
+                <td>
+                  {% if row.primary_pass %}
+                    <span class="benchmark-status-pass">PASS</span>
+                  {% else %}
+                    <span class="benchmark-status-fail">FAIL</span>
+                  {% endif %}
+                </td>
+                <td>{{ row.faithfulness|default:"-" }}</td>
+                <td>{{ row.answer_relevancy|default:"-" }}</td>
+                <td>{{ row.context_precision|default:"-" }}</td>
+                <td>{{ row.context_recall|default:"-" }}</td>
+                <td>
+                  {% if row.failed_checks %}
+                    {{ row.failed_checks|join:", " }}
+                  {% else %}
+                    -
+                  {% endif %}
+                </td>
+                <td>{{ row.result.updated_at }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% else %}
+        <p class="benchmark-muted">No case metrics available for this run.</p>
+      {% endif %}
+    </section>
+  </div>
+{% endblock %}

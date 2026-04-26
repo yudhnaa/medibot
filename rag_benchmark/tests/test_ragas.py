@@ -1,11 +1,20 @@
 from __future__ import annotations
 
 from types import ModuleType, SimpleNamespace
+from typing import Any, cast
 from unittest.mock import patch
 
 from django.test import SimpleTestCase
 
+from rag_benchmark.models import BenchmarkCase
 from rag_benchmark.services.ragas import RagasJudgeEvaluator
+
+
+def _build_case(question: str, reference_answer: str) -> BenchmarkCase:
+    return cast(
+        BenchmarkCase,
+        SimpleNamespace(question=question, reference_answer=reference_answer),
+    )
 
 
 class _FakeDataFrame:
@@ -34,7 +43,7 @@ class _FakeMetric:
 
 class RagasJudgeEvaluatorTests(SimpleTestCase):
     def _build_fake_modules(self):
-        datasets_module = ModuleType("datasets")
+        datasets_module = cast(Any, ModuleType("datasets"))
 
         class _Dataset:
             @classmethod
@@ -43,16 +52,16 @@ class RagasJudgeEvaluatorTests(SimpleTestCase):
 
         datasets_module.Dataset = _Dataset
 
-        ragas_module = ModuleType("ragas")
+        ragas_module = cast(Any, ModuleType("ragas"))
         ragas_module.aevaluate = object()
 
-        metrics_module = ModuleType("ragas.metrics")
+        metrics_module = cast(Any, ModuleType("ragas.metrics"))
         metrics_module.faithfulness = _FakeMetric("faithfulness")
         metrics_module.answer_relevancy = _FakeMetric("answer_relevancy")
         metrics_module.context_precision = _FakeMetric("context_precision")
         metrics_module.context_recall = _FakeMetric("context_recall")
 
-        run_config_module = ModuleType("ragas.run_config")
+        run_config_module = cast(Any, ModuleType("ragas.run_config"))
 
         class _RunConfig:
             def __init__(self, **kwargs):
@@ -91,8 +100,8 @@ class RagasJudgeEvaluatorTests(SimpleTestCase):
             )
 
         cases = [
-            SimpleNamespace(question="What causes COVID-19?", reference_answer="R1"),
-            SimpleNamespace(question="Is fever a symptom?", reference_answer="R2"),
+            _build_case("What causes COVID-19?", "R1"),
+            _build_case("Is fever a symptom?", "R2"),
         ]
         runtime_outputs = [
             {
@@ -145,7 +154,7 @@ class RagasJudgeEvaluatorTests(SimpleTestCase):
             run_calls.append(kwargs)
             return _FakeResult([{"faithfulness": 0.9}])
 
-        cases = [SimpleNamespace(question="Is diabetes a risk factor?", reference_answer="R1")]
+        cases = [_build_case("Is diabetes a risk factor?", "R1")]
         runtime_outputs = [
             {
                 "generation_output": {
@@ -202,7 +211,7 @@ class RagasJudgeEvaluatorTests(SimpleTestCase):
             run_calls.append(kwargs)
             return _FakeResult([{"faithfulness": 0.9}])
 
-        cases = [SimpleNamespace(question="What are risk factors for COVID-19?", reference_answer="R1")]
+        cases = [_build_case("What are risk factors for COVID-19?", "R1")]
         runtime_outputs = [
             {
                 "generation_output": {
@@ -262,10 +271,84 @@ class RagasJudgeEvaluatorTests(SimpleTestCase):
         retrieved_contexts = run_calls[0]["dataset"]["retrieved_contexts"][0]
         self.assertEqual(
             retrieved_contexts[0],
-            "Older people and diabetes are risk factors.",
+            "Risk factors include Older people and diabetes are risk factors.",
         )
-        self.assertEqual(retrieved_contexts.count("Older people and diabetes are risk factors."), 1)
-        self.assertEqual(retrieved_contexts[-1], "Broad context snapshot.")
+        self.assertEqual(
+            retrieved_contexts.count(
+                "Risk factors include Older people and diabetes are risk factors."
+            ),
+            1,
+        )
+        self.assertNotIn("Broad context snapshot.", retrieved_contexts)
+
+    def test_evaluate_batch_includes_summary_for_sparse_single_section_evidence(self):
+        evaluator = RagasJudgeEvaluator(metrics=["faithfulness"])
+        fake_modules = self._build_fake_modules()
+        run_calls: list[dict] = []
+
+        def _run_side_effect(**kwargs):
+            run_calls.append(kwargs)
+            return _FakeResult([{"faithfulness": 0.9}])
+
+        cases = [_build_case("Is diabetes a risk factor?", "R1")]
+        runtime_outputs = [
+            {
+                "generation_output": {
+                    "final_answer": "A1",
+                    "context_snapshot": "Broad context snapshot.",
+                },
+                "retrieval_output": {
+                    "rerank": {
+                        "intent": {
+                            "target_sections": ["risk"],
+                        }
+                    },
+                    "summaries": {
+                        "coronavirus disease (covid-19)": "Summary support text."
+                    },
+                    "retrieved_items": [
+                        {
+                            "title": "coronavirus disease (covid-19)",
+                            "section": "risk",
+                            "content_preview": "Older people and diabetes are risk factors.",
+                        }
+                    ],
+                    "retrieved_context_texts": [],
+                },
+            }
+        ]
+
+        with (
+            patch.dict("sys.modules", fake_modules, clear=False),
+            patch.object(
+                evaluator,
+                "_get_int_config",
+                side_effect=lambda **kwargs: kwargs["default"],
+            ),
+            patch.object(
+                evaluator,
+                "_create_ragas_models",
+                return_value=("llm", "embeddings"),
+            ),
+            patch.object(
+                evaluator,
+                "_run_ragas_evaluate",
+                side_effect=_run_side_effect,
+            ),
+        ):
+            results = evaluator.evaluate_batch(
+                cases=cases,
+                runtime_outputs=runtime_outputs,
+            )
+
+        self.assertEqual(len(results), 1)
+        retrieved_contexts = run_calls[0]["dataset"]["retrieved_contexts"][0]
+        self.assertEqual(
+            retrieved_contexts[0],
+            "Risk factors include Older people and diabetes are risk factors.",
+        )
+        self.assertIn("Summary support text.", retrieved_contexts)
+        self.assertNotIn("Broad context snapshot.", retrieved_contexts)
 
     def test_evaluate_batch_uses_fallback_sources_when_structured_sources_missing(self):
         evaluator = RagasJudgeEvaluator(metrics=["faithfulness"])
@@ -276,7 +359,7 @@ class RagasJudgeEvaluatorTests(SimpleTestCase):
             run_calls.append(kwargs)
             return _FakeResult([{"faithfulness": 0.9}])
 
-        cases = [SimpleNamespace(question="Is diabetes a risk factor?", reference_answer="R1")]
+        cases = [_build_case("Is diabetes a risk factor?", "R1")]
         runtime_outputs = [
             {
                 "generation_output": {
@@ -331,7 +414,7 @@ class RagasJudgeEvaluatorTests(SimpleTestCase):
             run_calls.append(kwargs)
             return _FakeResult([{"faithfulness": 0.9}])
 
-        cases = [SimpleNamespace(question="Is diabetes a risk factor?", reference_answer="R1")]
+        cases = [_build_case("Is diabetes a risk factor?", "R1")]
         runtime_outputs = [
             {
                 "generation_output": {
