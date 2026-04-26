@@ -187,9 +187,202 @@ class RagasJudgeEvaluatorTests(SimpleTestCase):
         self.assertEqual(len(results), 1)
         self.assertEqual(run_calls[0]["batch_size"], 1)
         retrieved_contexts = run_calls[0]["dataset"]["retrieved_contexts"][0]
-        self.assertEqual(
-            retrieved_contexts[0],
-            "Context snapshot from generation.",
-        )
         self.assertIn("Summary support text.", retrieved_contexts)
         self.assertIn("Risk evidence text.", retrieved_contexts)
+        self.assertIn("Context snapshot from generation.", retrieved_contexts)
+        self.assertEqual(retrieved_contexts[0], "Risk evidence text.")
+        self.assertEqual(retrieved_contexts[-1], "Context snapshot from generation.")
+
+    def test_evaluate_batch_prioritizes_retrieved_items_and_dedups_contexts(self):
+        evaluator = RagasJudgeEvaluator(metrics=["faithfulness"])
+        fake_modules = self._build_fake_modules()
+        run_calls: list[dict] = []
+
+        def _run_side_effect(**kwargs):
+            run_calls.append(kwargs)
+            return _FakeResult([{"faithfulness": 0.9}])
+
+        cases = [SimpleNamespace(question="What are risk factors for COVID-19?", reference_answer="R1")]
+        runtime_outputs = [
+            {
+                "generation_output": {
+                    "final_answer": "A1",
+                    "context_snapshot": "Broad context snapshot.",
+                },
+                "retrieval_output": {
+                    "rerank": {
+                        "intent": {
+                            "target_sections": ["risk"],
+                        }
+                    },
+                    "retrieved_items": [
+                        {
+                            "title": "coronavirus disease (covid-19)",
+                            "section": "risk",
+                            "content_preview": "Older people and diabetes are risk factors.",
+                        },
+                        {
+                            "title": "coronavirus disease (covid-19)",
+                            "section": "general",
+                            "content_preview": "General overview text.",
+                        },
+                    ],
+                    "retrieved_context_texts": [
+                        "Older people and diabetes are risk factors.",
+                        "General overview text.",
+                    ],
+                },
+            }
+        ]
+
+        with (
+            patch.dict("sys.modules", fake_modules, clear=False),
+            patch.object(
+                evaluator,
+                "_get_int_config",
+                side_effect=lambda **kwargs: kwargs["default"],
+            ),
+            patch.object(
+                evaluator,
+                "_create_ragas_models",
+                return_value=("llm", "embeddings"),
+            ),
+            patch.object(
+                evaluator,
+                "_run_ragas_evaluate",
+                side_effect=_run_side_effect,
+            ),
+        ):
+            results = evaluator.evaluate_batch(
+                cases=cases,
+                runtime_outputs=runtime_outputs,
+            )
+
+        self.assertEqual(len(results), 1)
+        retrieved_contexts = run_calls[0]["dataset"]["retrieved_contexts"][0]
+        self.assertEqual(
+            retrieved_contexts[0],
+            "Older people and diabetes are risk factors.",
+        )
+        self.assertEqual(retrieved_contexts.count("Older people and diabetes are risk factors."), 1)
+        self.assertEqual(retrieved_contexts[-1], "Broad context snapshot.")
+
+    def test_evaluate_batch_uses_fallback_sources_when_structured_sources_missing(self):
+        evaluator = RagasJudgeEvaluator(metrics=["faithfulness"])
+        fake_modules = self._build_fake_modules()
+        run_calls: list[dict] = []
+
+        def _run_side_effect(**kwargs):
+            run_calls.append(kwargs)
+            return _FakeResult([{"faithfulness": 0.9}])
+
+        cases = [SimpleNamespace(question="Is diabetes a risk factor?", reference_answer="R1")]
+        runtime_outputs = [
+            {
+                "generation_output": {
+                    "final_answer": "A1",
+                    "context_snapshot": "Legacy snapshot.",
+                },
+                "retrieval_output": {
+                    "summaries": {
+                        "covid": "Legacy summary.",
+                    },
+                    "retrieved_context_texts": ["Legacy evidence."],
+                    "retrieved_items": "invalid-shape",
+                },
+            }
+        ]
+
+        with (
+            patch.dict("sys.modules", fake_modules, clear=False),
+            patch.object(
+                evaluator,
+                "_get_int_config",
+                side_effect=lambda **kwargs: kwargs["default"],
+            ),
+            patch.object(
+                evaluator,
+                "_create_ragas_models",
+                return_value=("llm", "embeddings"),
+            ),
+            patch.object(
+                evaluator,
+                "_run_ragas_evaluate",
+                side_effect=_run_side_effect,
+            ),
+        ):
+            results = evaluator.evaluate_batch(
+                cases=cases,
+                runtime_outputs=runtime_outputs,
+            )
+
+        self.assertEqual(len(results), 1)
+        retrieved_contexts = run_calls[0]["dataset"]["retrieved_contexts"][0]
+        self.assertEqual(retrieved_contexts[0], "Legacy evidence.")
+        self.assertIn("Legacy summary.", retrieved_contexts)
+        self.assertEqual(retrieved_contexts[-1], "Legacy snapshot.")
+
+    def test_evaluate_batch_falls_back_to_legacy_order_when_collector_raises(self):
+        evaluator = RagasJudgeEvaluator(metrics=["faithfulness"])
+        fake_modules = self._build_fake_modules()
+        run_calls: list[dict] = []
+
+        def _run_side_effect(**kwargs):
+            run_calls.append(kwargs)
+            return _FakeResult([{"faithfulness": 0.9}])
+
+        cases = [SimpleNamespace(question="Is diabetes a risk factor?", reference_answer="R1")]
+        runtime_outputs = [
+            {
+                "generation_output": {
+                    "final_answer": "A1",
+                    "context_snapshot": "Legacy snapshot.",
+                },
+                "retrieval_output": {
+                    "summaries": {"covid": "Legacy summary."},
+                    "retrieved_context_texts": ["Legacy evidence."],
+                    "retrieved_items": [
+                        {
+                            "title": "coronavirus disease (covid-19)",
+                            "section": "risk",
+                            "content_preview": "Risk preview text.",
+                        }
+                    ],
+                },
+            }
+        ]
+
+        with (
+            patch.dict("sys.modules", fake_modules, clear=False),
+            patch.object(
+                evaluator,
+                "_get_int_config",
+                side_effect=lambda **kwargs: kwargs["default"],
+            ),
+            patch.object(
+                evaluator,
+                "_create_ragas_models",
+                return_value=("llm", "embeddings"),
+            ),
+            patch.object(
+                evaluator,
+                "_build_retrieved_item_candidates",
+                side_effect=RuntimeError("collector boom"),
+            ),
+            patch.object(
+                evaluator,
+                "_run_ragas_evaluate",
+                side_effect=_run_side_effect,
+            ),
+        ):
+            results = evaluator.evaluate_batch(
+                cases=cases,
+                runtime_outputs=runtime_outputs,
+            )
+
+        self.assertEqual(len(results), 1)
+        retrieved_contexts = run_calls[0]["dataset"]["retrieved_contexts"][0]
+        self.assertEqual(retrieved_contexts[0], "Legacy snapshot.")
+        self.assertEqual(retrieved_contexts[1], "Legacy summary.")
+        self.assertEqual(retrieved_contexts[2], "Legacy evidence.")
+        self.assertEqual(len(retrieved_contexts), 3)

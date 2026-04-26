@@ -6,6 +6,7 @@ import logging
 import math
 import os
 import re
+from dataclasses import dataclass
 from typing import Any
 
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -34,6 +35,15 @@ from vector_store.services.constants import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(slots=True)
+class _ContextCandidate:
+    text: str
+    source: str
+    section: str
+    title: str
+    score: float
 
 
 class RagasJudgeEvaluator:
@@ -140,13 +150,17 @@ class RagasJudgeEvaluator:
         )
         for case, runtime_output in zip(cases, runtime_outputs):
             generation_output = runtime_output.get("generation_output", {}) or {}
-            raw_contexts = self._collect_runtime_contexts(runtime_output)
+            question_text = str(case.question or "").strip()
+            raw_contexts = self._collect_runtime_contexts(
+                runtime_output,
+                question_text=question_text,
+            )
             contexts = self._prepare_ragas_contexts(
                 raw_contexts=raw_contexts,
                 top_k=ragas_context_top_k,
                 char_limit=ragas_context_char_limit,
             )
-            question_texts.append(str(case.question or "").strip())
+            question_texts.append(question_text)
             answer_texts.append(str(generation_output.get("final_answer", "")).strip())
             reference_texts.append(str(case.reference_answer or "").strip())
             contexts_batch.append(contexts)
@@ -655,15 +669,66 @@ class RagasJudgeEvaluator:
                 break
         return contexts
 
-    def _collect_runtime_contexts(self, runtime_output: dict[str, Any]) -> list[str]:
+    def _collect_runtime_contexts(
+        self,
+        runtime_output: dict[str, Any],
+        *,
+        question_text: str = "",
+    ) -> list[str]:
         """
-        Build judge contexts from the same sources generation used.
+        Build judge contexts with evidence-first priority and legacy fallback.
 
-        Priority order:
-        1) generation context snapshot
+        Preferred order:
+        1) ranked retrieval evidence snippets
         2) retrieval summaries
-        3) retrieved evidence snippets
+        3) generation context snapshot
         """
+        retrieval_output = runtime_output.get("retrieval_output", {}) or {}
+        generation_output = runtime_output.get("generation_output", {}) or {}
+        raw_contexts: list[str] = []
+
+        try:
+            target_sections = self._extract_target_sections(
+                retrieval_output=retrieval_output,
+                question_text=question_text,
+            )
+            question_tokens = self._tokenize_context_text(question_text)
+            candidates: list[_ContextCandidate] = []
+            candidates.extend(
+                self._build_retrieved_item_candidates(
+                    retrieval_output=retrieval_output,
+                    question_tokens=question_tokens,
+                    target_sections=target_sections,
+                )
+            )
+            candidates.extend(
+                self._build_retrieved_text_candidates(
+                    retrieval_output=retrieval_output,
+                    question_tokens=question_tokens,
+                    target_sections=target_sections,
+                )
+            )
+            raw_contexts.extend(self._rank_context_candidates(candidates))
+
+            summaries = retrieval_output.get("summaries", {})
+            if isinstance(summaries, dict):
+                for summary in summaries.values():
+                    text = str(summary).strip()
+                    if text:
+                        raw_contexts.append(text)
+
+            context_snapshot = str(generation_output.get("context_snapshot", "")).strip()
+            if context_snapshot:
+                raw_contexts.append(context_snapshot)
+
+            if raw_contexts:
+                return raw_contexts
+        except Exception as exc:
+            logger.warning("Ragas context collection fallback to legacy ordering: %s", exc)
+
+        return self._collect_runtime_contexts_legacy(runtime_output)
+
+    def _collect_runtime_contexts_legacy(self, runtime_output: dict[str, Any]) -> list[str]:
         retrieval_output = runtime_output.get("retrieval_output", {}) or {}
         generation_output = runtime_output.get("generation_output", {}) or {}
         raw_contexts: list[str] = []
@@ -685,3 +750,164 @@ class RagasJudgeEvaluator:
             if str(item).strip()
         )
         return raw_contexts
+
+    def _build_retrieved_item_candidates(
+        self,
+        *,
+        retrieval_output: dict[str, Any],
+        question_tokens: set[str],
+        target_sections: set[str],
+    ) -> list[_ContextCandidate]:
+        items = retrieval_output.get("retrieved_items", []) or []
+        if not isinstance(items, list):
+            return []
+
+        candidates: list[_ContextCandidate] = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            text = str(item.get("content_preview", "")).strip()
+            if not text:
+                continue
+            section = str(item.get("section", "")).strip().lower()
+            title = str(item.get("title", "")).strip().lower()
+            score = self._score_context_candidate(
+                text=text,
+                section=section,
+                title=title,
+                question_tokens=question_tokens,
+                target_sections=target_sections,
+                source="retrieved_items",
+            )
+            candidates.append(
+                _ContextCandidate(
+                    text=text,
+                    source="retrieved_items",
+                    section=section,
+                    title=title,
+                    score=score,
+                )
+            )
+        return candidates
+
+    def _build_retrieved_text_candidates(
+        self,
+        *,
+        retrieval_output: dict[str, Any],
+        question_tokens: set[str],
+        target_sections: set[str],
+    ) -> list[_ContextCandidate]:
+        retrieved_context_texts = retrieval_output.get("retrieved_context_texts", []) or []
+        if not isinstance(retrieved_context_texts, list):
+            return []
+
+        candidates: list[_ContextCandidate] = []
+        for raw in retrieved_context_texts:
+            text = str(raw).strip()
+            if not text:
+                continue
+            score = self._score_context_candidate(
+                text=text,
+                section="",
+                title="",
+                question_tokens=question_tokens,
+                target_sections=target_sections,
+                source="retrieved_context_texts",
+            )
+            candidates.append(
+                _ContextCandidate(
+                    text=text,
+                    source="retrieved_context_texts",
+                    section="",
+                    title="",
+                    score=score,
+                )
+            )
+        return candidates
+
+    def _rank_context_candidates(
+        self, candidates: list[_ContextCandidate]
+    ) -> list[str]:
+        if not candidates:
+            return []
+
+        ranked = sorted(candidates, key=lambda item: item.score, reverse=True)
+        contexts: list[str] = []
+        seen: set[str] = set()
+        for candidate in ranked:
+            normalized = re.sub(r"\s+", " ", candidate.text).strip()
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            contexts.append(normalized)
+        return contexts
+
+    def _score_context_candidate(
+        self,
+        *,
+        text: str,
+        section: str,
+        title: str,
+        question_tokens: set[str],
+        target_sections: set[str],
+        source: str,
+    ) -> float:
+        target_text = " ".join(part for part in [title, section, text] if part)
+        target_tokens = self._tokenize_context_text(target_text)
+        if not target_tokens:
+            return 0.0
+
+        overlap = 0.0
+        if question_tokens:
+            overlap = len(question_tokens.intersection(target_tokens)) / max(
+                1, len(question_tokens)
+            )
+
+        score = overlap
+        if source == "retrieved_items":
+            score += 0.02
+        if section and section in target_sections:
+            score += 0.18
+        elif section and target_sections:
+            score -= 0.08
+
+        return max(0.0, score)
+
+    def _extract_target_sections(
+        self,
+        *,
+        retrieval_output: dict[str, Any],
+        question_text: str,
+    ) -> set[str]:
+        sections: set[str] = set()
+        rerank = retrieval_output.get("rerank", {})
+        if isinstance(rerank, dict):
+            intent = rerank.get("intent", {})
+            if isinstance(intent, dict):
+                targets = intent.get("target_sections", [])
+                if isinstance(targets, list):
+                    sections.update(
+                        str(item).strip().lower() for item in targets if str(item).strip()
+                    )
+
+        if sections:
+            return sections
+
+        q_tokens = self._tokenize_context_text(question_text)
+        if any(token in q_tokens for token in {"risk", "nguy", "cơ"}):
+            sections.add("risk")
+        if any(token in q_tokens for token in {"symptom", "symptoms", "triệu", "chứng"}):
+            sections.add("symptom")
+        if any(token in q_tokens for token in {"cause", "causes", "nguyên", "nhân", "aetiology", "etiology"}):
+            sections.add("aetiologies")
+        if any(
+            token in q_tokens
+            for token in {"prevent", "prevention", "vaccine", "phòng", "ngừa"}
+        ):
+            sections.add("living_and_preventive")
+
+        return sections
+
+    def _tokenize_context_text(self, text: str) -> set[str]:
+        normalized = re.sub(r"[^0-9a-zA-ZÀ-ỹ]+", " ", str(text or "").lower())
+        return {token for token in normalized.split() if token}
