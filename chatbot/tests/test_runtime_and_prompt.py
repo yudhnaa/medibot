@@ -1,11 +1,16 @@
 from types import SimpleNamespace
+from typing import cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from django.test import SimpleTestCase
+from langchain_core.documents import Document
 
+from chatbot.models import UserIntake
+from chatbot.services.chatbot_benchmark_service import ChatbotBenchmarkService
 from chatbot.services.chatbot_service import ChatbotService
 from chatbot.services.constants import XRAY_RESPIRATORY_DOMAIN_CONTEXT_VI
 from chatbot.services.gemini_manager import GeminiAPIManager, reset_gemini_manager
+from vision.models.xray_analysis import XRayAnalysis
 
 
 class GeminiProviderSelectionTests(SimpleTestCase):
@@ -69,10 +74,13 @@ class XRayContextTests(SimpleTestCase):
     def test_build_xray_context_contains_domain_signal(self) -> None:
         """Built X-ray context should include domain bias and findings."""
         service = object.__new__(ChatbotService)
-        analysis = SimpleNamespace(
-            pred_label="COVID",
-            class_probs={"COVID": 0.91, "Normal": 0.05, "Viral Pneumonia": 0.04},
-            findings=["bilateral involvement", "diffuse involvement"],
+        analysis = cast(
+            XRayAnalysis,
+            SimpleNamespace(
+                pred_label="COVID",
+                class_probs={"COVID": 0.91, "Normal": 0.05, "Viral Pneumonia": 0.04},
+                findings=["bilateral involvement", "diffuse involvement"],
+            ),
         )
 
         context = ChatbotService._build_xray_context(service, analysis)
@@ -130,17 +138,17 @@ class RouterAndRetrievalTests(SimpleTestCase):
     def test_get_last_source_urls_dedupes_and_extracts_nested_metadata(self) -> None:
         service = object.__new__(ChatbotService)
         service._last_docs_cache = [
-            SimpleNamespace(
-                metadata={"url": "https://example.org/covid-19"},
+            Document(
                 page_content="doc 1",
+                metadata={"url": "https://example.org/covid-19"},
             ),
-            SimpleNamespace(
-                metadata={"metadata": {"url": "https://example.org/covid-19"}},
+            Document(
                 page_content="doc 2",
+                metadata={"metadata": {"url": "https://example.org/covid-19"}},
             ),
-            SimpleNamespace(
-                metadata={"source_url": "https://example.org/prevention"},
+            Document(
                 page_content="doc 3",
+                metadata={"source_url": "https://example.org/prevention"},
             ),
         ]
 
@@ -166,7 +174,10 @@ class RouterAndRetrievalTests(SimpleTestCase):
 
         service = object.__new__(ChatbotService)
         service.vector_manager = MagicMock()
-        service._user_intake_db = SimpleNamespace(symptoms=[], age=None, sex="unknown")
+        service._user_intake_db = cast(
+            UserIntake,
+            SimpleNamespace(symptoms=[], age=None, sex="unknown"),
+        )
         service.vector_manager.embedding_service = None
         service.vector_manager.search_similar.return_value = [
             SimpleNamespace(
@@ -202,10 +213,13 @@ class RouterAndRetrievalTests(SimpleTestCase):
 
         service = object.__new__(ChatbotService)
         service.vector_manager = MagicMock()
-        service._user_intake_db = SimpleNamespace(
-            symptoms=["sốt"],
-            age=25,
-            sex="female",
+        service._user_intake_db = cast(
+            UserIntake,
+            SimpleNamespace(
+                symptoms=["sốt"],
+                age=25,
+                sex="female",
+            ),
         )
         service.vector_manager.embedding_service = None
 
@@ -264,7 +278,7 @@ class BenchmarkIntakeTests(SimpleTestCase):
     """Tests for benchmark-only intake replacement semantics."""
 
     def test_apply_benchmark_intake_payload_replaces_persistent_state(self) -> None:
-        service = object.__new__(ChatbotService)
+        service = object.__new__(ChatbotBenchmarkService)
         intake = SimpleNamespace(
             disease_name="bệnh cũ",
             age=72,
@@ -279,9 +293,9 @@ class BenchmarkIntakeTests(SimpleTestCase):
             meds=["thuốc cũ"],
             save=MagicMock(),
         )
-        service._user_intake_db = intake
+        service._user_intake_db = cast(UserIntake, intake)
 
-        ChatbotService._apply_benchmark_intake_payload(
+        ChatbotBenchmarkService._apply_benchmark_intake_payload(
             service,
             {
                 "age": 25,
@@ -305,12 +319,12 @@ class BenchmarkIntakeTests(SimpleTestCase):
         intake.save.assert_called_once_with()
 
     def test_run_benchmark_case_applies_empty_payload_reset(self) -> None:
-        service = object.__new__(ChatbotService)
+        service = object.__new__(ChatbotBenchmarkService)
         service._apply_benchmark_intake_payload = MagicMock()
         service._analyze_query = MagicMock(side_effect=RuntimeError("boom"))
         service._last_audit = {}
 
-        result = ChatbotService.run_benchmark_case(
+        result = ChatbotBenchmarkService.run_benchmark_case(
             service,
             question="test benchmark",
             intake_payload={},
@@ -327,9 +341,9 @@ class BenchmarkLanguagePolicyTests(SimpleTestCase):
         mock_get_config: MagicMock,
     ) -> None:
         mock_get_config.return_value = "english"
-        service = object.__new__(ChatbotService)
+        service = object.__new__(ChatbotBenchmarkService)
 
-        output_language = ChatbotService._get_benchmark_output_language(
+        output_language = ChatbotBenchmarkService._get_benchmark_output_language(
             service,
             "What causes COVID-19?",
         )
@@ -337,9 +351,9 @@ class BenchmarkLanguagePolicyTests(SimpleTestCase):
         self.assertEqual(output_language, "en")
 
     def test_build_benchmark_answer_policy_includes_english_rule(self) -> None:
-        service = object.__new__(ChatbotService)
+        service = object.__new__(ChatbotBenchmarkService)
 
-        policy = ChatbotService._build_benchmark_answer_policy(
+        policy = ChatbotBenchmarkService._build_benchmark_answer_policy(
             service,
             question="Is cancer a risk factor for COVID-19?",
             retrieval_output={"rerank": {"insufficient_evidence": False}},
@@ -347,10 +361,196 @@ class BenchmarkLanguagePolicyTests(SimpleTestCase):
         )
 
         self.assertIn("Output language: English only.", policy)
+        self.assertIn("For single-aspect questions, use 1-2 concise evidence-based sentences.", policy)
         self.assertIn("start with `Yes.` or `No.`", policy)
 
+    def test_build_benchmark_answer_policy_adds_what_is_definition_rule(self) -> None:
+        service = object.__new__(ChatbotBenchmarkService)
+
+        policy = ChatbotBenchmarkService._build_benchmark_answer_policy(
+            service,
+            question="What is a cough a symptom of?",
+            retrieval_output={
+                "rerank": {
+                    "insufficient_evidence": False,
+                    "intent": {"target_sections": ["symptom", "general"]},
+                }
+            },
+            output_language="en",
+        )
+
+        self.assertIn("For 'what is' questions, answer in direct definitional form", policy)
+        self.assertIn("Prefer sentence shape", policy)
+
+    def test_build_benchmark_answer_policy_adds_role_explanation_rule(self) -> None:
+        service = object.__new__(ChatbotBenchmarkService)
+
+        policy = ChatbotBenchmarkService._build_benchmark_answer_policy(
+            service,
+            question="What role does fever play as a symptom of COVID-19?",
+            retrieval_output={
+                "rerank": {
+                    "insufficient_evidence": False,
+                    "intent": {"target_sections": ["symptom"]},
+                }
+            },
+            output_language="en",
+        )
+
+        self.assertIn("For role/explanation questions", policy)
+
+    def test_build_benchmark_answer_policy_adds_what_is_risk_phrase_rule(self) -> None:
+        service = object.__new__(ChatbotBenchmarkService)
+
+        policy = ChatbotBenchmarkService._build_benchmark_answer_policy(
+            service,
+            question="What is the risk of COVID-19 for older people?",
+            retrieval_output={
+                "rerank": {
+                    "insufficient_evidence": False,
+                    "intent": {"target_sections": ["risk", "general"]},
+                }
+            },
+            output_language="en",
+        )
+
+        self.assertIn("The risk for older people is higher", policy)
+
+    def test_build_benchmark_answer_policy_adds_multi_aspect_coverage_rule(self) -> None:
+        service = object.__new__(ChatbotBenchmarkService)
+
+        policy = ChatbotBenchmarkService._build_benchmark_answer_policy(
+            service,
+            question=(
+                "What are the key characteristics of COVID-19, including its cause, "
+                "symptoms, and prevention?"
+            ),
+            retrieval_output={
+                "rerank": {
+                    "insufficient_evidence": False,
+                    "intent": {
+                        "target_sections": [
+                            "general",
+                            "aetiologies",
+                            "symptom",
+                            "living_and_preventive",
+                        ]
+                    },
+                }
+            },
+            output_language="en",
+        )
+
+        self.assertIn("This is a multi-aspect question: cover each asked aspect", policy)
+        self.assertIn("Use 2-4 sentences", policy)
+        self.assertIn("Focus only on evidence relevant to sections", policy)
+        self.assertIn("When cause is asked, explicitly mention SARS-CoV-2 as the cause.", policy)
+        self.assertIn("For prevention-focused questions, include vaccination, masking, and distancing", policy)
+
+    def test_detect_benchmark_intent_includes_risk_for_older_people(self) -> None:
+        service = object.__new__(ChatbotBenchmarkService)
+
+        intent = ChatbotBenchmarkService._detect_benchmark_intent(
+            service,
+            "What is the risk of COVID-19 for older people?",
+        )
+
+        self.assertIn("risk", intent["target_sections"])
+        self.assertIn("general", intent["target_sections"])
+        self.assertTrue(any(term in intent["matched_terms"] for term in ["risk", "older people"]))
+
+    def test_build_benchmark_answer_policy_includes_risk_specific_rule(self) -> None:
+        service = object.__new__(ChatbotBenchmarkService)
+
+        policy = ChatbotBenchmarkService._build_benchmark_answer_policy(
+            service,
+            question="What is the risk of COVID-19 for older people?",
+            retrieval_output={
+                "rerank": {
+                    "insufficient_evidence": False,
+                    "intent": {"target_sections": ["risk", "general"]},
+                }
+            },
+            output_language="en",
+        )
+
+        self.assertTrue(
+            (
+                "When describing risk, explicitly state that older people are at higher risk of becoming seriously ill."
+                in policy
+            )
+            or ("The risk for older people is higher" in policy)
+        )
+
+    def test_shape_benchmark_answer_for_what_is_symptom_question(self) -> None:
+        service = object.__new__(ChatbotBenchmarkService)
+
+        shaped = ChatbotBenchmarkService._shape_benchmark_answer(
+            service,
+            question="What is a cough a symptom of?",
+            answer="Cough is a symptom of COVID-19.",
+            retrieval_output={
+                "rerank": {
+                    "intent": {"target_sections": ["symptom", "general"]}
+                }
+            },
+            output_language="en",
+        )
+
+        self.assertEqual(shaped, "COVID-19 is what cough is a symptom of.")
+
+    def test_shape_benchmark_answer_for_what_is_risk_question(self) -> None:
+        service = object.__new__(ChatbotBenchmarkService)
+
+        shaped = ChatbotBenchmarkService._shape_benchmark_answer(
+            service,
+            question="What is the risk of COVID-19 for older people?",
+            answer="Older people are at higher risk of becoming seriously ill from COVID-19.",
+            retrieval_output={
+                "rerank": {
+                    "intent": {"target_sections": ["risk", "general"]}
+                }
+            },
+            output_language="en",
+        )
+
+        self.assertIn("The risk for older people is higher", shaped)
+
+    def test_shape_benchmark_answer_for_role_question(self) -> None:
+        service = object.__new__(ChatbotBenchmarkService)
+
+        shaped = ChatbotBenchmarkService._shape_benchmark_answer(
+            service,
+            question="What role does fever play as a symptom of COVID-19?",
+            answer="Fever is listed as one of the top three most common symptoms of COVID-19.",
+            retrieval_output={
+                "rerank": {
+                    "intent": {"target_sections": ["symptom"]}
+                }
+            },
+            output_language="en",
+        )
+
+        self.assertIn("Fever plays the role", shaped)
+
+    def test_shape_benchmark_answer_for_main_cause_question(self) -> None:
+        service = object.__new__(ChatbotBenchmarkService)
+
+        shaped = ChatbotBenchmarkService._shape_benchmark_answer(
+            service,
+            question=(
+                "What is the main cause of the disease that is called covid-19, and "
+                "what is the name of the virus that causes it, the sars-cov-2?"
+            ),
+            answer="COVID-19 is caused by the SARS-CoV-2 virus.",
+            retrieval_output={"rerank": {"intent": {"target_sections": ["aetiologies"]}}},
+            output_language="en",
+        )
+
+        self.assertEqual(shaped, "The main cause of COVID-19 is the SARS-CoV-2 virus.")
+
     def test_enforce_benchmark_output_language_rewrites_vietnamese_to_english(self) -> None:
-        service = object.__new__(ChatbotService)
+        service = object.__new__(ChatbotBenchmarkService)
         service.llm = MagicMock(
             invoke=MagicMock(
                 return_value=SimpleNamespace(
@@ -359,7 +559,7 @@ class BenchmarkLanguagePolicyTests(SimpleTestCase):
             )
         )
 
-        rewritten = ChatbotService._enforce_benchmark_output_language(
+        rewritten = ChatbotBenchmarkService._enforce_benchmark_output_language(
             service,
             question="What causes COVID-19?",
             answer="COVID-19 là bệnh do virus SARS-CoV-2 gây ra.",
