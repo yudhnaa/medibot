@@ -279,7 +279,188 @@ class RagasJudgeEvaluatorTests(SimpleTestCase):
             ),
             1,
         )
+        self.assertEqual(
+            retrieved_contexts.count("Older people and diabetes are risk factors."),
+            0,
+        )
         self.assertNotIn("Broad context snapshot.", retrieved_contexts)
+
+    def test_build_judge_contexts_prioritizes_target_section_coverage(self):
+        evaluator = RagasJudgeEvaluator(metrics=["faithfulness"])
+        contexts = evaluator._build_judge_contexts(
+            retrieval_output={
+                "rerank": {
+                    "intent": {
+                        "target_sections": ["symptom", "aetiologies"],
+                    }
+                },
+                "summaries": {
+                    "coronavirus disease (covid-19)": (
+                        "covid-19 is an infectious disease caused by the sars-cov-2 virus. "
+                        "main symptoms include fever, cough, and tiredness."
+                    )
+                },
+                "retrieved_items": [
+                    {
+                        "title": "coronavirus disease (covid-19)",
+                        "section": "symptom",
+                        "content_preview": "fever cough tiredness",
+                    },
+                    {
+                        "title": "coronavirus disease (covid-19)",
+                        "section": "aetiologies",
+                        "content_preview": "sars-cov-2 virus",
+                    },
+                ],
+                "retrieved_context_texts": [
+                    "fever cough tiredness",
+                    "sars-cov-2 virus",
+                ],
+            },
+            generation_output={"context_snapshot": "Broad context snapshot."},
+            question_text="What are the main symptoms of COVID-19 and what causes this infectious disease?",
+            default_top_k=4,
+            char_limit=700,
+        )
+
+        self.assertGreaterEqual(len(contexts), 2)
+        lowered = "\n".join(contexts).lower()
+        self.assertIn("symptom", lowered)
+        self.assertTrue("cause:" in lowered or "caused by" in lowered)
+        self.assertFalse(
+            any(text.lower().startswith("coronavirus disease (covid-19) ") for text in contexts)
+        )
+
+    def test_build_judge_contexts_drops_redundant_general_summary_for_risk_queries(self):
+        evaluator = RagasJudgeEvaluator(metrics=["faithfulness"])
+        contexts = evaluator._build_judge_contexts(
+            retrieval_output={
+                "rerank": {
+                    "intent": {
+                        "target_sections": ["risk"],
+                    }
+                },
+                "summaries": {
+                    "coronavirus disease (covid-19)": (
+                        "covid-19 is an infectious disease caused by the sars-cov-2 virus. "
+                        "most people experience mild to moderate respiratory illness."
+                    )
+                },
+                "retrieved_items": [
+                    {
+                        "title": "coronavirus disease (covid-19)",
+                        "section": "risk",
+                        "content_preview": (
+                            "older people cardiovascular disease diabetes "
+                            "chronic respiratory disease cancer"
+                        ),
+                    },
+                    {
+                        "title": "coronavirus disease (covid-19)",
+                        "section": "general",
+                        "content_preview": (
+                            "covid-19 is an infectious disease caused by the "
+                            "sars-cov-2 virus"
+                        ),
+                    },
+                ],
+                "retrieved_context_texts": [
+                    "older people cardiovascular disease diabetes chronic respiratory disease cancer"
+                ],
+            },
+            generation_output={"context_snapshot": "Broad context snapshot."},
+            question_text="What are the risk factors for COVID-19, and is cancer one of them?",
+            default_top_k=4,
+            char_limit=700,
+        )
+
+        self.assertTrue(contexts)
+        lowered = "\n".join(contexts).lower()
+        self.assertIn("risk factors include", lowered)
+        self.assertFalse(
+            any(text.lower().startswith("coronavirus disease (covid-19) ") for text in contexts)
+        )
+        self.assertTrue(
+            any("covid-19 is an infectious disease caused by" in text.lower() for text in contexts)
+        )
+        self.assertLessEqual(len(contexts), 3)
+
+    def test_detect_context_sections_maps_general_covid_context_to_risk_when_targeted(self):
+        evaluator = RagasJudgeEvaluator(metrics=["faithfulness"])
+        sections = evaluator._detect_context_sections(
+            text=(
+                "covid-19 is an infectious disease caused by the sars-cov-2 virus. "
+                "most people experience mild to moderate respiratory illness."
+            ),
+            target_sections={"risk"},
+        )
+
+        self.assertEqual(sections, {"risk"})
+
+    def test_detect_context_sections_keeps_aetiology_signal_for_symptom_cause_target(self):
+        evaluator = RagasJudgeEvaluator(metrics=["faithfulness"])
+        sections = evaluator._detect_context_sections(
+            text=(
+                "covid-19 is an infectious disease caused by the sars-cov-2 virus. "
+                "most people experience mild to moderate respiratory illness."
+            ),
+            target_sections={"symptom", "aetiologies"},
+        )
+
+        self.assertIn("aetiologies", sections)
+        self.assertIn("symptom", sections)
+
+    def test_detect_context_sections_without_targets_uses_default_mapping(self):
+        evaluator = RagasJudgeEvaluator(metrics=["faithfulness"])
+        sections = evaluator._detect_context_sections(
+            text="covid-19 is an infectious disease caused by the sars-cov-2 virus.",
+            target_sections=set(),
+        )
+
+        self.assertEqual(sections, {"aetiologies", "symptom"})
+
+    def test_prepare_ragas_contexts_dedupes_prefixed_and_raw_duplicates(self):
+        evaluator = RagasJudgeEvaluator(metrics=["faithfulness"])
+        contexts = evaluator._prepare_ragas_contexts(
+            raw_contexts=[
+                "Main symptoms include fever, cough, tiredness.",
+                "fever, cough, tiredness.",
+                "Cause: sars-cov-2 virus.",
+                "sars-cov-2 virus",
+                "Prevention guidance: get vaccinated.",
+                "get vaccinated",
+            ],
+            top_k=6,
+            char_limit=700,
+        )
+
+        self.assertEqual(len(contexts), 3)
+        self.assertEqual(contexts[0], "Main symptoms include fever, cough, tiredness.")
+        self.assertEqual(contexts[1], "Cause: sars-cov-2 virus.")
+        self.assertEqual(contexts[2], "Prevention guidance: get vaccinated.")
+
+    def test_prepare_ragas_contexts_dedupes_long_prefix_variants(self):
+        evaluator = RagasJudgeEvaluator(metrics=["faithfulness"])
+        long_text = (
+            "get vaccinated stay at least 1 metre apart from others wear a properly fitted "
+            "mask choose open, well-ventilated spaces open a window if indoors wash hands "
+            "regularly with soap and water or alcohol-based hand rub cover mouth and nose "
+            "when coughing or sneezing stay home and self-isolate if unwell practice "
+            "respiratory etiquette"
+        )
+        contexts = evaluator._prepare_ragas_contexts(
+            raw_contexts=[
+                f"Prevention guidance: {long_text}.",
+                f"{long_text}",
+                "Cause: sars-cov-2 virus.",
+            ],
+            top_k=6,
+            char_limit=700,
+        )
+
+        self.assertEqual(len(contexts), 2)
+        self.assertEqual(contexts[0], f"Prevention guidance: {long_text}.")
+        self.assertEqual(contexts[1], "Cause: sars-cov-2 virus.")
 
     def test_evaluate_batch_includes_summary_for_sparse_single_section_evidence(self):
         evaluator = RagasJudgeEvaluator(metrics=["faithfulness"])

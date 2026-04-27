@@ -56,7 +56,7 @@ DEFAULT_RAGAS_CONTEXT_CHAR_LIMIT = 700
 RAGAS_RELEASE_GATE_THRESHOLDS: dict[str, tuple[str, float]] = {
     "faithfulness": (">=", 0.8),
     "answer_relevancy": (">=", 0.7),
-    "context_precision": (">=", 0.6),
+    "context_precision": (">=", 0.7),
     "context_recall": (">=", 0.7),
 }
 

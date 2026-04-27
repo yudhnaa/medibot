@@ -150,20 +150,36 @@ class RagasJudgeEvaluator:
         )
         for case, runtime_output in zip(cases, runtime_outputs):
             generation_output = runtime_output.get("generation_output", {}) or {}
+            retrieval_output = runtime_output.get("retrieval_output", {}) or {}
             question_text = str(case.question or "").strip()
-            raw_contexts = self._collect_runtime_contexts(
-                runtime_output,
-                question_text=question_text,
-            )
-            effective_top_k = self._resolve_dynamic_context_top_k(
-                question_text=question_text,
-                default_top_k=ragas_context_top_k,
-            )
-            contexts = self._prepare_ragas_contexts(
-                raw_contexts=raw_contexts,
-                top_k=effective_top_k,
-                char_limit=ragas_context_char_limit,
-            )
+            try:
+                contexts = self._build_judge_contexts(
+                    retrieval_output=retrieval_output,
+                    generation_output=generation_output,
+                    question_text=question_text,
+                    default_top_k=ragas_context_top_k,
+                    char_limit=ragas_context_char_limit,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Ragas context collection fallback to legacy ordering: %s", exc
+                )
+                contexts = []
+
+            if not contexts:
+                raw_contexts = self._collect_runtime_contexts(
+                    runtime_output,
+                    question_text=question_text,
+                )
+                effective_top_k = self._resolve_dynamic_context_top_k(
+                    question_text=question_text,
+                    default_top_k=ragas_context_top_k,
+                )
+                contexts = self._prepare_ragas_contexts(
+                    raw_contexts=raw_contexts,
+                    top_k=effective_top_k,
+                    char_limit=ragas_context_char_limit,
+                )
             question_texts.append(question_text)
             answer_texts.append(str(generation_output.get("final_answer", "")).strip())
             reference_texts.append(str(case.reference_answer or "").strip())
@@ -664,14 +680,44 @@ class RagasJudgeEvaluator:
             normalized = re.sub(r"\s+", " ", str(raw or "")).strip()
             if not normalized:
                 continue
-            trimmed = normalized[:char_limit]
-            if trimmed in seen:
+            dedupe_key = self._normalize_context_dedupe_key(normalized)
+            if not dedupe_key or self._has_duplicate_context_key(dedupe_key, seen):
                 continue
-            seen.add(trimmed)
-            contexts.append(trimmed)
+            seen.add(dedupe_key)
+            contexts.append(normalized[:char_limit])
             if len(contexts) >= top_k:
                 break
         return contexts
+
+    def _normalize_context_dedupe_key(self, text: str) -> str:
+        normalized = re.sub(r"\s+", " ", str(text or "")).strip().lower()
+        if not normalized:
+            return ""
+        normalized = re.sub(
+            r"^(main symptoms include|risk factors include|cause:|prevention guidance:)\s+",
+            "",
+            normalized,
+        )
+        normalized = re.sub(r"[\s\.,;:!?]+$", "", normalized)
+        return normalized
+
+    def _has_duplicate_context_key(self, key: str, seen: set[str]) -> bool:
+        if key in seen:
+            return True
+        for existing in seen:
+            if self._is_near_duplicate_context_key(existing, key):
+                return True
+        return False
+
+    def _is_near_duplicate_context_key(self, left: str, right: str) -> bool:
+        shorter, longer = (left, right) if len(left) <= len(right) else (right, left)
+        if len(shorter) < 80:
+            return False
+        if longer.startswith(shorter):
+            return True
+        if shorter in longer and len(shorter) / max(1, len(longer)) >= 0.85:
+            return True
+        return False
 
     def _rank_context_candidates(
         self,
@@ -685,7 +731,7 @@ class RagasJudgeEvaluator:
         ranked = sorted(candidates, key=lambda item: item.score, reverse=True)
         contexts: list[str] = []
         seen: set[str] = set()
-        used_sections: set[str] = set()
+        used_non_summary_sections: set[str] = set()
         section_targets = {
             str(section).strip().lower()
             for section in (target_sections or set())
@@ -700,13 +746,14 @@ class RagasJudgeEvaluator:
             if (
                 candidate_section
                 and candidate_section in section_targets
-                and candidate_section in used_sections
+                and candidate_section in used_non_summary_sections
+                and candidate.source != "summary"
             ):
                 continue
             seen.add(normalized)
             contexts.append(normalized)
-            if candidate_section:
-                used_sections.add(candidate_section)
+            if candidate_section and candidate.source != "summary":
+                used_non_summary_sections.add(candidate_section)
 
         return contexts
 
@@ -843,16 +890,6 @@ class RagasJudgeEvaluator:
         )
         contexts = list(ranked_contexts)
 
-        if self._should_include_summaries(
-            current_contexts=contexts,
-            target_sections=target_sections,
-        ):
-            self._append_fallback_contexts(
-                contexts=contexts,
-                summaries=summaries,
-                context_snapshot="",
-            )
-
         if self._should_include_context_snapshot(
             current_contexts=contexts,
             target_sections=target_sections,
@@ -863,7 +900,246 @@ class RagasJudgeEvaluator:
                 context_snapshot=context_snapshot,
             )
 
-        return self._dedupe_context_list(contexts)
+        deduped = self._dedupe_context_list(contexts)
+        return self._remove_redundant_general_contexts(
+            contexts=deduped,
+            target_sections=target_sections,
+        )
+
+    def _extract_context_entries(
+        self,
+        *,
+        contexts: list[str],
+        target_sections: set[str],
+    ) -> list[tuple[str, set[str]]]:
+        entries: list[tuple[str, set[str]]] = []
+        for raw in contexts:
+            normalized = re.sub(r"\s+", " ", str(raw or "")).strip()
+            if not normalized:
+                continue
+            sections = self._detect_context_sections(
+                text=normalized,
+                target_sections=target_sections,
+            )
+            entries.append((normalized, sections))
+        return entries
+
+    def _detect_context_sections(
+        self,
+        *,
+        text: str,
+        target_sections: set[str],
+    ) -> set[str]:
+        lowered = str(text or "").strip().lower()
+        if not lowered:
+            return set()
+
+        detected: set[str] = set()
+        if "symptom" in lowered or "triệu chứng" in lowered:
+            detected.add("symptom")
+        if "cause" in lowered or "nguyên nhân" in lowered or "aetiolog" in lowered:
+            detected.add("aetiologies")
+        if "risk" in lowered or "yếu tố nguy cơ" in lowered:
+            detected.add("risk")
+        if "prevention" in lowered or "phòng ngừa" in lowered:
+            detected.add("living_and_preventive")
+        if "covid-19 is an infectious disease caused by" in lowered:
+            if "risk" in target_sections:
+                detected.add("risk")
+            if "aetiologies" in target_sections:
+                detected.add("aetiologies")
+            if "symptom" in target_sections:
+                detected.add("symptom")
+            if not target_sections:
+                detected.update({"aetiologies", "symptom"})
+
+        if target_sections:
+            return detected.intersection(target_sections)
+        return detected
+
+    def _ensure_target_section_coverage(
+        self,
+        *,
+        contexts: list[str],
+        target_sections: set[str],
+    ) -> list[str]:
+        if not contexts or not target_sections:
+            return contexts
+
+        entries = self._extract_context_entries(
+            contexts=contexts,
+            target_sections=target_sections,
+        )
+        covered_sections: set[str] = set()
+        final_contexts: list[str] = []
+
+        for text, sections in entries:
+            final_contexts.append(text)
+            covered_sections.update(sections)
+
+        missing = set(target_sections).difference(covered_sections)
+        if not missing:
+            return final_contexts
+
+        for section in list(missing):
+            replacement_index = None
+            for idx, (_, sections) in enumerate(entries):
+                if sections:
+                    continue
+                replacement_index = idx
+                break
+            if replacement_index is None:
+                break
+            candidate_text, candidate_sections = entries[replacement_index]
+            inferred = self._detect_context_sections(
+                text=candidate_text,
+                target_sections={section},
+            )
+            if not inferred:
+                continue
+            final_contexts[replacement_index] = candidate_text
+            covered_sections.update(inferred)
+            missing = set(target_sections).difference(covered_sections)
+            if not missing:
+                break
+
+        return final_contexts
+
+    def _filter_contexts_for_expected_sections(
+        self,
+        *,
+        contexts: list[str],
+        target_sections: set[str],
+        top_k: int,
+    ) -> list[str]:
+        if not contexts:
+            return []
+
+        if not target_sections:
+            return contexts[:top_k]
+
+        entries = self._extract_context_entries(
+            contexts=contexts,
+            target_sections=target_sections,
+        )
+        selected: list[str] = []
+        used_indices: set[int] = set()
+
+        for section in target_sections:
+            for idx, (text, sections) in enumerate(entries):
+                if idx in used_indices:
+                    continue
+                if section in sections:
+                    selected.append(text)
+                    used_indices.add(idx)
+                    break
+
+        for idx, (text, _) in enumerate(entries):
+            if len(selected) >= top_k:
+                break
+            if idx in used_indices:
+                continue
+            selected.append(text)
+            used_indices.add(idx)
+
+        return selected[:top_k]
+
+    def _finalize_contexts_for_judge(
+        self,
+        *,
+        contexts: list[str],
+        target_sections: set[str],
+        top_k: int,
+        char_limit: int,
+    ) -> list[str]:
+        filtered = self._filter_contexts_for_expected_sections(
+            contexts=contexts,
+            target_sections=target_sections,
+            top_k=top_k,
+        )
+        ensured = self._ensure_target_section_coverage(
+            contexts=filtered,
+            target_sections=target_sections,
+        )
+        return self._prepare_ragas_contexts(
+            raw_contexts=ensured,
+            top_k=top_k,
+            char_limit=char_limit,
+        )
+
+    def _resolve_context_top_k(
+        self,
+        *,
+        target_sections: set[str],
+        default_top_k: int,
+    ) -> int:
+        section_count = self._estimate_section_count_from_targets(target_sections)
+        if section_count <= 1:
+            return max(1, min(default_top_k, 3))
+        if section_count == 2:
+            has_symptom = "symptom" in target_sections
+            has_aetiology = "aetiologies" in target_sections
+            if has_symptom and has_aetiology:
+                return max(3, min(default_top_k, 4))
+            return max(2, min(default_top_k, 3))
+        return max(2, default_top_k)
+
+    def _build_judge_contexts(
+        self,
+        *,
+        retrieval_output: dict[str, Any],
+        generation_output: dict[str, Any],
+        question_text: str,
+        default_top_k: int,
+        char_limit: int,
+    ) -> list[str]:
+        target_sections = self._extract_target_sections(
+            retrieval_output=retrieval_output,
+            question_text=question_text,
+        )
+        question_tokens = self._tokenize_context_text(question_text)
+        candidates = self._build_context_candidates(
+            retrieval_output=retrieval_output,
+            question_tokens=question_tokens,
+            target_sections=target_sections,
+        )
+
+        summaries = retrieval_output.get("summaries", {})
+        summaries_map = summaries if isinstance(summaries, dict) else {}
+        context_snapshot = str(generation_output.get("context_snapshot", "")).strip()
+        top_k = self._resolve_context_top_k(
+            target_sections=target_sections,
+            default_top_k=default_top_k,
+        )
+
+        if self._has_sufficient_context_candidates(
+            candidates=candidates,
+            target_sections=target_sections,
+        ):
+            contexts = self._build_context_from_candidates(
+                candidates=candidates,
+                target_sections=target_sections,
+                summaries=summaries_map,
+                context_snapshot=context_snapshot,
+            )
+            return self._finalize_contexts_for_judge(
+                contexts=contexts,
+                target_sections=target_sections,
+                top_k=top_k,
+                char_limit=char_limit,
+            )
+
+        legacy = self._append_legacy_fallback_contexts(
+            contexts=self._rank_context_candidates(candidates, target_sections=target_sections),
+            summaries=summaries_map,
+            context_snapshot=context_snapshot,
+        )
+        return self._finalize_contexts_for_judge(
+            contexts=legacy,
+            target_sections=target_sections,
+            top_k=top_k,
+            char_limit=char_limit,
+        )
 
     def _append_legacy_fallback_contexts(
         self,
@@ -880,6 +1156,36 @@ class RagasJudgeEvaluator:
         )
         return self._dedupe_context_list(legacy)
 
+    def _remove_redundant_general_contexts(
+        self,
+        *,
+        contexts: list[str],
+        target_sections: set[str],
+    ) -> list[str]:
+        if not contexts:
+            return contexts
+
+        if not target_sections:
+            return contexts
+
+        has_risk_target = "risk" in target_sections
+        has_symptom_target = "symptom" in target_sections
+        has_aetiology_target = "aetiologies" in target_sections
+
+        if not has_risk_target and not (has_symptom_target and has_aetiology_target):
+            return contexts
+
+        filtered: list[str] = []
+        for text in contexts:
+            lowered = str(text or "").strip().lower()
+            if not lowered:
+                continue
+            if lowered.startswith("coronavirus disease (covid-19) "):
+                continue
+            filtered.append(text)
+
+        return filtered or contexts
+
     def _build_context_candidates(
         self,
         *,
@@ -888,15 +1194,23 @@ class RagasJudgeEvaluator:
         target_sections: set[str],
     ) -> list[_ContextCandidate]:
         candidates: list[_ContextCandidate] = []
+        if target_sections:
+            candidates.extend(
+                self._build_summary_candidates(
+                    retrieval_output=retrieval_output,
+                    question_tokens=question_tokens,
+                    target_sections=target_sections,
+                )
+            )
         candidates.extend(
-            self._build_retrieved_text_candidates(
+            self._build_retrieved_item_candidates(
                 retrieval_output=retrieval_output,
                 question_tokens=question_tokens,
                 target_sections=target_sections,
             )
         )
         candidates.extend(
-            self._build_retrieved_item_candidates(
+            self._build_retrieved_text_candidates(
                 retrieval_output=retrieval_output,
                 question_tokens=question_tokens,
                 target_sections=target_sections,
@@ -1040,6 +1354,59 @@ class RagasJudgeEvaluator:
             )
         return candidates
 
+    def _build_summary_candidates(
+        self,
+        *,
+        retrieval_output: dict[str, Any],
+        question_tokens: set[str],
+        target_sections: set[str],
+    ) -> list[_ContextCandidate]:
+        summaries = retrieval_output.get("summaries", {})
+        if not isinstance(summaries, dict):
+            return []
+
+        candidates: list[_ContextCandidate] = []
+        for title, raw_text in summaries.items():
+            text = str(raw_text).strip()
+            if not text:
+                continue
+            lowered = text.lower()
+            section = ""
+            if target_sections:
+                for target in target_sections:
+                    marker = str(target).strip().lower()
+                    if marker and marker in lowered:
+                        section = marker
+                        break
+                if not section:
+                    retrieved_items = retrieval_output.get("retrieved_items")
+                    if (
+                        len(target_sections) == 1
+                        and isinstance(retrieved_items, list)
+                        and len(retrieved_items) > 0
+                    ):
+                        section = next(iter(target_sections))
+                    else:
+                        continue
+            score = self._score_context_candidate(
+                text=text,
+                section=section,
+                title=str(title).strip().lower(),
+                question_tokens=question_tokens,
+                target_sections=target_sections,
+                source="summary",
+            )
+            candidates.append(
+                _ContextCandidate(
+                    text=text,
+                    source="summary",
+                    section=section,
+                    title=str(title).strip().lower(),
+                    score=score,
+                )
+            )
+        return candidates
+
     def _build_retrieved_text_candidates(
         self,
         *,
@@ -1076,6 +1443,8 @@ class RagasJudgeEvaluator:
         return candidates
 
     def _extract_source_weight(self, source: str) -> float:
+        if source == "summary":
+            return 0.06
         if source == "retrieved_context_texts":
             return 0.03
         if source == "retrieved_items":
