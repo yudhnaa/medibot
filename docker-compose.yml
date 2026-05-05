@@ -92,6 +92,7 @@ services:
     volumes:
       - torch_weights:/root/.cache/torch
       - media_data:/usr/src/app/media
+      - ./nlp/services/libs:/usr/src/app/nlp/services/libs:ro
     env_file:
       - .env
     environment:
@@ -126,6 +127,8 @@ services:
       ]
     env_file:
       - .env
+    volumes:
+      - ./nlp/services/libs:/usr/src/app/nlp/services/libs:ro
     environment:
       DEBUG: "False"
       DJANGO_SETTINGS_MODULE: django_template.settings.prod
@@ -152,6 +155,8 @@ services:
       - ops
     env_file:
       - .env
+    volumes:
+      - ./nlp/services/libs:/usr/src/app/nlp/services/libs:ro
     environment:
       DEBUG: "False"
       DJANGO_SETTINGS_MODULE: django_template.settings.prod

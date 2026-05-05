@@ -82,12 +82,17 @@ jobs:
           MEDIBOT_BACKEND_IMAGE: ${{ needs.build.outputs.image }}
           STAGING_APP_DIR: ${{ vars.STAGING_DO_APP_DIR }}
           STAGING_URL: ${{ inputs.smoke_url }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.STAGING_R2_ACCESS_KEY_ID || secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.STAGING_R2_SECRET_ACCESS_KEY || secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ACCOUNT_ID: ${{ vars.STAGING_R2_ACCOUNT_ID || vars.R2_ACCOUNT_ID }}
+          R2_BUCKET: ${{ vars.STAGING_R2_BUCKET || vars.R2_BUCKET }}
+          R2_LIBS_PREFIX: ${{ vars.STAGING_R2_LIBS_PREFIX || vars.R2_LIBS_PREFIX || 'libs' }}
         with:
           host: ${{ vars.STAGING_DO_HOST }}
           username: ${{ vars.STAGING_DO_USER }}
           key: ${{ secrets.STAGING_DO_SSH_KEY }}
           port: ${{ vars.STAGING_DO_SSH_PORT || 22 }}
-          envs: GHCR_TOKEN,GHCR_USERNAME,IMAGE_TAG,MEDIBOT_BACKEND_IMAGE,STAGING_APP_DIR,STAGING_URL
+          envs: GHCR_TOKEN,GHCR_USERNAME,IMAGE_TAG,MEDIBOT_BACKEND_IMAGE,STAGING_APP_DIR,STAGING_URL,AWS_ACCESS_KEY_ID,AWS_SECRET_ACCESS_KEY,R2_ACCOUNT_ID,R2_BUCKET,R2_LIBS_PREFIX
           script: |
             set -eu
 
@@ -99,6 +104,8 @@ jobs:
 
             export IMAGE_TAG
             export MEDIBOT_BACKEND_IMAGE
+
+            ./scripts/sync-r2-libs.sh
 
             docker compose -f docker-compose.yml pull
             docker compose -f docker-compose.yml up -d medibot-db medibot-redis
