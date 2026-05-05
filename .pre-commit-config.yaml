@@ -4,7 +4,6 @@ default_stages: [pre-commit]
 exclude: |
   (?x)^(
     .*\/migrations\/.*|
-    django_template\/settings\/.*|
     \.venv\/.*|
     venv\/.*|
     env\/.*
@@ -22,6 +21,7 @@ repos:
       - id: isort
         name: isort
         entry: python -m isort
+        args: ["--filter-files"]
         language: system
         types_or: [python, pyi]
 
