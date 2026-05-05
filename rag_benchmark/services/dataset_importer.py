@@ -188,63 +188,25 @@ class BenchmarkDatasetImporter:
         expected_version = version.strip()
         for index, case in enumerate(cases, start=1):
             tag = f"Case #{index}"
-            missing = [field for field in REQUIRED_CASE_FIELDS if field not in case]
-            if missing:
-                errors.append(f"{tag}: missing fields {', '.join(missing)}")
+            if self._add_required_field_errors(case, tag, errors):
                 continue
 
-            case_id = str(case.get("case_id", "")).strip()
-            if not case_id:
-                errors.append(f"{tag}: case_id must be non-empty")
-            elif case_id in seen_case_ids:
-                errors.append(f"{tag}: duplicate case_id `{case_id}`")
+            case_id = self._validate_case_id(case, tag, seen_case_ids, errors)
             seen_case_ids.add(case_id)
 
-            dataset_version = str(case.get("dataset_version", "")).strip()
-            if not dataset_version:
-                errors.append(f"{tag}: dataset_version must be non-empty")
-            elif dataset_version != expected_version:
-                errors.append(
-                    (
-                        f"{tag}: dataset_version `{dataset_version}` does not match "
-                        f"import version `{expected_version}`"
-                    )
-                )
-
-            split = str(case.get("split", "")).strip().lower()
-            if split not in valid_splits:
-                errors.append(f"{tag}: invalid split `{split}`")
-            else:
+            self._validate_case_version(case, tag, expected_version, errors)
+            split = self._validate_case_split(case, tag, valid_splits, errors)
+            if split in valid_splits:
                 split_counter[split] += 1
 
-            expected_mode = str(case.get("expected_mode", "")).strip()
-            if expected_mode not in valid_modes:
-                errors.append(f"{tag}: invalid expected_mode `{expected_mode}`")
-
-            expected_behavior = str(case.get("expected_behavior", "")).strip()
-            if expected_behavior not in valid_behaviors:
-                errors.append(f"{tag}: invalid expected_behavior `{expected_behavior}`")
-
-            for field in LIST_FIELDS:
-                value = case.get(field, [])
-                if value is None:
-                    continue
-                if not isinstance(value, list):
-                    errors.append(f"{tag}: `{field}` must be a list")
-
-            question = str(case.get("question", "")).strip()
-            if not question:
-                errors.append(f"{tag}: question must be non-empty")
-
-            scenario = str(case.get("scenario", "")).strip()
-            if not scenario:
-                errors.append(f"{tag}: scenario must be non-empty")
-
-            intake_payload = case.get("intake_payload", {})
-            if intake_payload is None:
-                continue
-            if not isinstance(intake_payload, dict):
-                errors.append(f"{tag}: intake_payload must be an object")
+            self._validate_case_enum(case, tag, "expected_mode", valid_modes, errors)
+            self._validate_case_enum(
+                case, tag, "expected_behavior", valid_behaviors, errors
+            )
+            self._validate_list_fields(case, tag, errors)
+            self._validate_text_field(case, tag, "question", errors)
+            self._validate_text_field(case, tag, "scenario", errors)
+            self._validate_intake_payload(case, tag, errors)
 
         if split_counter:
             missing_splits = sorted(valid_splits.difference(split_counter.keys()))
@@ -257,6 +219,105 @@ class BenchmarkDatasetImporter:
                 )
 
         return errors
+
+    def _add_required_field_errors(
+        self,
+        case: dict[str, Any],
+        tag: str,
+        errors: list[str],
+    ) -> bool:
+        missing = [field for field in REQUIRED_CASE_FIELDS if field not in case]
+        if missing:
+            errors.append(f"{tag}: missing fields {', '.join(missing)}")
+            return True
+        return False
+
+    def _validate_case_id(
+        self,
+        case: dict[str, Any],
+        tag: str,
+        seen_case_ids: set[str],
+        errors: list[str],
+    ) -> str:
+        case_id = str(case.get("case_id", "")).strip()
+        if not case_id:
+            errors.append(f"{tag}: case_id must be non-empty")
+        elif case_id in seen_case_ids:
+            errors.append(f"{tag}: duplicate case_id `{case_id}`")
+        return case_id
+
+    def _validate_case_version(
+        self,
+        case: dict[str, Any],
+        tag: str,
+        expected_version: str,
+        errors: list[str],
+    ) -> None:
+        dataset_version = str(case.get("dataset_version", "")).strip()
+        if not dataset_version:
+            errors.append(f"{tag}: dataset_version must be non-empty")
+        elif dataset_version != expected_version:
+            errors.append(
+                (
+                    f"{tag}: dataset_version `{dataset_version}` does not match "
+                    f"import version `{expected_version}`"
+                )
+            )
+
+    def _validate_case_split(
+        self,
+        case: dict[str, Any],
+        tag: str,
+        valid_splits: set[str],
+        errors: list[str],
+    ) -> str:
+        split = str(case.get("split", "")).strip().lower()
+        if split not in valid_splits:
+            errors.append(f"{tag}: invalid split `{split}`")
+        return split
+
+    def _validate_case_enum(
+        self,
+        case: dict[str, Any],
+        tag: str,
+        field: str,
+        valid_values: set[str],
+        errors: list[str],
+    ) -> None:
+        value = str(case.get(field, "")).strip()
+        if value not in valid_values:
+            errors.append(f"{tag}: invalid {field} `{value}`")
+
+    def _validate_list_fields(
+        self,
+        case: dict[str, Any],
+        tag: str,
+        errors: list[str],
+    ) -> None:
+        for field in LIST_FIELDS:
+            value = case.get(field, [])
+            if value is not None and not isinstance(value, list):
+                errors.append(f"{tag}: `{field}` must be a list")
+
+    def _validate_text_field(
+        self,
+        case: dict[str, Any],
+        tag: str,
+        field: str,
+        errors: list[str],
+    ) -> None:
+        if not str(case.get(field, "")).strip():
+            errors.append(f"{tag}: {field} must be non-empty")
+
+    def _validate_intake_payload(
+        self,
+        case: dict[str, Any],
+        tag: str,
+        errors: list[str],
+    ) -> None:
+        intake_payload = case.get("intake_payload", {})
+        if intake_payload is not None and not isinstance(intake_payload, dict):
+            errors.append(f"{tag}: intake_payload must be an object")
 
     def _build_report(self, cases: list[dict[str, Any]]) -> DatasetImportReport:
         split_counter = Counter(

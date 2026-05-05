@@ -80,51 +80,80 @@ class QualityService:
             return {"duplicates": [], "count": 0}
 
         duplicates = []
-        embeddings = {}
-        for doc in docs:
-            doc_id = doc.pk
-            if doc_id is None:
-                continue
-            embeddings[doc_id] = np.array(doc.embedding)
+        embeddings = QualityService._load_embeddings(docs)
         processed = set()
 
         for doc1_id, emb1 in embeddings.items():
             if doc1_id in processed:
                 continue
 
-            group = [doc1_id]
-            norm1 = np.linalg.norm(emb1)
-
-            for doc2_id, emb2 in embeddings.items():
-                if doc1_id == doc2_id or doc2_id in processed:
-                    continue
-
-                norm2 = np.linalg.norm(emb2)
-                if norm1 == 0 or norm2 == 0:
-                    cosine_sim = 0
-                else:
-                    cosine_sim = np.dot(emb1, emb2) / (norm1 * norm2)
-
-                if cosine_sim >= similarity_threshold:
-                    group.append(doc2_id)
-                    processed.add(doc2_id)
+            group = QualityService._find_duplicate_group(
+                doc1_id,
+                emb1,
+                embeddings,
+                processed,
+                similarity_threshold,
+            )
 
             if len(group) > 1:
                 processed.add(doc1_id)
-                docs_in_group = [
-                    {
-                        "id": doc.pk,
-                        "title": doc.title,
-                        "section_type": doc.section_type,
-                        "created_at": doc.created_at,
-                    }
-                    for doc in docs.filter(id__in=group)
-                ]
                 duplicates.append(
-                    {"group_size": len(group), "documents": docs_in_group}
+                    {
+                        "group_size": len(group),
+                        "documents": QualityService._serialize_duplicate_docs(
+                            docs.filter(id__in=group)
+                        ),
+                    }
                 )
 
         return {"duplicates": duplicates, "count": len(duplicates)}
+
+    @staticmethod
+    def _load_embeddings(docs: Any) -> dict[int, np.ndarray]:
+        embeddings = {}
+        for doc in docs:
+            doc_id = doc.pk
+            if doc_id is not None:
+                embeddings[doc_id] = np.array(doc.embedding)
+        return embeddings
+
+    @staticmethod
+    def _find_duplicate_group(
+        doc1_id: int,
+        emb1: np.ndarray,
+        embeddings: dict[int, np.ndarray],
+        processed: set[int],
+        similarity_threshold: float,
+    ) -> list[int]:
+        group = [doc1_id]
+        for doc2_id, emb2 in embeddings.items():
+            if doc1_id == doc2_id or doc2_id in processed:
+                continue
+            cosine_sim = QualityService._cosine_similarity(emb1, emb2)
+            if cosine_sim >= similarity_threshold:
+                group.append(doc2_id)
+                processed.add(doc2_id)
+        return group
+
+    @staticmethod
+    def _cosine_similarity(emb1: np.ndarray, emb2: np.ndarray) -> float:
+        norm1 = np.linalg.norm(emb1)
+        norm2 = np.linalg.norm(emb2)
+        if norm1 == 0 or norm2 == 0:
+            return 0
+        return float(np.dot(emb1, emb2) / (norm1 * norm2))
+
+    @staticmethod
+    def _serialize_duplicate_docs(docs: Any) -> list[dict[str, Any]]:
+        return [
+            {
+                "id": doc.pk,
+                "title": doc.title,
+                "section_type": doc.section_type,
+                "created_at": doc.created_at,
+            }
+            for doc in docs
+        ]
 
     @staticmethod
     def compute_embedding_stats() -> dict[str, Any]:

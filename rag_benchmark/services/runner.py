@@ -65,30 +65,8 @@ class OfflineBenchmarkRunner:
                 f"No active benchmark cases available for split `{split_value}`"
             )
 
-        judge_conf = dict(judge_configuration or {})
-        judge_conf["enable_ragas"] = True
-        requested_metrics = self._normalize_metric_names(
-            judge_conf.get("ragas_metrics")
-        )
-        disabled_metrics = self._normalize_metric_names(
-            judge_conf.get("disabled_ragas_metrics")
-        )
-        effective_metrics = requested_metrics or list(DEFAULT_RAGAS_METRICS)
-        if disabled_metrics:
-            effective_metrics = [
-                metric for metric in effective_metrics if metric not in disabled_metrics
-            ]
-        if not effective_metrics:
-            raise ValueError("No active Ragas metrics after applying disable list")
-        judge_conf["ragas_metrics"] = effective_metrics
-        if disabled_metrics:
-            judge_conf["disabled_ragas_metrics"] = disabled_metrics
-        else:
-            judge_conf.pop("disabled_ragas_metrics", None)
-
-        run_scorer = self._build_run_scorer(active_metrics=effective_metrics)
-        judge_conf["ragas_release_gate_thresholds"] = (
-            self._serialize_release_thresholds(run_scorer.release_thresholds)
+        judge_conf, effective_metrics, run_scorer = self._prepare_judge_run_config(
+            judge_configuration
         )
         judge_evaluator = RagasJudgeEvaluator(metrics=effective_metrics)
         corpus_signature, corpus_payload = self._build_corpus_signature()
@@ -129,38 +107,13 @@ class OfflineBenchmarkRunner:
                 pending_for_judge.append(runtime_entry)
 
             if pending_for_judge:
-                judge_results = judge_evaluator.evaluate_batch(
-                    cases=[
-                        cast(BenchmarkCase, item["case"]) for item in pending_for_judge
-                    ],
-                    runtime_outputs=[
-                        cast(dict[str, Any], item["runtime_output"])
-                        for item in pending_for_judge
-                    ],
+                self._score_pending_cases(
+                    run=run,
+                    pending_for_judge=pending_for_judge,
+                    judge_evaluator=judge_evaluator,
+                    scorer=run_scorer,
+                    case_payloads=case_payloads,
                 )
-                if len(judge_results) < len(pending_for_judge):
-                    judge_results.extend(
-                        [
-                            {
-                                "enabled": True,
-                                "available": False,
-                                "error": "ragas_evaluation_failed: missing_batch_result",
-                            }
-                            for _ in range(len(pending_for_judge) - len(judge_results))
-                        ]
-                    )
-
-                for item, judge_result in zip(pending_for_judge, judge_results):
-                    case_payloads.append(
-                        self._persist_scored_case(
-                            run=run,
-                            case=cast(BenchmarkCase, item["case"]),
-                            base_payload=cast(dict[str, Any], item["base_payload"]),
-                            runtime_output=cast(dict[str, Any], item["runtime_output"]),
-                            judge_result=judge_result,
-                            scorer=run_scorer,
-                        )
-                    )
 
             aggregate = run_scorer.aggregate_run(
                 run=run,
@@ -182,6 +135,101 @@ class OfflineBenchmarkRunner:
             raise
 
         return run
+
+    def _prepare_judge_run_config(
+        self,
+        judge_configuration: dict[str, Any] | None,
+    ) -> tuple[dict[str, Any], list[str], RagasBenchmarkScorer]:
+        judge_conf = dict(judge_configuration or {})
+        judge_conf["enable_ragas"] = True
+        requested_metrics = self._normalize_metric_names(
+            judge_conf.get("ragas_metrics")
+        )
+        disabled_metrics = self._normalize_metric_names(
+            judge_conf.get("disabled_ragas_metrics")
+        )
+        effective_metrics = self._resolve_effective_metrics(
+            requested_metrics=requested_metrics,
+            disabled_metrics=disabled_metrics,
+        )
+        judge_conf["ragas_metrics"] = effective_metrics
+        if disabled_metrics:
+            judge_conf["disabled_ragas_metrics"] = disabled_metrics
+        else:
+            judge_conf.pop("disabled_ragas_metrics", None)
+
+        run_scorer = self._build_run_scorer(active_metrics=effective_metrics)
+        judge_conf["ragas_release_gate_thresholds"] = (
+            self._serialize_release_thresholds(run_scorer.release_thresholds)
+        )
+        return judge_conf, effective_metrics, run_scorer
+
+    def _resolve_effective_metrics(
+        self,
+        *,
+        requested_metrics: list[str],
+        disabled_metrics: list[str],
+    ) -> list[str]:
+        effective_metrics = requested_metrics or list(DEFAULT_RAGAS_METRICS)
+        if disabled_metrics:
+            effective_metrics = [
+                metric for metric in effective_metrics if metric not in disabled_metrics
+            ]
+        if not effective_metrics:
+            raise ValueError("No active Ragas metrics after applying disable list")
+        return effective_metrics
+
+    def _score_pending_cases(
+        self,
+        *,
+        run: BenchmarkRun,
+        pending_for_judge: list[dict[str, Any]],
+        judge_evaluator: RagasJudgeEvaluator,
+        scorer: RagasBenchmarkScorer,
+        case_payloads: list[dict[str, Any]],
+    ) -> None:
+        judge_results = judge_evaluator.evaluate_batch(
+            cases=[cast(BenchmarkCase, item["case"]) for item in pending_for_judge],
+            runtime_outputs=[
+                cast(dict[str, Any], item["runtime_output"])
+                for item in pending_for_judge
+            ],
+        )
+        judge_results = self._pad_missing_judge_results(
+            judge_results=judge_results,
+            expected_count=len(pending_for_judge),
+        )
+
+        for item, judge_result in zip(pending_for_judge, judge_results):
+            case_payloads.append(
+                self._persist_scored_case(
+                    run=run,
+                    case=cast(BenchmarkCase, item["case"]),
+                    base_payload=cast(dict[str, Any], item["base_payload"]),
+                    runtime_output=cast(dict[str, Any], item["runtime_output"]),
+                    judge_result=judge_result,
+                    scorer=scorer,
+                )
+            )
+
+    def _pad_missing_judge_results(
+        self,
+        *,
+        judge_results: list[dict[str, Any]],
+        expected_count: int,
+    ) -> list[dict[str, Any]]:
+        missing_count = expected_count - len(judge_results)
+        if missing_count <= 0:
+            return judge_results
+        missing_results = [
+            {
+                "enabled": True,
+                "available": False,
+                "error": "ragas_evaluation_failed: missing_batch_result",
+            }
+            for _ in range(missing_count)
+        ]
+        return [*judge_results, *missing_results]
 
     def _execute_case_runtime(
         self,

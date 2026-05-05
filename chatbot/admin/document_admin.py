@@ -7,6 +7,7 @@ from __future__ import annotations
 import csv
 import json
 from io import StringIO
+from typing import Any
 
 from django.contrib import admin, messages
 from django.db.models import Count, QuerySet
@@ -263,66 +264,15 @@ class MedicalDocumentAdmin(admin.ModelAdmin):
         if request.method == "POST":
             form = VectorSearchForm(request.POST)
             if form.is_valid():
-                query_text = form.cleaned_data["query_text"]
-                k = form.cleaned_data["k"]
-                section_types = form.cleaned_data.get("section_types")
-                min_similarity = form.cleaned_data.get("min_similarity", 0.5)
-
                 try:
-                    from vector_store.services.vector_store_manager import (
-                        VectorStoreManager,
-                    )
-
-                    manager = VectorStoreManager()
-                    raw_results = []
-                    if section_types:
-                        for section in section_types:
-                            raw_results.extend(
-                                manager.search_similar(
-                                    query=query_text,
-                                    k=k,
-                                    section_type=section,
-                                )
-                            )
-                    else:
-                        raw_results = manager.search_similar(query=query_text, k=k)
-
-                    # De-duplicate and score results
-                    seen: set[int] = set()
-                    results = []
-                    for doc in raw_results:
-                        doc_id = doc.pk
-                        if doc_id is None:
-                            continue
-                        if doc_id in seen:
-                            continue
-                        seen.add(doc_id)
-                        distance = float(getattr(doc, "distance", 1.0))
-                        similarity = max(0.0, 1.0 - distance)
-                        if similarity < min_similarity:
-                            continue
-                        results.append(
-                            {
-                                "id": doc_id,
-                                "title": doc.title,
-                                "content": doc.content,
-                                "section_type": doc.section_type,
-                                "index_type": doc.index_type,
-                                "embedding_provider": doc.embedding_provider,
-                                "similarity": similarity,
-                            }
-                        )
-                    results = sorted(
-                        results, key=lambda r: r["similarity"], reverse=True
-                    )[:k]
-
+                    results = self._vector_search_results(form.cleaned_data)
                     return render(
                         request,
                         "admin/chatbot/medicaldocument/vector_search.html",
                         {
                             "form": form,
                             "results": results,
-                            "query": query_text,
+                            "query": form.cleaned_data["query_text"],
                             "count": len(results),
                         },
                     )
@@ -334,6 +284,90 @@ class MedicalDocumentAdmin(admin.ModelAdmin):
         return render(
             request, "admin/chatbot/medicaldocument/vector_search.html", {"form": form}
         )
+
+    def _vector_search_results(
+        self,
+        cleaned_data: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        from vector_store.services.vector_store_manager import VectorStoreManager
+
+        query_text = cleaned_data["query_text"]
+        k = cleaned_data["k"]
+        section_types = cleaned_data.get("section_types")
+        min_similarity = cleaned_data.get("min_similarity", 0.5)
+        manager = VectorStoreManager()
+        raw_results = self._raw_vector_search_results(
+            manager=manager,
+            query_text=query_text,
+            k=k,
+            section_types=section_types,
+        )
+        return self._format_vector_search_results(
+            raw_results=raw_results,
+            min_similarity=min_similarity,
+            limit=k,
+        )
+
+    def _raw_vector_search_results(
+        self,
+        *,
+        manager: Any,
+        query_text: str,
+        k: int,
+        section_types: list[str] | None,
+    ) -> list[Any]:
+        if not section_types:
+            return list(manager.search_similar(query=query_text, k=k))
+
+        raw_results = []
+        for section in section_types:
+            raw_results.extend(
+                manager.search_similar(
+                    query=query_text,
+                    k=k,
+                    section_type=section,
+                )
+            )
+        return raw_results
+
+    def _format_vector_search_results(
+        self,
+        *,
+        raw_results: list[Any],
+        min_similarity: float,
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        seen: set[int] = set()
+        results = []
+        for doc in raw_results:
+            result = self._vector_search_result(doc, seen, min_similarity)
+            if result is not None:
+                results.append(result)
+        return sorted(results, key=lambda r: r["similarity"], reverse=True)[:limit]
+
+    def _vector_search_result(
+        self,
+        doc: Any,
+        seen: set[int],
+        min_similarity: float,
+    ) -> dict[str, Any] | None:
+        doc_id = doc.pk
+        if doc_id is None or doc_id in seen:
+            return None
+        seen.add(doc_id)
+
+        similarity = max(0.0, 1.0 - float(getattr(doc, "distance", 1.0)))
+        if similarity < min_similarity:
+            return None
+        return {
+            "id": doc_id,
+            "title": doc.title,
+            "content": doc.content,
+            "section_type": doc.section_type,
+            "index_type": doc.index_type,
+            "embedding_provider": doc.embedding_provider,
+            "similarity": similarity,
+        }
 
     def quality_check_view(self, request: HttpRequest) -> HttpResponse:
         """Embedding quality check interface."""

@@ -1284,175 +1284,288 @@ class ChatbotService:
 
     def _multi_disease_retrieval(self, analysis: dict[str, Any]) -> dict[str, Any]:
         """Stage 3-6 retrieval: dual Index-B search -> merge -> negation penalty -> Index-A summary."""
-        k = self._get_config_int("RAG_B_TOPK", DEFAULT_RAG_B_TOPK)
-        merged_limit = self._get_config_int(
-            "RAG_MERGED_LIMIT",
-            DEFAULT_RAG_MERGED_LIMIT,
-        )
-        top_m = self._get_config_int("RAG_TITLE_TOP_M", DEFAULT_RAG_TITLE_TOP_M)
-        final_titles_limit = self._get_config_int(
-            "RAG_FINAL_TITLES",
-            DEFAULT_RAG_FINAL_TITLES,
-        )
-        merge_w_symptom = self._get_config_float(
-            "RAG_MERGE_WEIGHT_ENTITIES",
-            DEFAULT_RAG_MERGE_WEIGHT_ENTITIES,
-        )
-        merge_w_query = self._get_config_float(
-            "RAG_MERGE_WEIGHT_QUERY",
-            DEFAULT_RAG_MERGE_WEIGHT_QUERY,
-        )
-        neg_alpha = self._get_config_float(
-            "RAG_PENALTY_ALPHA",
-            DEFAULT_RAG_PENALTY_ALPHA,
-        )
-        neg_thresh = self._get_config_float(
-            "RAG_NEG_SYM_SIM_THRESH",
-            DEFAULT_RAG_NEG_SYM_SIM_THRESH,
-        )
-
         try:
+            config = self._multi_disease_retrieval_config()
             q_symptom = str(analysis.get("q_symptom", "")).strip()
             q_cleaned = str(analysis.get("q_cleaned", "")).strip()
-            composed_state_query = self._compose_query_with_state(q_cleaned)
-            docs_2a = self.vector_manager.search_similar(q_symptom, k=k, index_type="B")
-            docs_2b = self.vector_manager.search_similar(
-                composed_state_query,
-                k=k,
-                index_type="B",
+            docs_2a, docs_2b = self._multi_disease_search_docs(
+                q_symptom=q_symptom,
+                q_cleaned=q_cleaned,
+                k=config["k"],
             )
-
-            title_map: dict[str, dict[str, Any]] = {}
-            for source_key, docs in [("score_2a", docs_2a), ("score_2b", docs_2b)]:
-                for doc in docs:
-                    metadata = getattr(doc, "metadata", {}) or {}
-                    title = (
-                        str(
-                            metadata.get("canonical_title")
-                            or metadata.get("title")
-                            or doc.title
-                            or ""
-                        )
-                        .strip()
-                        .lower()
-                    )
-                    if not title:
-                        continue
-                    score = self._score_from_distance(getattr(doc, "distance", 1.0))
-                    group = title_map.setdefault(
-                        title,
-                        {
-                            "docs": [],
-                            "scores": [],
-                            "score_2a": 0.0,
-                            "score_2b": 0.0,
-                            "source": doc.source,
-                        },
-                    )
-                    group["docs"].append(doc)
-                    group["scores"].append(score)
-                    group[source_key] = max(float(group[source_key]), score)
-
-            merged_items: list[tuple[str, dict[str, Any]]] = []
-            for title, group in title_map.items():
-                score_merge = merge_w_symptom * float(
-                    group.get("score_2a", 0.0)
-                ) + merge_w_query * float(group.get("score_2b", 0.0))
-                group["score_merge"] = score_merge
-                merged_items.append((title, group))
-
-            merged_items = sorted(
-                merged_items,
-                key=lambda item: float(item[1]["score_merge"]),
-                reverse=True,
-            )[:merged_limit]
-
-            neg_symptoms = [
-                str(sym).strip().lower()
-                for sym in (analysis.get("negatives", {}) or {}).get("SYMPTOM", [])
-                if str(sym).strip()
-            ]
-            candidates: list[dict[str, Any]] = []
-            evidence_docs: list[Document] = []
-
-            for title, group in merged_items:
-                scores = sorted(
-                    [float(score) for score in group.get("scores", [])], reverse=True
-                )
-                avg_score = sum(scores[:top_m]) / max(1, min(len(scores), top_m))
-
-                symptom_texts: list[str] = []
-                raw_docs = cast(list[Any], group.get("docs", []))
-                for raw_doc in raw_docs:
-                    md = getattr(raw_doc, "metadata", {}) or {}
-                    section = str(
-                        md.get("section") or raw_doc.section_type or ""
-                    ).lower()
-                    url = str(md.get("url") or md.get("source_url") or "").strip()
-                    if section in {"symptom", "symptoms"}:
-                        symptom_texts.append(str(raw_doc.content))
-                    evidence_docs.append(
-                        Document(
-                            page_content=str(raw_doc.content),
-                            metadata={
-                                "title": title,
-                                "section": section,
-                                "source": raw_doc.source,
-                                "url": url,
-                                "score": self._score_from_distance(
-                                    getattr(raw_doc, "distance", 1.0)
-                                ),
-                                "metadata": md,
-                            },
-                        )
-                    )
-
-                neg_matches = 0
-                for neg_symptom in neg_symptoms:
-                    if any(
-                        self._text_similarity(neg_symptom, symptom) >= neg_thresh
-                        for symptom in symptom_texts
-                    ):
-                        neg_matches += 1
-
-                neg_frac = neg_matches / max(1, len(symptom_texts))
-                final_score = avg_score * (1 - neg_alpha * neg_frac)
-                candidates.append(
-                    {
-                        "title": title,
-                        "avg_score": avg_score,
-                        "merge_score": float(group.get("score_merge", 0.0)),
-                        "final_score": final_score,
-                        "neg_frac": neg_frac,
-                        "doc_count": len(raw_docs),
-                        "source": group.get("source"),
-                    }
-                )
-
-            candidates = sorted(
-                candidates,
-                key=lambda item: float(item["final_score"]),
-                reverse=True,
-            )[:final_titles_limit]
-
-            top_titles = [str(candidate["title"]) for candidate in candidates]
-            summary_docs = self._fetch_summary_docs_for_titles(top_titles, q_cleaned)
-            summary_by_title = {
-                str(item["title"]): str(item["summary"])
-                for item in summary_docs
-                if str(item.get("title", "")).strip()
-            }
-            for candidate in candidates:
-                candidate["summary"] = summary_by_title.get(str(candidate["title"]), "")
-
-            return {
-                "candidates": candidates,
-                "summaries": summary_by_title,
-                "evidence_docs": evidence_docs,
-            }
+            title_map = self._multi_disease_title_map(docs_2a=docs_2a, docs_2b=docs_2b)
+            merged_items = self._multi_disease_merged_items(
+                title_map=title_map,
+                config=config,
+            )
+            candidates, evidence_docs = self._multi_disease_candidates(
+                merged_items=merged_items,
+                analysis=analysis,
+                config=config,
+            )
+            return self._with_multi_disease_summaries(
+                candidates=candidates,
+                evidence_docs=evidence_docs,
+                q_cleaned=q_cleaned,
+            )
         except Exception as ex:
             logger.error(f"Multi-disease retrieval error: {ex}")
             return {"candidates": [], "summaries": {}, "evidence_docs": []}
+
+    def _multi_disease_retrieval_config(self) -> dict[str, Any]:
+        return {
+            "k": self._get_config_int("RAG_B_TOPK", DEFAULT_RAG_B_TOPK),
+            "merged_limit": self._get_config_int(
+                "RAG_MERGED_LIMIT",
+                DEFAULT_RAG_MERGED_LIMIT,
+            ),
+            "top_m": self._get_config_int("RAG_TITLE_TOP_M", DEFAULT_RAG_TITLE_TOP_M),
+            "final_titles_limit": self._get_config_int(
+                "RAG_FINAL_TITLES",
+                DEFAULT_RAG_FINAL_TITLES,
+            ),
+            "merge_w_symptom": self._get_config_float(
+                "RAG_MERGE_WEIGHT_ENTITIES",
+                DEFAULT_RAG_MERGE_WEIGHT_ENTITIES,
+            ),
+            "merge_w_query": self._get_config_float(
+                "RAG_MERGE_WEIGHT_QUERY",
+                DEFAULT_RAG_MERGE_WEIGHT_QUERY,
+            ),
+            "neg_alpha": self._get_config_float(
+                "RAG_PENALTY_ALPHA",
+                DEFAULT_RAG_PENALTY_ALPHA,
+            ),
+            "neg_thresh": self._get_config_float(
+                "RAG_NEG_SYM_SIM_THRESH",
+                DEFAULT_RAG_NEG_SYM_SIM_THRESH,
+            ),
+        }
+
+    def _multi_disease_search_docs(
+        self,
+        *,
+        q_symptom: str,
+        q_cleaned: str,
+        k: int,
+    ) -> tuple[list[Any], list[Any]]:
+        composed_state_query = self._compose_query_with_state(q_cleaned)
+        docs_2a = self.vector_manager.search_similar(q_symptom, k=k, index_type="B")
+        docs_2b = self.vector_manager.search_similar(
+            composed_state_query,
+            k=k,
+            index_type="B",
+        )
+        return docs_2a, docs_2b
+
+    def _multi_disease_title_map(
+        self,
+        *,
+        docs_2a: list[Any],
+        docs_2b: list[Any],
+    ) -> dict[str, dict[str, Any]]:
+        title_map: dict[str, dict[str, Any]] = {}
+        for source_key, docs in [("score_2a", docs_2a), ("score_2b", docs_2b)]:
+            for doc in docs:
+                self._add_multi_disease_doc_group(
+                    title_map=title_map,
+                    doc=doc,
+                    source_key=source_key,
+                )
+        return title_map
+
+    def _add_multi_disease_doc_group(
+        self,
+        *,
+        title_map: dict[str, dict[str, Any]],
+        doc: Any,
+        source_key: str,
+    ) -> None:
+        metadata = getattr(doc, "metadata", {}) or {}
+        title = (
+            str(
+                metadata.get("canonical_title")
+                or metadata.get("title")
+                or doc.title
+                or ""
+            )
+            .strip()
+            .lower()
+        )
+        if not title:
+            return
+        score = self._score_from_distance(getattr(doc, "distance", 1.0))
+        group = title_map.setdefault(
+            title,
+            {
+                "docs": [],
+                "scores": [],
+                "score_2a": 0.0,
+                "score_2b": 0.0,
+                "source": doc.source,
+            },
+        )
+        group["docs"].append(doc)
+        group["scores"].append(score)
+        group[source_key] = max(float(group[source_key]), score)
+
+    def _multi_disease_merged_items(
+        self,
+        *,
+        title_map: dict[str, dict[str, Any]],
+        config: dict[str, Any],
+    ) -> list[tuple[str, dict[str, Any]]]:
+        merged_items = []
+        for title, group in title_map.items():
+            score_merge = config["merge_w_symptom"] * float(
+                group.get("score_2a", 0.0)
+            ) + config["merge_w_query"] * float(group.get("score_2b", 0.0))
+            group["score_merge"] = score_merge
+            merged_items.append((title, group))
+        return sorted(
+            merged_items,
+            key=lambda item: float(item[1]["score_merge"]),
+            reverse=True,
+        )[: config["merged_limit"]]
+
+    def _multi_disease_candidates(
+        self,
+        *,
+        merged_items: list[tuple[str, dict[str, Any]]],
+        analysis: dict[str, Any],
+        config: dict[str, Any],
+    ) -> tuple[list[dict[str, Any]], list[Document]]:
+        neg_symptoms = [
+            str(sym).strip().lower()
+            for sym in (analysis.get("negatives", {}) or {}).get("SYMPTOM", [])
+            if str(sym).strip()
+        ]
+        candidates = []
+        evidence_docs: list[Document] = []
+        for title, group in merged_items:
+            candidate = self._multi_disease_candidate(
+                title=title,
+                group=group,
+                neg_symptoms=neg_symptoms,
+                config=config,
+                evidence_docs=evidence_docs,
+            )
+            candidates.append(candidate)
+        return (
+            sorted(
+                candidates,
+                key=lambda item: float(item["final_score"]),
+                reverse=True,
+            )[: config["final_titles_limit"]],
+            evidence_docs,
+        )
+
+    def _multi_disease_candidate(
+        self,
+        *,
+        title: str,
+        group: dict[str, Any],
+        neg_symptoms: list[str],
+        config: dict[str, Any],
+        evidence_docs: list[Document],
+    ) -> dict[str, Any]:
+        scores = sorted(
+            [float(score) for score in group.get("scores", [])], reverse=True
+        )
+        avg_score = sum(scores[: config["top_m"]]) / max(
+            1,
+            min(len(scores), config["top_m"]),
+        )
+        raw_docs = cast(list[Any], group.get("docs", []))
+        symptom_texts = self._append_multi_disease_evidence_docs(
+            title=title,
+            raw_docs=raw_docs,
+            evidence_docs=evidence_docs,
+        )
+        neg_frac = self._multi_disease_neg_frac(
+            neg_symptoms=neg_symptoms,
+            symptom_texts=symptom_texts,
+            neg_thresh=config["neg_thresh"],
+        )
+        final_score = avg_score * (1 - config["neg_alpha"] * neg_frac)
+        return {
+            "title": title,
+            "avg_score": avg_score,
+            "merge_score": float(group.get("score_merge", 0.0)),
+            "final_score": final_score,
+            "neg_frac": neg_frac,
+            "doc_count": len(raw_docs),
+            "source": group.get("source"),
+        }
+
+    def _append_multi_disease_evidence_docs(
+        self,
+        *,
+        title: str,
+        raw_docs: list[Any],
+        evidence_docs: list[Document],
+    ) -> list[str]:
+        symptom_texts = []
+        for raw_doc in raw_docs:
+            md = getattr(raw_doc, "metadata", {}) or {}
+            section = str(md.get("section") or raw_doc.section_type or "").lower()
+            url = str(md.get("url") or md.get("source_url") or "").strip()
+            if section in {"symptom", "symptoms"}:
+                symptom_texts.append(str(raw_doc.content))
+            evidence_docs.append(
+                Document(
+                    page_content=str(raw_doc.content),
+                    metadata={
+                        "title": title,
+                        "section": section,
+                        "source": raw_doc.source,
+                        "url": url,
+                        "score": self._score_from_distance(
+                            getattr(raw_doc, "distance", 1.0)
+                        ),
+                        "metadata": md,
+                    },
+                )
+            )
+        return symptom_texts
+
+    def _multi_disease_neg_frac(
+        self,
+        *,
+        neg_symptoms: list[str],
+        symptom_texts: list[str],
+        neg_thresh: float,
+    ) -> float:
+        neg_matches = 0
+        for neg_symptom in neg_symptoms:
+            if any(
+                self._text_similarity(neg_symptom, symptom) >= neg_thresh
+                for symptom in symptom_texts
+            ):
+                neg_matches += 1
+        return neg_matches / max(1, len(symptom_texts))
+
+    def _with_multi_disease_summaries(
+        self,
+        *,
+        candidates: list[dict[str, Any]],
+        evidence_docs: list[Document],
+        q_cleaned: str,
+    ) -> dict[str, Any]:
+        top_titles = [str(candidate["title"]) for candidate in candidates]
+        summary_docs = self._fetch_summary_docs_for_titles(top_titles, q_cleaned)
+        summary_by_title = {
+            str(item["title"]): str(item["summary"])
+            for item in summary_docs
+            if str(item.get("title", "")).strip()
+        }
+        for candidate in candidates:
+            candidate["summary"] = summary_by_title.get(str(candidate["title"]), "")
+        return {
+            "candidates": candidates,
+            "summaries": summary_by_title,
+            "evidence_docs": evidence_docs,
+        }
 
     def _build_multi_disease_context(
         self,
@@ -1463,6 +1576,19 @@ class ChatbotService:
         """Build context for multi-disease response with summary + evidence."""
         lines = [HEADER_MULTI_DISEASE_ANALYSIS]
 
+        self._append_multi_disease_query_lines(lines, question, analysis)
+        lines.append(HEADER_MULTI_DISEASE_CANDIDATES)
+        self._append_multi_disease_candidate_lines(lines, tier_result)
+        self._append_multi_disease_evidence_lines(lines, tier_result)
+        lines.append(MSG_CONTEXT_HINT_MULTI)
+        return "\n".join(lines)
+
+    def _append_multi_disease_query_lines(
+        self,
+        lines: list[str],
+        question: str,
+        analysis: dict[str, Any],
+    ) -> None:
         pos = analysis.get("positives", {})
         neg = analysis.get("negatives", {})
         q_cleaned = str(analysis.get("q_cleaned", "")).strip()
@@ -1473,7 +1599,6 @@ class ChatbotService:
             lines.append(f"- q_cleaned: {q_cleaned}")
         if q_symptom:
             lines.append(f"- q_symptom: {q_symptom}")
-
         if pos.get("SYMPTOM"):
             lines.append(f"- Triệu chứng (+): {', '.join(pos['SYMPTOM'])}")
         if neg.get("SYMPTOM"):
@@ -1481,29 +1606,35 @@ class ChatbotService:
         if pos.get("ETIOLOGY"):
             lines.append(f"- Căn nguyên: {', '.join(pos['ETIOLOGY'])}")
 
-        lines.append(HEADER_MULTI_DISEASE_CANDIDATES)
-        for i, c in enumerate(tier_result.get("candidates", [])):
+    def _append_multi_disease_candidate_lines(
+        self,
+        lines: list[str],
+        tier_result: dict[str, Any],
+    ) -> None:
+        for index, candidate in enumerate(tier_result.get("candidates", []), start=1):
             lines.append(
-                f"{i + 1}. {c['title']} - điểm: {c['final_score']:.3f} "
-                f"(merge={c.get('merge_score', 0.0):.3f}, neg={c.get('neg_frac', 0.0):.2f})"
+                f"{index}. {candidate['title']} - điểm: {candidate['final_score']:.3f} "
+                f"(merge={candidate.get('merge_score', 0.0):.3f}, "
+                f"neg={candidate.get('neg_frac', 0.0):.2f})"
             )
-            summary = re.sub(r"\s+", " ", str(c.get("summary", "")).strip())
+            summary = re.sub(r"\s+", " ", str(candidate.get("summary", "")).strip())
             if summary:
                 lines.append(f"   Tóm tắt: {summary[:320]}")
 
+    def _append_multi_disease_evidence_lines(
+        self,
+        lines: list[str],
+        tier_result: dict[str, Any],
+    ) -> None:
         evidence_docs = cast(list[Document], tier_result.get("evidence_docs", []))
-        if evidence_docs:
-            lines.append(f"\n- {HEADER_EVIDENCE_BLOCK}:")
-            for idx, doc in enumerate(
-                evidence_docs[:DEFAULT_SECTION_ITEMS_LIMIT], start=1
-            ):
-                section = str(doc.metadata.get("section", "")).strip()
-                title = str(doc.metadata.get("title", "")).strip()
-                snippet = re.sub(r"\s+", " ", str(doc.page_content)).strip()
-                lines.append(f"  {idx}. ({title}) [{section}] {snippet[:240]}")
-
-        lines.append(MSG_CONTEXT_HINT_MULTI)
-        return "\n".join(lines)
+        if not evidence_docs:
+            return
+        lines.append(f"\n- {HEADER_EVIDENCE_BLOCK}:")
+        for idx, doc in enumerate(evidence_docs[:DEFAULT_SECTION_ITEMS_LIMIT], start=1):
+            section = str(doc.metadata.get("section", "")).strip()
+            title = str(doc.metadata.get("title", "")).strip()
+            snippet = re.sub(r"\s+", " ", str(doc.page_content)).strip()
+            lines.append(f"  {idx}. ({title}) [{section}] {snippet[:240]}")
 
     # ---------------------------
     # Intake Management
@@ -1523,54 +1654,77 @@ class ChatbotService:
         patient_state = analysis_result.get("patient_state_extract", {}) or {}
         disease_mentions = analysis_result.get("disease_mentions", []) or []
 
-        symptoms_updated = False
-
-        # Update positive symptoms
-        for sym in pos.get("SYMPTOM", []):
-            if sym and sym not in self._user_intake_db.symptoms:
-                self._user_intake_db.symptoms.append(sym)
-                symptoms_updated = True
-
-        # Update negated symptoms
-        for sym in neg.get("SYMPTOM", []):
-            if sym and sym not in self._user_intake_db.symptoms_negated:
-                self._user_intake_db.symptoms_negated.append(sym)
-                symptoms_updated = True
-
-        # Remove negated from positive
-        neg_set = {s.lower() for s in self._user_intake_db.symptoms_negated}
-        filtered_symptoms = [
-            s for s in self._user_intake_db.symptoms if s.lower() not in neg_set
-        ]
-        if filtered_symptoms != self._user_intake_db.symptoms:
-            self._user_intake_db.symptoms = filtered_symptoms
-            symptoms_updated = True
-
-        # Update disease mention if explicit and not conflicting.
-        if disease_mentions:
-            first_disease = str(disease_mentions[0]).strip()
-            if first_disease and first_disease != (
-                self._user_intake_db.disease_name or ""
-            ):
-                self._user_intake_db.disease_name = first_disease
-                symptoms_updated = True
-
-        # Update age/sex if extracted by analyzer.
-        extracted_age = patient_state.get("age")
-        if isinstance(extracted_age, int) and extracted_age > 0:
-            if self._user_intake_db.age != extracted_age:
-                self._user_intake_db.age = extracted_age
-                symptoms_updated = True
-
-        extracted_sex = str(patient_state.get("sex", "")).strip().lower()
-        if extracted_sex in {"male", "female", "unknown"}:
-            if self._user_intake_db.sex != extracted_sex:
-                self._user_intake_db.sex = extracted_sex
-                symptoms_updated = True
+        symptoms_updated = self._append_intake_items(
+            "symptoms",
+            pos.get("SYMPTOM", []),
+        )
+        symptoms_updated = (
+            self._append_intake_items("symptoms_negated", neg.get("SYMPTOM", []))
+            or symptoms_updated
+        )
+        symptoms_updated = self._remove_negated_positive_symptoms() or symptoms_updated
+        symptoms_updated = (
+            self._apply_disease_mentions(disease_mentions) or symptoms_updated
+        )
+        symptoms_updated = (
+            self._apply_patient_state_extract(patient_state) or symptoms_updated
+        )
 
         # Save to database if changed
         if symptoms_updated:
             self._user_intake_db.save()
+
+    def _append_intake_items(self, field_name: str, values: Any) -> bool:
+        target = getattr(self._user_intake_db, field_name)
+        updated = False
+        for value in values or []:
+            if value and value not in target:
+                target.append(value)
+                updated = True
+        return updated
+
+    def _remove_negated_positive_symptoms(self) -> bool:
+        neg_set = {s.lower() for s in self._user_intake_db.symptoms_negated}
+        filtered_symptoms = [
+            s for s in self._user_intake_db.symptoms if s.lower() not in neg_set
+        ]
+        if filtered_symptoms == self._user_intake_db.symptoms:
+            return False
+        self._user_intake_db.symptoms = filtered_symptoms
+        return True
+
+    def _apply_disease_mentions(self, disease_mentions: Any) -> bool:
+        if not disease_mentions:
+            return False
+        first_disease = str(disease_mentions[0]).strip()
+        if not first_disease or first_disease == (
+            self._user_intake_db.disease_name or ""
+        ):
+            return False
+        self._user_intake_db.disease_name = first_disease
+        return True
+
+    def _apply_patient_state_extract(self, patient_state: dict[str, Any]) -> bool:
+        age_updated = self._apply_patient_age(patient_state.get("age"))
+        sex_updated = self._apply_patient_sex(patient_state.get("sex"))
+        return age_updated or sex_updated
+
+    def _apply_patient_age(self, extracted_age: Any) -> bool:
+        if not isinstance(extracted_age, int) or extracted_age <= 0:
+            return False
+        if self._user_intake_db.age == extracted_age:
+            return False
+        self._user_intake_db.age = extracted_age
+        return True
+
+    def _apply_patient_sex(self, extracted_sex: Any) -> bool:
+        sex = str(extracted_sex or "").strip().lower()
+        if sex not in {"male", "female", "unknown"}:
+            return False
+        if self._user_intake_db.sex == sex:
+            return False
+        self._user_intake_db.sex = sex
+        return True
 
     def _get_intake_context(self) -> str:
         """Get intake context string for LLM from database."""
@@ -1596,47 +1750,32 @@ class ChatbotService:
 
     def update_intake(self, **kwargs: Any) -> UserIntake:
         """Update user intake fields and save to database."""
-        # Update scalar fields
-        for key in [
+        self._update_intake_scalar_fields(kwargs)
+        for field_name in (
+            "symptoms",
+            "symptoms_negated",
+            "chronic_conditions",
+            "allergies",
+            "meds",
+        ):
+            if field_name in kwargs:
+                self._append_intake_items(field_name, kwargs[field_name])
+
+        # Save to database
+        self._user_intake_db.save()
+        return self._user_intake_db
+
+    def _update_intake_scalar_fields(self, kwargs: dict[str, Any]) -> None:
+        for key in (
             "disease_name",
             "age",
             "sex",
             "onset_days",
             "pregnancy_status",
             "location_country",
-        ]:
+        ):
             if key in kwargs and kwargs[key] is not None:
                 setattr(self._user_intake_db, key, kwargs[key])
-
-        # Update list fields (append mode)
-        if "symptoms" in kwargs:
-            for s in kwargs["symptoms"] or []:
-                if s and s not in self._user_intake_db.symptoms:
-                    self._user_intake_db.symptoms.append(s)
-
-        if "symptoms_negated" in kwargs:
-            for s in kwargs["symptoms_negated"] or []:
-                if s and s not in self._user_intake_db.symptoms_negated:
-                    self._user_intake_db.symptoms_negated.append(s)
-
-        if "chronic_conditions" in kwargs:
-            for c in kwargs["chronic_conditions"] or []:
-                if c and c not in self._user_intake_db.chronic_conditions:
-                    self._user_intake_db.chronic_conditions.append(c)
-
-        if "allergies" in kwargs:
-            for a in kwargs["allergies"] or []:
-                if a and a not in self._user_intake_db.allergies:
-                    self._user_intake_db.allergies.append(a)
-
-        if "meds" in kwargs:
-            for m in kwargs["meds"] or []:
-                if m and m not in self._user_intake_db.meds:
-                    self._user_intake_db.meds.append(m)
-
-        # Save to database
-        self._user_intake_db.save()
-        return self._user_intake_db
 
     def get_intake(self) -> UserIntake:
         """Get current user intake from database."""

@@ -39,14 +39,7 @@ def process_csv_upload(
     Returns:
         dict: Processing result with document count and status
     """
-    job = None
-    if job_id is not None:
-        from chatbot.models import EmbeddingJob
-
-        job = EmbeddingJob.objects.filter(id=job_id).first()
-        if job:
-            job.status = EmbeddingJobStatus.PROCESSING
-            job.save(update_fields=["status"])
+    job = _start_embedding_job(job_id)
 
     try:
         resolved_provider = EmbeddingService.resolve_provider(embedding_provider)
@@ -62,27 +55,16 @@ def process_csv_upload(
 
         # Process CSV for each selected index type
         for index_type in index_types:
-            logger.info(f"Processing index type: {index_type}")
-
-            # Process CSV to document dictionaries with row-level report
-            result = manager.process_csv_to_documents_with_report(
-                csv_path=file_path,
+            created_docs, report = _process_csv_index_type(
+                manager=manager,
+                file_path=file_path,
                 source=source,
                 index_type=index_type,
-                ingestion_job_id=job_id,
+                job_id=job_id,
             )
-            documents = result["documents"]
-            per_index_reports[index_type] = result["report"]
-
-            if documents:
-                # Add documents with embeddings to database
-                created_docs = manager.add_documents(documents)
+            per_index_reports[index_type] = report
+            if created_docs:
                 total_documents.extend(created_docs)
-                logger.info(
-                    f"Created {len(created_docs)} documents for index type {index_type}"
-                )
-            else:
-                logger.warning(f"No documents extracted for index type {index_type}")
 
         if not total_documents:
             logger.warning(f"No documents extracted from {file_path}")
@@ -97,38 +79,13 @@ def process_csv_upload(
         )
 
         if job:
-            failed_rows_total = sum(
-                int(report.get("failed_rows", 0))
-                for report in per_index_reports.values()
-            )
-            report_chunks = [
-                f"{index_type}: rows={report.get('total_rows', 0)}, "
-                f"ok={report.get('success_rows', 0)}, "
-                f"failed={report.get('failed_rows', 0)}"
-                for index_type, report in per_index_reports.items()
-            ]
-            job.status = EmbeddingJobStatus.COMPLETED
-            job.total_documents = len(total_documents)
-            job.successful_documents = len(total_documents)
-            job.failed_documents = failed_rows_total
-            job.notes = " | ".join(report_chunks)
-            job.save(
-                update_fields=[
-                    "status",
-                    "total_documents",
-                    "successful_documents",
-                    "failed_documents",
-                    "notes",
-                ]
+            _complete_embedding_job(
+                job=job,
+                total_documents=len(total_documents),
+                per_index_reports=per_index_reports,
             )
 
-        # Clean up temporary file
-        try:
-            if os.path.exists(file_path):
-                os.remove(file_path)
-                logger.info(f"Cleaned up temporary file: {file_path}")
-        except Exception as e:
-            logger.warning(f"Failed to cleanup file {file_path}: {e}")
+        _cleanup_file(file_path)
 
         return {
             "status": "success",
@@ -145,30 +102,110 @@ def process_csv_upload(
         logger.error(f"Error processing CSV {file_path}: {exc}", exc_info=True)
 
         if job:
-            job.status = EmbeddingJobStatus.FAILED
-            job.error_messages = [str(exc)]
-            job.save(update_fields=["status", "error_messages"])
+            _fail_embedding_job(job, exc)
 
-        # Clean up file on error
-        try:
-            if os.path.exists(file_path):
-                os.remove(file_path)
-        except Exception:
-            pass
+        _cleanup_file(file_path, warn_on_error=False)
 
-        # Retry task if not exceeded max retries
-        if self.request.retries < self.max_retries:
-            logger.info(
-                f"Retrying task (attempt {self.request.retries + 1}/{self.max_retries})"
-            )
-            raise self.retry(exc=exc)
+        return _retry_or_return_csv_error(self, exc)
 
-        # Final failure - return error status
-        return {
-            "status": "error",
-            "message": f"Failed to process CSV: {str(exc)}",
-            "count": 0,
-        }
+
+def _start_embedding_job(job_id: int | None):
+    if job_id is None:
+        return None
+
+    from chatbot.models import EmbeddingJob
+
+    job = EmbeddingJob.objects.filter(id=job_id).first()
+    if job:
+        job.status = EmbeddingJobStatus.PROCESSING
+        job.save(update_fields=["status"])
+    return job
+
+
+def _process_csv_index_type(
+    *,
+    manager: VectorStoreManager,
+    file_path: str,
+    source: str,
+    index_type: str,
+    job_id: int | None,
+) -> tuple[list[Any], dict[str, Any]]:
+    logger.info(f"Processing index type: {index_type}")
+    result = manager.process_csv_to_documents_with_report(
+        csv_path=file_path,
+        source=source,
+        index_type=index_type,
+        ingestion_job_id=job_id,
+    )
+    documents = result["documents"]
+    if not documents:
+        logger.warning(f"No documents extracted for index type {index_type}")
+        return [], result["report"]
+
+    created_docs = manager.add_documents(documents)
+    logger.info(f"Created {len(created_docs)} documents for index type {index_type}")
+    return created_docs, result["report"]
+
+
+def _complete_embedding_job(
+    *,
+    job: Any,
+    total_documents: int,
+    per_index_reports: dict[str, dict[str, Any]],
+) -> None:
+    failed_rows_total = sum(
+        int(report.get("failed_rows", 0)) for report in per_index_reports.values()
+    )
+    report_chunks = [
+        f"{index_type}: rows={report.get('total_rows', 0)}, "
+        f"ok={report.get('success_rows', 0)}, "
+        f"failed={report.get('failed_rows', 0)}"
+        for index_type, report in per_index_reports.items()
+    ]
+    job.status = EmbeddingJobStatus.COMPLETED
+    job.total_documents = total_documents
+    job.successful_documents = total_documents
+    job.failed_documents = failed_rows_total
+    job.notes = " | ".join(report_chunks)
+    job.save(
+        update_fields=[
+            "status",
+            "total_documents",
+            "successful_documents",
+            "failed_documents",
+            "notes",
+        ]
+    )
+
+
+def _fail_embedding_job(job: Any, exc: Exception) -> None:
+    job.status = EmbeddingJobStatus.FAILED
+    job.error_messages = [str(exc)]
+    job.save(update_fields=["status", "error_messages"])
+
+
+def _cleanup_file(file_path: str, *, warn_on_error: bool = True) -> None:
+    try:
+        if os.path.exists(file_path):
+            os.remove(file_path)
+            logger.info(f"Cleaned up temporary file: {file_path}")
+    except Exception as exc:
+        if warn_on_error:
+            logger.warning(f"Failed to cleanup file {file_path}: {exc}")
+
+
+def _retry_or_return_csv_error(self: Any, exc: Exception) -> dict[str, Any]:
+    if self.request.retries < self.max_retries:
+        logger.info(
+            f"Retrying task (attempt {self.request.retries + 1}/{self.max_retries})"
+        )
+        raise self.retry(exc=exc)
+
+    return {
+        "status": "error",
+        "message": f"Failed to process CSV: {str(exc)}",
+        "count": 0,
+    }
 
 
 @shared_task(

@@ -63,14 +63,29 @@ def _dedupe_keep_order(items: list[str]) -> list[str]:
     return output
 
 
+def _clean_list_values(values: list[Any]) -> list[str]:
+    return _dedupe_keep_order(
+        [_clean_text(item) for item in values if _clean_text(item)]
+    )
+
+
+def _parse_bracketed_list(text: str) -> list[str] | None:
+    for parser in (json.loads, ast.literal_eval):
+        try:
+            parsed = parser(text)
+        except Exception:
+            continue
+        if isinstance(parsed, list):
+            return _clean_list_values(parsed)
+    return None
+
+
 def parse_list_items(value: Any) -> list[str]:
     """Parse list-like values from CSV/LLM payload into list[str]."""
     if value is None:
         return []
     if isinstance(value, list):
-        return _dedupe_keep_order(
-            [_clean_text(item) for item in value if _clean_text(item)]
-        )
+        return _clean_list_values(value)
     if not isinstance(value, str):
         return []
 
@@ -79,27 +94,12 @@ def parse_list_items(value: Any) -> list[str]:
         return []
 
     if text.startswith("[") and text.endswith("]"):
-        try:
-            parsed_json = json.loads(text)
-            if isinstance(parsed_json, list):
-                return _dedupe_keep_order(
-                    [_clean_text(item) for item in parsed_json if _clean_text(item)]
-                )
-        except Exception:
-            pass
-        try:
-            parsed_ast = ast.literal_eval(text)
-            if isinstance(parsed_ast, list):
-                return _dedupe_keep_order(
-                    [_clean_text(item) for item in parsed_ast if _clean_text(item)]
-                )
-        except Exception:
-            pass
+        parsed_items = _parse_bracketed_list(text)
+        if parsed_items is not None:
+            return parsed_items
 
     parts = re.split(r"[;\n•·]|,\s*", text)
-    return _dedupe_keep_order(
-        [_clean_text(part) for part in parts if _clean_text(part)]
-    )
+    return _clean_list_values(parts)
 
 
 def summarize_items(items: list[str], limit: int = 3) -> list[str]:

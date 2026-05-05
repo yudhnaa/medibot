@@ -1,3 +1,4 @@
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from django.contrib.admin.sites import AdminSite
@@ -40,8 +41,8 @@ class ExtendedMedicalDocumentAdminTests(TestCase):
         request.session.save()
         setattr(request, "_messages", FallbackStorage(request))
 
-    @patch("chatbot.admin.process_article_url_embed.delay")
-    @patch("chatbot.admin.EmbeddingService.resolve_provider")
+    @patch("chatbot.tasks.process_article_url_embed.delay")
+    @patch("vector_store.services.embedding_service.EmbeddingService.resolve_provider")
     def test_embed_url_view_dispatches_task(
         self,
         mock_resolve_provider,
@@ -71,3 +72,54 @@ class ExtendedMedicalDocumentAdminTests(TestCase):
         kwargs = mock_delay.call_args.kwargs
         self.assertEqual(kwargs["url"], "https://example.com/medical-article")
         self.assertEqual(kwargs["embedding_provider"], "transformers")
+
+    @patch("chatbot.admin.document_admin.render")
+    @patch("vector_store.services.vector_store_manager.VectorStoreManager")
+    def test_vector_search_view_deduplicates_and_filters_results(
+        self,
+        mock_manager_cls,
+        mock_render,
+    ):
+        manager = mock_manager_cls.return_value
+        duplicate_doc = SimpleNamespace(
+            pk=1,
+            title="Sởi",
+            content="Sốt phát ban",
+            section_type="symptom",
+            index_type="B",
+            embedding_provider="mock",
+            distance=0.1,
+        )
+        manager.search_similar.return_value = [
+            duplicate_doc,
+            duplicate_doc,
+            SimpleNamespace(
+                pk=2,
+                title="Cảm lạnh",
+                content="Ho",
+                section_type="symptom",
+                index_type="B",
+                embedding_provider="mock",
+                distance=0.8,
+            ),
+        ]
+        mock_render.return_value = MagicMock(status_code=200)
+
+        request = self.factory.post(
+            "/admin/chatbot/medicaldocument/vector-search/",
+            data={
+                "query_text": "sốt phát ban",
+                "k": "5",
+                "section_types": [],
+                "min_similarity": "0.5",
+            },
+        )
+        request.user = self.superuser
+        self._attach_messages(request)
+
+        response = self.admin.vector_search_view(request)
+
+        self.assertEqual(response.status_code, 200)
+        context = mock_render.call_args.args[2]
+        self.assertEqual(context["count"], 1)
+        self.assertEqual(context["results"][0]["id"], 1)

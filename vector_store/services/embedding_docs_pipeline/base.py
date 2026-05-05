@@ -780,9 +780,35 @@ class BaseEmbeddingPipeline(ABC):
         logger.info("STAGE 1: Index C — Router Units (Disease + Intent)")
         logger.info("%s", "=" * 60)
 
-        disease_to_contexts: dict[str, set[str]] = {}
-        context_to_article = self._context_id_to_article_id_map(contexts)
+        disease_to_contexts = self._stage_1_collect_disease_contexts(contexts)
+        if not disease_to_contexts:
+            logger.warning("No diseases extracted. Pipeline cannot continue.")
+            self._index_c_count = 0
+            return {}
 
+        logger.info(
+            f"Extracted {len(disease_to_contexts)} unique diseases: "
+            f"{list(disease_to_contexts.keys())}"
+        )
+
+        context_to_article = self._context_id_to_article_id_map(contexts)
+        context_aliases = self._build_context_aliases(disease_to_contexts)
+        route_units = self._stage_1_route_units(
+            context_aliases=context_aliases,
+            context_to_article=context_to_article,
+        )
+        route_payloads = self._stage_1_route_payloads(route_units)
+        self._store_index_c_route_payloads(route_payloads)
+
+        self._index_c_count = len(route_payloads)
+        logger.info("Index C: %s route entries stored", self._index_c_count)
+        return disease_to_contexts
+
+    def _stage_1_collect_disease_contexts(
+        self,
+        contexts: list[dict],
+    ) -> dict[str, set[str]]:
+        disease_to_contexts: dict[str, set[str]] = {}
         for ctx in tqdm(contexts, desc="Stage 1: Extracting diseases"):
             context_id = str(ctx.get("context_id", ""))
             context_text = str(ctx.get("context", ""))
@@ -802,20 +828,15 @@ class BaseEmbeddingPipeline(ABC):
                 )
 
             time.sleep(EMBEDDING_SLEEP_SECONDS)
+        return disease_to_contexts
 
-        if not disease_to_contexts:
-            logger.warning("No diseases extracted. Pipeline cannot continue.")
-            self._index_c_count = 0
-            return {}
-
-        logger.info(
-            f"Extracted {len(disease_to_contexts)} unique diseases: "
-            f"{list(disease_to_contexts.keys())}"
-        )
-
-        context_aliases = self._build_context_aliases(disease_to_contexts)
+    def _stage_1_route_units(
+        self,
+        *,
+        context_aliases: dict[str, list[str]],
+        context_to_article: dict[str, str],
+    ) -> dict[str, dict[str, Any]]:
         route_units: dict[str, dict[str, Any]] = {}
-
         for context_id, aliases in context_aliases.items():
             canonical_title = self._select_canonical_title(aliases)
             if not canonical_title:
@@ -869,7 +890,12 @@ class BaseEmbeddingPipeline(ABC):
                     ]["route_units"]
                     if route_item not in stage_1_route_units:
                         stage_1_route_units.append(route_item)
+        return route_units
 
+    def _stage_1_route_payloads(
+        self,
+        route_units: dict[str, dict[str, Any]],
+    ) -> list[dict[str, Any]]:
         route_payloads: list[dict[str, Any]] = []
         for route_unit_id, unit in route_units.items():
             canonical_title = str(unit["canonical_title"])
@@ -909,7 +935,12 @@ class BaseEmbeddingPipeline(ABC):
                     },
                 }
             )
+        return route_payloads
 
+    def _store_index_c_route_payloads(
+        self,
+        route_payloads: list[dict[str, Any]],
+    ) -> None:
         embeddings = self.embed_documents(
             [str(payload["content"]).lower() for payload in route_payloads]
         )
@@ -923,10 +954,6 @@ class BaseEmbeddingPipeline(ABC):
                 source=DOCUMENT_SOURCE_TAG,
                 metadata=payload["metadata"],
             )
-
-        self._index_c_count = len(route_payloads)
-        logger.info("Index C: %s route entries stored", self._index_c_count)
-        return disease_to_contexts
 
     def stage_2_index_a(
         self,
@@ -959,135 +986,232 @@ class BaseEmbeddingPipeline(ABC):
             article_id = str(ctx_data.get("article_id") or context_id)
             qa_pairs = self._qa_pairs_by_context.get(context_id, [])
             if not qa_pairs:
-                # Keep compatibility for contexts without extracted QA pairs.
-                context_text = str(ctx_data.get("context", ""))
-                if not context_text.strip():
-                    continue
-                try:
-                    text = (
-                        context_text[:8000]
-                        if len(context_text) > 8000
-                        else context_text
-                    )
-                    prompt = PROMPT_EXTRACT_SUMMARY.format(
-                        disease_name=canonical_title, text=text
-                    )
-                    response = self._llm_invoke(self.llm, prompt)
-                    summary_data = self._parse_json_response(response)
-                    if not isinstance(summary_data, dict):
-                        continue
-                    summary_data["disease_name"] = canonical_title
-                    summary_text = self.build_summary_text(summary_data)
-                    if not summary_text.strip():
-                        continue
-
-                    embedding = self.embed_documents([summary_text.lower()])[0]
-
-                    MedicalDocument.objects.create(
-                        title=canonical_title,
-                        content=summary_text.lower(),
-                        embedding=embedding,
-                        section_type=SectionType.GENERAL,
-                        index_type=IndexType.A,
-                        source=DOCUMENT_SOURCE_TAG,
-                        metadata={
-                            "context_id": context_id,
-                            "article_id": article_id,
-                            "canonical_title": canonical_title,
-                            "title_aliases": aliases,
-                            "primary_intent": "definition_overview",
-                            "secondary_intents": [],
-                            "answer_text": summary_text.strip(),
-                            "qa_id": self._build_qa_id(
-                                context_id, canonical_title, summary_text
-                            ),
-                            "dataset": COVID_QA_DATASET_NAME,
-                        },
-                    )
-                    if article_id in self.extraction_records:
-                        stage_2 = self.extraction_records[article_id]["stage_2"]
-                        stage_2["canonical_title"] = canonical_title
-                        stage_2["aliases"] = aliases
-                        stage_2["faqs"].append(
-                            {
-                                "qa_id": self._build_qa_id(
-                                    context_id, canonical_title, summary_text
-                                ),
-                                "question": canonical_title,
-                                "intent": "definition_overview",
-                            }
-                        )
-                    count += 1
-                except Exception as exc:
-                    logger.warning(
-                        "Summary fallback failed for %s (context %s): %s",
-                        canonical_title,
-                        context_id,
-                        exc,
-                    )
+                count += self._stage_2_create_summary_fallback(
+                    ctx_data=ctx_data,
+                    context_id=context_id,
+                    article_id=article_id,
+                    canonical_title=canonical_title,
+                    aliases=aliases,
+                )
                 continue
 
-            docs_to_create: list[dict[str, Any]] = []
-            for qa in qa_pairs:
-                question = self._normalize_text(str(qa.get("question", "")))
-                answer = str(qa.get("answer", "")).strip()
-                if not question or not answer:
-                    continue
-
-                qa_id = self._build_qa_id(context_id, question, answer)
-                if qa_id in qa_seen:
-                    continue
-                qa_seen.add(qa_id)
-
-                intent = self._infer_intent(question, answer)
-                metadata = {
-                    "qa_id": qa_id,
-                    "context_id": context_id,
-                    "article_id": article_id,
-                    "canonical_title": canonical_title,
-                    "title_aliases": aliases,
-                    "primary_intent": intent,
-                    "secondary_intents": [],
-                    "answer_text": answer,
-                    "answer_start": qa.get("answer_start"),
-                    "dataset": COVID_QA_DATASET_NAME,
-                }
-                docs_to_create.append(
-                    {
-                        "title": canonical_title,
-                        "content": question,
-                        "metadata": metadata,
-                    }
-                )
-
-                if article_id in self.extraction_records:
-                    self.extraction_records[article_id]["stage_2"]["faqs"].append(
-                        {
-                            "qa_id": qa_id,
-                            "question": question,
-                            "intent": intent,
-                        }
-                    )
+            docs_to_create = self._stage_2_qa_docs(
+                context_id=context_id,
+                article_id=article_id,
+                canonical_title=canonical_title,
+                aliases=aliases,
+                qa_pairs=qa_pairs,
+                qa_seen=qa_seen,
+            )
 
             if not docs_to_create:
                 continue
 
-            embeddings = self.embed_documents([d["content"] for d in docs_to_create])
-            for payload, embedding in zip(docs_to_create, embeddings):
-                MedicalDocument.objects.create(
-                    title=payload["title"],
-                    content=payload["content"],
-                    embedding=embedding,
-                    section_type=SectionType.GENERAL,
-                    index_type=IndexType.A,
-                    source=DOCUMENT_SOURCE_TAG,
-                    metadata=payload["metadata"],
-                )
-                count += 1
+            count += self._store_index_a_docs(docs_to_create)
             time.sleep(EMBEDDING_SLEEP_SECONDS)
 
         logger.info("Index A: %s FAQ entries stored", count)
         return count
+
+    def _stage_2_create_summary_fallback(
+        self,
+        *,
+        ctx_data: dict,
+        context_id: str,
+        article_id: str,
+        canonical_title: str,
+        aliases: list[str],
+    ) -> int:
+        context_text = str(ctx_data.get("context", ""))
+        if not context_text.strip():
+            return 0
+        try:
+            summary_text = self._stage_2_summary_text(
+                context_text=context_text,
+                canonical_title=canonical_title,
+            )
+            if not summary_text.strip():
+                return 0
+            self._store_index_a_summary_doc(
+                context_id=context_id,
+                article_id=article_id,
+                canonical_title=canonical_title,
+                aliases=aliases,
+                summary_text=summary_text,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Summary fallback failed for %s (context %s): %s",
+                canonical_title,
+                context_id,
+                exc,
+            )
+            return 0
+        return 1
+
+    def _stage_2_summary_text(
+        self,
+        *,
+        context_text: str,
+        canonical_title: str,
+    ) -> str:
+        text = context_text[:8000] if len(context_text) > 8000 else context_text
+        prompt = PROMPT_EXTRACT_SUMMARY.format(
+            disease_name=canonical_title,
+            text=text,
+        )
+        response = self._llm_invoke(self.llm, prompt)
+        summary_data = self._parse_json_response(response)
+        if not isinstance(summary_data, dict):
+            return ""
+        summary_data["disease_name"] = canonical_title
+        return self.build_summary_text(summary_data)
+
+    def _store_index_a_summary_doc(
+        self,
+        *,
+        context_id: str,
+        article_id: str,
+        canonical_title: str,
+        aliases: list[str],
+        summary_text: str,
+    ) -> None:
+        qa_id = self._build_qa_id(context_id, canonical_title, summary_text)
+        embedding = self.embed_documents([summary_text.lower()])[0]
+        MedicalDocument.objects.create(
+            title=canonical_title,
+            content=summary_text.lower(),
+            embedding=embedding,
+            section_type=SectionType.GENERAL,
+            index_type=IndexType.A,
+            source=DOCUMENT_SOURCE_TAG,
+            metadata={
+                "context_id": context_id,
+                "article_id": article_id,
+                "canonical_title": canonical_title,
+                "title_aliases": aliases,
+                "primary_intent": "definition_overview",
+                "secondary_intents": [],
+                "answer_text": summary_text.strip(),
+                "qa_id": qa_id,
+                "dataset": COVID_QA_DATASET_NAME,
+            },
+        )
+        self._record_stage_2_faq(
+            article_id=article_id,
+            canonical_title=canonical_title,
+            aliases=aliases,
+            qa_id=qa_id,
+            question=canonical_title,
+            intent="definition_overview",
+        )
+
+    def _stage_2_qa_docs(
+        self,
+        *,
+        context_id: str,
+        article_id: str,
+        canonical_title: str,
+        aliases: list[str],
+        qa_pairs: list[dict],
+        qa_seen: set[str],
+    ) -> list[dict[str, Any]]:
+        docs_to_create: list[dict[str, Any]] = []
+        for qa in qa_pairs:
+            doc = self._stage_2_qa_doc(
+                context_id=context_id,
+                article_id=article_id,
+                canonical_title=canonical_title,
+                aliases=aliases,
+                qa=qa,
+                qa_seen=qa_seen,
+            )
+            if doc is not None:
+                docs_to_create.append(doc)
+        return docs_to_create
+
+    def _stage_2_qa_doc(
+        self,
+        *,
+        context_id: str,
+        article_id: str,
+        canonical_title: str,
+        aliases: list[str],
+        qa: dict,
+        qa_seen: set[str],
+    ) -> dict[str, Any] | None:
+        question = self._normalize_text(str(qa.get("question", "")))
+        answer = str(qa.get("answer", "")).strip()
+        if not question or not answer:
+            return None
+
+        qa_id = self._build_qa_id(context_id, question, answer)
+        if qa_id in qa_seen:
+            return None
+        qa_seen.add(qa_id)
+
+        intent = self._infer_intent(question, answer)
+        self._record_stage_2_faq(
+            article_id=article_id,
+            canonical_title=canonical_title,
+            aliases=aliases,
+            qa_id=qa_id,
+            question=question,
+            intent=intent,
+        )
+        return {
+            "title": canonical_title,
+            "content": question,
+            "metadata": {
+                "qa_id": qa_id,
+                "context_id": context_id,
+                "article_id": article_id,
+                "canonical_title": canonical_title,
+                "title_aliases": aliases,
+                "primary_intent": intent,
+                "secondary_intents": [],
+                "answer_text": answer,
+                "answer_start": qa.get("answer_start"),
+                "dataset": COVID_QA_DATASET_NAME,
+            },
+        }
+
+    def _record_stage_2_faq(
+        self,
+        *,
+        article_id: str,
+        canonical_title: str,
+        aliases: list[str],
+        qa_id: str,
+        question: str,
+        intent: str,
+    ) -> None:
+        if article_id not in self.extraction_records:
+            return
+        stage_2 = self.extraction_records[article_id]["stage_2"]
+        stage_2["canonical_title"] = canonical_title
+        stage_2["aliases"] = aliases
+        stage_2["faqs"].append(
+            {
+                "qa_id": qa_id,
+                "question": question,
+                "intent": intent,
+            }
+        )
+
+    def _store_index_a_docs(self, docs_to_create: list[dict[str, Any]]) -> int:
+        embeddings = self.embed_documents([d["content"] for d in docs_to_create])
+        for payload, embedding in zip(docs_to_create, embeddings):
+            MedicalDocument.objects.create(
+                title=payload["title"],
+                content=payload["content"],
+                embedding=embedding,
+                section_type=SectionType.GENERAL,
+                index_type=IndexType.A,
+                source=DOCUMENT_SOURCE_TAG,
+                metadata=payload["metadata"],
+            )
+        return len(docs_to_create)
 
     def stage_3_index_b(
         self,
@@ -1115,90 +1239,193 @@ class BaseEmbeddingPipeline(ABC):
             context_aliases.items(), desc="Stage 3: Section chunking"
         ):
             ctx_data = ctx_lookup.get(context_id)
-            if not ctx_data:
-                continue
-
-            context_text = str(ctx_data.get("context", ""))
-            article_id = str(ctx_data.get("article_id") or context_id)
-            if not context_text.strip():
-                continue
-            canonical_title = self._select_canonical_title(aliases)
-            if not canonical_title:
-                continue
-
-            qa_pairs = self._qa_pairs_by_context.get(context_id, [])
-            intent_hints = sorted(
-                {
-                    self._infer_intent(
-                        str(qa.get("question", "")),
-                        str(qa.get("answer", "")),
-                    )
-                    for qa in qa_pairs
-                }
+            stage_context = self._stage_3_context(
+                ctx_data=ctx_data,
+                context_id=context_id,
+                aliases=aliases,
             )
+            if stage_context is None:
+                continue
 
-            try:
-                sections = self.classify_sections(context_text)
-                if article_id in self.extraction_records:
-                    stage_3 = self.extraction_records[article_id]["stage_3"]
-                    stage_3["canonical_title"] = canonical_title
-                    stage_3["aliases"] = aliases
-                    stage_3["sections"] = sections
-            except Exception as e:
-                logger.warning(f"Section classification failed for {context_id}: {e}")
+            sections = self._stage_3_classify_sections(
+                context_id=context_id,
+                context_text=stage_context["context_text"],
+                article_id=stage_context["article_id"],
+                canonical_title=stage_context["canonical_title"],
+                aliases=aliases,
+            )
+            if sections is None:
                 time.sleep(EMBEDDING_SLEEP_SECONDS)
                 continue
 
-            for section_key in VALID_SECTIONS:
-                section_text = str(sections.get(section_key, "")).strip()
-                if not section_text:
-                    continue
-
-                section_type = SECTION_TYPE_MAP.get(section_key, SectionType.GENERAL)
-                chunks = splitter.split_text(section_text)
-                if not chunks:
-                    continue
-
-                try:
-                    chunks_lower = [c.lower() for c in chunks]
-                    embeddings = self.embed_documents(chunks_lower)
-                except Exception as e:
-                    logger.warning(
-                        f"Embedding failed for {context_id}/{section_key}: {e}"
-                    )
-                    continue
-
-                for i, (chunk_text, embedding) in enumerate(
-                    zip(chunks_lower, embeddings)
-                ):
-                    evidence_id = f"{context_id}:{section_key}:{i}"
-                    MedicalDocument.objects.create(
-                        title=canonical_title,
-                        content=chunk_text,
-                        embedding=embedding,
-                        section_type=section_type,
-                        index_type=IndexType.B,
-                        source=DOCUMENT_SOURCE_TAG,
-                        metadata={
-                            "context_id": context_id,
-                            "article_id": article_id,
-                            "disease": canonical_title,
-                            "canonical_title": canonical_title,
-                            "title_aliases": aliases,
-                            "evidence_id": evidence_id,
-                            "section": section_key,
-                            "chunk_index": i,
-                            "total_chunks": len(chunks),
-                            "intent_hints": intent_hints,
-                            "dataset": COVID_QA_DATASET_NAME,
-                        },
-                    )
-                    count += 1
-
-                time.sleep(EMBEDDING_SLEEP_SECONDS)
+            count += self._store_stage_3_sections(
+                splitter=splitter,
+                context_id=context_id,
+                article_id=stage_context["article_id"],
+                canonical_title=stage_context["canonical_title"],
+                aliases=aliases,
+                intent_hints=stage_context["intent_hints"],
+                sections=sections,
+            )
 
         logger.info(f"Index B: {count} chunk entries stored")
         return count
+
+    def _stage_3_context(
+        self,
+        *,
+        ctx_data: dict | None,
+        context_id: str,
+        aliases: list[str],
+    ) -> dict[str, Any] | None:
+        if not ctx_data:
+            return None
+        context_text = str(ctx_data.get("context", ""))
+        if not context_text.strip():
+            return None
+        canonical_title = self._select_canonical_title(aliases)
+        if not canonical_title:
+            return None
+
+        return {
+            "context_text": context_text,
+            "article_id": str(ctx_data.get("article_id") or context_id),
+            "canonical_title": canonical_title,
+            "intent_hints": self._stage_3_intent_hints(context_id),
+        }
+
+    def _stage_3_intent_hints(self, context_id: str) -> list[str]:
+        qa_pairs = self._qa_pairs_by_context.get(context_id, [])
+        return sorted(
+            {
+                self._infer_intent(
+                    str(qa.get("question", "")),
+                    str(qa.get("answer", "")),
+                )
+                for qa in qa_pairs
+            }
+        )
+
+    def _stage_3_classify_sections(
+        self,
+        *,
+        context_id: str,
+        context_text: str,
+        article_id: str,
+        canonical_title: str,
+        aliases: list[str],
+    ) -> dict[str, Any] | None:
+        try:
+            sections = self.classify_sections(context_text)
+        except Exception as exc:
+            logger.warning(f"Section classification failed for {context_id}: {exc}")
+            return None
+
+        if article_id in self.extraction_records:
+            stage_3 = self.extraction_records[article_id]["stage_3"]
+            stage_3["canonical_title"] = canonical_title
+            stage_3["aliases"] = aliases
+            stage_3["sections"] = sections
+        return sections
+
+    def _store_stage_3_sections(
+        self,
+        *,
+        splitter: RecursiveCharacterTextSplitter,
+        context_id: str,
+        article_id: str,
+        canonical_title: str,
+        aliases: list[str],
+        intent_hints: list[str],
+        sections: dict[str, Any],
+    ) -> int:
+        count = 0
+        for section_key in VALID_SECTIONS:
+            count += self._store_stage_3_section_chunks(
+                splitter=splitter,
+                context_id=context_id,
+                article_id=article_id,
+                canonical_title=canonical_title,
+                aliases=aliases,
+                intent_hints=intent_hints,
+                section_key=section_key,
+                section_text=str(sections.get(section_key, "")).strip(),
+            )
+        return count
+
+    def _store_stage_3_section_chunks(
+        self,
+        *,
+        splitter: RecursiveCharacterTextSplitter,
+        context_id: str,
+        article_id: str,
+        canonical_title: str,
+        aliases: list[str],
+        intent_hints: list[str],
+        section_key: str,
+        section_text: str,
+    ) -> int:
+        if not section_text:
+            return 0
+        section_type = SECTION_TYPE_MAP.get(section_key, SectionType.GENERAL)
+        chunks = splitter.split_text(section_text)
+        if not chunks:
+            return 0
+
+        try:
+            chunks_lower = [chunk.lower() for chunk in chunks]
+            embeddings = self.embed_documents(chunks_lower)
+        except Exception as exc:
+            logger.warning(f"Embedding failed for {context_id}/{section_key}: {exc}")
+            return 0
+
+        for index, (chunk_text, embedding) in enumerate(zip(chunks_lower, embeddings)):
+            MedicalDocument.objects.create(
+                title=canonical_title,
+                content=chunk_text,
+                embedding=embedding,
+                section_type=section_type,
+                index_type=IndexType.B,
+                source=DOCUMENT_SOURCE_TAG,
+                metadata=self._stage_3_chunk_metadata(
+                    context_id=context_id,
+                    article_id=article_id,
+                    canonical_title=canonical_title,
+                    aliases=aliases,
+                    section_key=section_key,
+                    chunk_index=index,
+                    total_chunks=len(chunks),
+                    intent_hints=intent_hints,
+                ),
+            )
+        time.sleep(EMBEDDING_SLEEP_SECONDS)
+        return len(chunks)
+
+    def _stage_3_chunk_metadata(
+        self,
+        *,
+        context_id: str,
+        article_id: str,
+        canonical_title: str,
+        aliases: list[str],
+        section_key: str,
+        chunk_index: int,
+        total_chunks: int,
+        intent_hints: list[str],
+    ) -> dict[str, Any]:
+        return {
+            "context_id": context_id,
+            "article_id": article_id,
+            "disease": canonical_title,
+            "canonical_title": canonical_title,
+            "title_aliases": aliases,
+            "evidence_id": f"{context_id}:{section_key}:{chunk_index}",
+            "section": section_key,
+            "chunk_index": chunk_index,
+            "total_chunks": total_chunks,
+            "intent_hints": intent_hints,
+            "dataset": COVID_QA_DATASET_NAME,
+        }
 
     def _parse_json_response(self, response: str) -> dict | list:
         """Parse JSON from LLM response, handling markdown code blocks."""

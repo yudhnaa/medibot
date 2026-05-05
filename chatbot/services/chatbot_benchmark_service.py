@@ -295,15 +295,12 @@ class ChatbotBenchmarkService(ChatbotService):
         prefilter_k = max(1, min(prefilter_k, len(docs)))
         top_k = max(1, min(top_k, prefilter_k))
 
-        ranked = sorted(
-            docs,
-            key=lambda doc: self._benchmark_lexical_score(
-                question,
-                doc,
-                intent=intent,
-            ),
-            reverse=True,
-        )[:prefilter_k]
+        ranked = self._prefilter_benchmark_docs(
+            question=question,
+            docs=docs,
+            intent=intent,
+            prefilter_k=prefilter_k,
+        )
 
         if len(ranked) <= top_k:
             return (
@@ -318,48 +315,19 @@ class ChatbotBenchmarkService(ChatbotService):
                 },
             )
 
-        snippets: list[str] = []
-        for idx, doc in enumerate(ranked, start=1):
-            metadata = doc.metadata if isinstance(doc.metadata, dict) else {}
-            title = str(metadata.get("title", "")).strip()
-            section = str(metadata.get("section", "")).strip()
-            snippet = re.sub(r"\s+", " ", str(doc.page_content or "")).strip()[:260]
-            snippets.append(f"{idx}. ({title}) [{section}] {snippet}")
-
-        section_hint = (
-            f"Focus sections (prefer these when available): {', '.join(target_sections)}.\n"
-            if target_sections
-            else ""
-        )
-        rerank_prompt = (
-            "You are a strict retrieval reranker.\n"
-            "Select the most relevant evidence snippets for the user question.\n"
-            f"Return ONLY JSON with keys selected_indices and insufficient_evidence.\n"
-            f"- selected_indices: list of unique integers, 1-based, max {top_k}.\n"
-            "- insufficient_evidence: true only if snippets are not enough to answer safely.\n\n"
-            f"Question type: {intent.get('question_type', 'open')}.\n"
-            f"{section_hint}"
-            f"Question: {question.strip()}\n\n"
-            "Snippets:\n" + "\n".join(snippets)
-        )
-
         try:
-            llm_result = self.llm.invoke(rerank_prompt)
-            llm_content = (
-                llm_result.content if hasattr(llm_result, "content") else llm_result
+            payload = self._invoke_benchmark_rerank(
+                question=question,
+                ranked=ranked,
+                top_k=top_k,
+                target_sections=target_sections,
+                intent=intent,
             )
-            if isinstance(llm_content, list):
-                llm_content = "\n".join(str(item) for item in llm_content)
-            payload = self._parse_benchmark_rerank_payload(str(llm_content or ""))
-            selected_indices = []
-            for raw_idx in payload.get("selected_indices", []):
-                if isinstance(raw_idx, int) and 1 <= raw_idx <= len(ranked):
-                    if raw_idx not in selected_indices:
-                        selected_indices.append(raw_idx)
-                if len(selected_indices) >= top_k:
-                    break
-            if not selected_indices:
-                selected_indices = list(range(1, top_k + 1))
+            selected_indices = self._benchmark_selected_indices(
+                payload=payload,
+                ranked_count=len(ranked),
+                top_k=top_k,
+            )
             selected_docs = [ranked[i - 1] for i in selected_indices]
             return (
                 self._truncate_benchmark_docs(
@@ -393,6 +361,100 @@ class ChatbotBenchmarkService(ChatbotService):
                     "intent": intent,
                 },
             )
+
+    def _prefilter_benchmark_docs(
+        self,
+        *,
+        question: str,
+        docs: list[Document],
+        intent: dict[str, Any],
+        prefilter_k: int,
+    ) -> list[Document]:
+        return sorted(
+            docs,
+            key=lambda doc: self._benchmark_lexical_score(
+                question,
+                doc,
+                intent=intent,
+            ),
+            reverse=True,
+        )[:prefilter_k]
+
+    def _invoke_benchmark_rerank(
+        self,
+        *,
+        question: str,
+        ranked: list[Document],
+        top_k: int,
+        target_sections: list[str],
+        intent: dict[str, Any],
+    ) -> dict[str, Any]:
+        rerank_prompt = self._benchmark_rerank_prompt(
+            question=question,
+            ranked=ranked,
+            top_k=top_k,
+            target_sections=target_sections,
+            intent=intent,
+        )
+        llm_result = self.llm.invoke(rerank_prompt)
+        llm_content = (
+            llm_result.content if hasattr(llm_result, "content") else llm_result
+        )
+        if isinstance(llm_content, list):
+            llm_content = "\n".join(str(item) for item in llm_content)
+        return self._parse_benchmark_rerank_payload(str(llm_content or ""))
+
+    def _benchmark_rerank_prompt(
+        self,
+        *,
+        question: str,
+        ranked: list[Document],
+        top_k: int,
+        target_sections: list[str],
+        intent: dict[str, Any],
+    ) -> str:
+        section_hint = (
+            f"Focus sections (prefer these when available): {', '.join(target_sections)}.\n"
+            if target_sections
+            else ""
+        )
+        return (
+            "You are a strict retrieval reranker.\n"
+            "Select the most relevant evidence snippets for the user question.\n"
+            f"Return ONLY JSON with keys selected_indices and insufficient_evidence.\n"
+            f"- selected_indices: list of unique integers, 1-based, max {top_k}.\n"
+            "- insufficient_evidence: true only if snippets are not enough to answer safely.\n\n"
+            f"Question type: {intent.get('question_type', 'open')}.\n"
+            f"{section_hint}"
+            f"Question: {question.strip()}\n\n"
+            "Snippets:\n" + "\n".join(self._benchmark_rerank_snippets(ranked))
+        )
+
+    def _benchmark_rerank_snippets(self, ranked: list[Document]) -> list[str]:
+        snippets = []
+        for idx, doc in enumerate(ranked, start=1):
+            metadata = doc.metadata if isinstance(doc.metadata, dict) else {}
+            title = str(metadata.get("title", "")).strip()
+            section = str(metadata.get("section", "")).strip()
+            snippet = re.sub(r"\s+", " ", str(doc.page_content or "")).strip()[:260]
+            snippets.append(f"{idx}. ({title}) [{section}] {snippet}")
+        return snippets
+
+    def _benchmark_selected_indices(
+        self,
+        *,
+        payload: dict[str, Any],
+        ranked_count: int,
+        top_k: int,
+    ) -> list[int]:
+        selected_indices = []
+        for raw_idx in payload.get("selected_indices", []):
+            if isinstance(raw_idx, int) and 1 <= raw_idx <= ranked_count:
+                if raw_idx not in selected_indices:
+                    selected_indices.append(raw_idx)
+            if len(selected_indices) >= top_k:
+                break
+        return selected_indices or list(range(1, top_k + 1))
 
     def _truncate_benchmark_docs(
         self,
@@ -813,13 +875,40 @@ class ChatbotBenchmarkService(ChatbotService):
             question=question,
             output_language=output_language,
         )
-        if output_language == "en":
-            policies.append("Output language: English only.")
-        elif output_language == "vi":
-            policies.append("Output language: Vietnamese only.")
-        else:
-            policies.append("Output language: same as the user question.")
+        policies.append(self._benchmark_language_policy(output_language))
+        rerank_info, target_sections = self._benchmark_policy_context(retrieval_output)
+        question_lower = str(question or "").strip().lower()
+        question_flags = self._benchmark_question_flags(
+            question_lower=question_lower,
+            target_sections=target_sections,
+        )
+        self._append_benchmark_question_shape_policy(policies, question_flags)
+        self._append_benchmark_section_policies(
+            policies=policies,
+            target_sections=target_sections,
+            target_language=target_language,
+            asks_is_what=question_flags["asks_is_what"],
+        )
+        self._append_benchmark_evidence_policy(policies, rerank_info)
+        self._append_benchmark_yes_no_policy(
+            policies=policies,
+            question=question,
+            target_language=target_language,
+        )
 
+        return " ".join(policies)
+
+    def _benchmark_language_policy(self, output_language: str) -> str:
+        if output_language == "en":
+            return "Output language: English only."
+        if output_language == "vi":
+            return "Output language: Vietnamese only."
+        return "Output language: same as the user question."
+
+    def _benchmark_policy_context(
+        self,
+        retrieval_output: dict[str, Any],
+    ) -> tuple[dict[str, Any], list[str]]:
         rerank_info = (
             retrieval_output.get("rerank", {})
             if isinstance(retrieval_output, dict)
@@ -838,51 +927,60 @@ class ChatbotBenchmarkService(ChatbotService):
                 else []
             ),
         )
+        return rerank_info, target_sections
 
-        question_lower = str(question or "").strip().lower()
-        asks_multi_aspect = (
+    def _benchmark_question_flags(
+        self,
+        *,
+        question_lower: str,
+        target_sections: list[str],
+    ) -> dict[str, bool]:
+        return {
+            "asks_multi_aspect": self._benchmark_asks_multi_aspect(
+                question_lower=question_lower,
+                target_sections=target_sections,
+            ),
+            "asks_role_explanation": any(
+                token in question_lower
+                for token in ("what role", "role of", "vai trò", "đóng vai trò")
+            ),
+            "asks_is_what": any(
+                token in question_lower for token in ("what is", "là gì")
+            ),
+        }
+
+    def _benchmark_asks_multi_aspect(
+        self,
+        *,
+        question_lower: str,
+        target_sections: list[str],
+    ) -> bool:
+        return (
             len(target_sections) >= 3
             or (len(target_sections) >= 2 and "general" not in set(target_sections))
             or any(
                 token in question_lower
-                for token in (
-                    "including",
-                    "bao gồm",
-                    "key characteristics",
-                    "đặc điểm",
-                )
+                for token in ("including", "bao gồm", "key characteristics", "đặc điểm")
             )
         )
 
-        # Keep backward-compatible shape for previous tests and narrow questions.
-        asks_role_explanation = any(
-            token in question_lower
-            for token in (
-                "what role",
-                "role of",
-                "vai trò",
-                "đóng vai trò",
-            )
-        )
-        asks_is_what = any(
-            token in question_lower
-            for token in (
-                "what is",
-                "là gì",
-            )
-        )
-        if asks_multi_aspect:
+    def _append_benchmark_question_shape_policy(
+        self,
+        policies: list[str],
+        question_flags: dict[str, bool],
+    ) -> None:
+        if question_flags["asks_multi_aspect"]:
             policies.append(
                 "This is a multi-aspect question: cover each asked aspect in separate concise clauses."
             )
             policies.append(
                 "Use 2-4 sentences and include all explicitly requested parts when evidence exists."
             )
-        elif asks_role_explanation:
+        elif question_flags["asks_role_explanation"]:
             policies.append(
                 "For role/explanation questions, use 1-2 sentences that explicitly describe the role/function of the asked item."
             )
-        elif asks_is_what:
+        elif question_flags["asks_is_what"]:
             policies.append(
                 "For 'what is' questions, answer in direct definitional form that maps the asked entity to the target concept."
             )
@@ -894,83 +992,130 @@ class ChatbotBenchmarkService(ChatbotService):
                 "For single-aspect questions, use 1-2 concise evidence-based sentences."
             )
 
-        if target_sections:
-            policies.append(
-                "Focus only on evidence relevant to sections: "
-                + ", ".join(target_sections)
-                + "."
-            )
-            policies.append(
-                "Mention at least one concrete fact linked to those sections when evidence exists."
-            )
-
-            if "risk" in target_sections and target_language == "en":
-                if asks_is_what:
-                    policies.append(
-                        "For 'what is the risk' phrasing, prefer: 'The risk for older people is higher: they are more likely to become seriously ill from COVID-19.'"
-                    )
-                else:
-                    policies.append(
-                        "When describing risk, explicitly state that older people are at higher risk of becoming seriously ill."
-                    )
-            elif "risk" in target_sections and target_language == "vi":
-                policies.append(
-                    "Khi mô tả nguy cơ, nêu rõ người lớn tuổi có nguy cơ trở nặng cao hơn."
-                )
-
-            if "aetiologies" in target_sections and target_language == "en":
-                policies.append(
-                    "When cause is asked, explicitly mention SARS-CoV-2 as the cause."
-                )
-            elif "aetiologies" in target_sections and target_language == "vi":
-                policies.append(
-                    "Khi được hỏi nguyên nhân, nêu rõ SARS-CoV-2 là tác nhân gây bệnh."
-                )
-
-            if "symptom" in target_sections and target_language == "en":
-                policies.append(
-                    "For symptom-focused questions, mention fever, cough, and tiredness when available in evidence."
-                )
-            elif "symptom" in target_sections and target_language == "vi":
-                policies.append(
-                    "Với câu hỏi về triệu chứng, nêu sốt, ho và mệt mỏi nếu có trong bằng chứng."
-                )
-
-            if "living_and_preventive" in target_sections and target_language == "en":
-                policies.append(
-                    "For prevention-focused questions, include vaccination, masking, and distancing when available in evidence."
-                )
-            elif "living_and_preventive" in target_sections and target_language == "vi":
-                policies.append(
-                    "Với câu hỏi phòng ngừa, nêu tiêm vaccine, đeo khẩu trang và giữ khoảng cách nếu có trong bằng chứng."
-                )
-
-            if "general" in target_sections and target_language == "en":
-                policies.append(
-                    "When general overview is asked, start by stating COVID-19 is an infectious disease."
-                )
-            elif "general" in target_sections and target_language == "vi":
-                policies.append(
-                    "Khi cần mô tả tổng quan, mở đầu bằng việc COVID-19 là bệnh truyền nhiễm."
-                )
-
-        insufficient_evidence = bool(
-            (rerank_info or {}).get("insufficient_evidence", False)
+    def _append_benchmark_section_policies(
+        self,
+        *,
+        policies: list[str],
+        target_sections: list[str],
+        target_language: str,
+        asks_is_what: bool,
+    ) -> None:
+        if not target_sections:
+            return
+        policies.append(
+            "Focus only on evidence relevant to sections: "
+            + ", ".join(target_sections)
+            + "."
         )
-        if insufficient_evidence:
+        policies.append(
+            "Mention at least one concrete fact linked to those sections when evidence exists."
+        )
+        self._append_benchmark_risk_policy(
+            policies=policies,
+            target_sections=target_sections,
+            target_language=target_language,
+            asks_is_what=asks_is_what,
+        )
+        self._append_benchmark_section_fact_policies(
+            policies=policies,
+            target_sections=target_sections,
+            target_language=target_language,
+        )
+
+    def _append_benchmark_risk_policy(
+        self,
+        *,
+        policies: list[str],
+        target_sections: list[str],
+        target_language: str,
+        asks_is_what: bool,
+    ) -> None:
+        if "risk" not in target_sections:
+            return
+        if target_language == "en" and asks_is_what:
+            policies.append(
+                "For 'what is the risk' phrasing, prefer: 'The risk for older people is higher: they are more likely to become seriously ill from COVID-19.'"
+            )
+        elif target_language == "en":
+            policies.append(
+                "When describing risk, explicitly state that older people are at higher risk of becoming seriously ill."
+            )
+        elif target_language == "vi":
+            policies.append(
+                "Khi mô tả nguy cơ, nêu rõ người lớn tuổi có nguy cơ trở nặng cao hơn."
+            )
+
+    def _append_benchmark_section_fact_policies(
+        self,
+        *,
+        policies: list[str],
+        target_sections: list[str],
+        target_language: str,
+    ) -> None:
+        section_policies = {
+            (
+                "aetiologies",
+                "en",
+            ): "When cause is asked, explicitly mention SARS-CoV-2 as the cause.",
+            (
+                "aetiologies",
+                "vi",
+            ): "Khi được hỏi nguyên nhân, nêu rõ SARS-CoV-2 là tác nhân gây bệnh.",
+            (
+                "symptom",
+                "en",
+            ): "For symptom-focused questions, mention fever, cough, and tiredness when available in evidence.",
+            (
+                "symptom",
+                "vi",
+            ): "Với câu hỏi về triệu chứng, nêu sốt, ho và mệt mỏi nếu có trong bằng chứng.",
+            (
+                "living_and_preventive",
+                "en",
+            ): "For prevention-focused questions, include vaccination, masking, and distancing when available in evidence.",
+            (
+                "living_and_preventive",
+                "vi",
+            ): "Với câu hỏi phòng ngừa, nêu tiêm vaccine, đeo khẩu trang và giữ khoảng cách nếu có trong bằng chứng.",
+            (
+                "general",
+                "en",
+            ): "When general overview is asked, start by stating COVID-19 is an infectious disease.",
+            (
+                "general",
+                "vi",
+            ): "Khi cần mô tả tổng quan, mở đầu bằng việc COVID-19 là bệnh truyền nhiễm.",
+        }
+        for section in target_sections:
+            policy = section_policies.get((section, target_language))
+            if policy:
+                policies.append(policy)
+
+    def _append_benchmark_evidence_policy(
+        self,
+        policies: list[str],
+        rerank_info: dict[str, Any],
+    ) -> None:
+        if bool((rerank_info or {}).get("insufficient_evidence", False)):
             policies.append(
                 "Evidence is likely insufficient: say the information is insufficient from provided context."
             )
 
-        if self._is_yes_no_question(question):
-            yes_no_prefix = (
-                "`Yes.` or `No.`" if target_language == "en" else "`Có.` hoặc `Không.`"
-            )
-            policies.append(
-                f"This is a yes/no question: start with {yes_no_prefix} then add one short evidence-based explanation."
-            )
-
-        return " ".join(policies)
+    def _append_benchmark_yes_no_policy(
+        self,
+        *,
+        policies: list[str],
+        question: str,
+        target_language: str,
+    ) -> None:
+        if not self._is_yes_no_question(question):
+            return
+        yes_no_prefix = (
+            "`Yes.` or `No.`" if target_language == "en" else "`Có.` hoặc `Không.`"
+        )
+        policies.append(
+            f"This is a yes/no question: start with {yes_no_prefix} then add one short evidence-based explanation."
+        )
 
     def _is_yes_no_question(self, question: str) -> bool:
         text = question.strip().lower()

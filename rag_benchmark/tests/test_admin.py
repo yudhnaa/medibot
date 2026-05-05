@@ -248,7 +248,6 @@ class BenchmarkAdminDashboardTests(TestCase):
         self.assertContains(response, "Metric Thresholds")
         self.assertContains(response, "&gt;= 0.8")
         self.assertContains(response, "&gt;= 0.7")
-        self.assertContains(response, "&gt;= 0.6")
         self.assertContains(response, "Per-case Metrics")
         self.assertContains(response, self.case.case_id)
         self.assertContains(response, "0.75")

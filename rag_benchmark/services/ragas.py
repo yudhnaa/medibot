@@ -81,25 +81,19 @@ class RagasJudgeEvaluator:
         if len(cases) != len(runtime_outputs):
             raise ValueError("cases and runtime_outputs must have the same length")
 
-        try:
-            from datasets import Dataset
-            from ragas import aevaluate
-            from ragas.metrics import (
-                answer_relevancy,
-                context_precision,
-                context_recall,
-                faithfulness,
-            )
-            from ragas.run_config import RunConfig
-        except Exception as exc:
+        dependencies, import_error = self._import_ragas_dependencies()
+        if import_error is not None:
             return [
                 {
                     "enabled": True,
                     "available": False,
-                    "error": f"ragas_unavailable: {exc}",
+                    "error": f"ragas_unavailable: {import_error}",
                 }
                 for _ in cases
             ]
+        Dataset = dependencies["Dataset"]
+        RunConfig = dependencies["RunConfig"]
+        aevaluate = dependencies["aevaluate"]
 
         answer_relevancy_strictness = self._get_int_config(
             key="RAGAS_ANSWER_RELEVANCY_STRICTNESS",
@@ -108,10 +102,10 @@ class RagasJudgeEvaluator:
             maximum=5,
         )
         metric_registry = self._build_metric_registry(
-            faithfulness=faithfulness,
-            answer_relevancy=answer_relevancy,
-            context_precision=context_precision,
-            context_recall=context_recall,
+            faithfulness=dependencies["faithfulness"],
+            answer_relevancy=dependencies["answer_relevancy"],
+            context_precision=dependencies["context_precision"],
+            context_recall=dependencies["context_recall"],
             answer_relevancy_strictness=answer_relevancy_strictness,
         )
         selected_metrics = [
@@ -121,21 +115,8 @@ class RagasJudgeEvaluator:
         ]
         selected_metric_names = [metric.name for metric in selected_metrics]
         if not selected_metrics:
-            return [
-                {
-                    "enabled": True,
-                    "available": True,
-                    "selected_metrics": [],
-                    "scores": {},
-                    "warning": "No valid ragas metrics configured",
-                }
-                for _ in cases
-            ]
+            return self._no_metric_results(cases)
 
-        question_texts: list[str] = []
-        answer_texts: list[str] = []
-        reference_texts: list[str] = []
-        contexts_batch: list[list[str]] = []
         ragas_context_top_k = self._get_int_config(
             key="RAGAS_CONTEXT_TOP_K",
             default=DEFAULT_RAGAS_CONTEXT_TOP_K,
@@ -148,172 +129,60 @@ class RagasJudgeEvaluator:
             minimum=120,
             maximum=4000,
         )
-        for case, runtime_output in zip(cases, runtime_outputs):
-            generation_output = runtime_output.get("generation_output", {}) or {}
-            retrieval_output = runtime_output.get("retrieval_output", {}) or {}
-            question_text = str(case.question or "").strip()
-            try:
-                contexts = self._build_judge_contexts(
-                    retrieval_output=retrieval_output,
-                    generation_output=generation_output,
-                    question_text=question_text,
-                    default_top_k=ragas_context_top_k,
-                    char_limit=ragas_context_char_limit,
-                )
-            except Exception as exc:
-                logger.warning(
-                    "Ragas context collection fallback to legacy ordering: %s", exc
-                )
-                contexts = []
+        dataset_payloads = self._build_ragas_dataset_payloads(
+            cases=cases,
+            runtime_outputs=runtime_outputs,
+            ragas_context_top_k=ragas_context_top_k,
+            ragas_context_char_limit=ragas_context_char_limit,
+        )
 
-            if not contexts:
-                raw_contexts = self._collect_runtime_contexts(
-                    runtime_output,
-                    question_text=question_text,
-                )
-                effective_top_k = self._resolve_dynamic_context_top_k(
-                    question_text=question_text,
-                    default_top_k=ragas_context_top_k,
-                )
-                contexts = self._prepare_ragas_contexts(
-                    raw_contexts=raw_contexts,
-                    top_k=effective_top_k,
-                    char_limit=ragas_context_char_limit,
-                )
-            question_texts.append(question_text)
-            answer_texts.append(str(generation_output.get("final_answer", "")).strip())
-            reference_texts.append(str(case.reference_answer or "").strip())
-            contexts_batch.append(contexts)
-
-        timeout_seconds = self._get_int_config(
-            key="RAGAS_TIMEOUT_SECONDS",
-            default=DEFAULT_RAGAS_TIMEOUT_SECONDS,
-            minimum=30,
-            maximum=900,
-        )
-        max_tokens = self._get_int_config(
-            key="RAGAS_LLM_MAX_TOKENS",
-            default=DEFAULT_RAGAS_MAX_TOKENS,
-            minimum=512,
-            maximum=32768,
-        )
-        retry_max_tokens = self._get_int_config(
-            key="RAGAS_LLM_RETRY_MAX_TOKENS",
-            default=max(DEFAULT_RAGAS_RETRY_MAX_TOKENS, max_tokens),
-            minimum=max_tokens,
-            maximum=65536,
-        )
-        max_workers = self._get_int_config(
-            key="RAGAS_MAX_WORKERS",
-            default=DEFAULT_RAGAS_MAX_WORKERS,
-            minimum=1,
-            maximum=16,
-        )
-        batch_size = self._get_int_config(
-            key="RAGAS_BATCH_SIZE",
-            default=min(DEFAULT_RAGAS_BATCH_SIZE, len(cases)),
-            minimum=1,
-            maximum=128,
-        )
+        runtime_config = self._ragas_runtime_config(case_count=len(cases))
 
         try:
-            llm, embeddings = self._create_ragas_models(max_tokens=max_tokens)
-        except Exception as exc:
-            return [
-                {
-                    "enabled": True,
-                    "available": False,
-                    "selected_metrics": selected_metric_names,
-                    "error": f"ragas_runtime_unavailable: {exc}",
-                }
-                for _ in cases
-            ]
-
-        dataset_payload = {
-            "user_input": question_texts,
-            "response": answer_texts,
-            "retrieved_contexts": contexts_batch,
-            "reference": reference_texts,
-        }
-        dataset = Dataset.from_dict(dataset_payload)
-
-        retry_used = False
-        try:
-            result = self._run_ragas_evaluate(
-                aevaluate=aevaluate,
-                run_config_cls=RunConfig,
-                dataset=dataset,
-                metrics=selected_metrics,
-                llm=llm,
-                embeddings=embeddings,
-                timeout_seconds=timeout_seconds,
-                max_workers=max_workers,
-                batch_size=batch_size,
+            llm, embeddings = self._create_ragas_models(
+                max_tokens=runtime_config["max_tokens"]
             )
         except Exception as exc:
-            if (
-                self._is_incomplete_generation_error(exc)
-                and retry_max_tokens > max_tokens
-            ):
-                retry_used = True
-                try:
-                    retry_llm, retry_embeddings = self._create_ragas_models(
-                        max_tokens=retry_max_tokens
-                    )
-                    result = self._run_ragas_evaluate(
-                        aevaluate=aevaluate,
-                        run_config_cls=RunConfig,
-                        dataset=dataset,
-                        metrics=selected_metrics,
-                        llm=retry_llm,
-                        embeddings=retry_embeddings,
-                        timeout_seconds=timeout_seconds,
-                        max_workers=max_workers,
-                        batch_size=batch_size,
-                    )
-                    max_tokens = retry_max_tokens
-                except Exception as retry_exc:
-                    return [
-                        {
-                            "enabled": True,
-                            "available": True,
-                            "selected_metrics": selected_metric_names,
-                            "llm_max_tokens": retry_max_tokens,
-                            "answer_relevancy_strictness": answer_relevancy_strictness,
-                            "retry_used": True,
-                            "error": f"ragas_evaluation_failed: {retry_exc}",
-                        }
-                        for _ in cases
-                    ]
-            else:
-                return [
-                    {
-                        "enabled": True,
-                        "available": True,
-                        "selected_metrics": selected_metric_names,
-                        "llm_max_tokens": max_tokens,
-                        "answer_relevancy_strictness": answer_relevancy_strictness,
-                        "retry_used": retry_used,
-                        "error": f"ragas_evaluation_failed: {exc}",
-                    }
-                    for _ in cases
-                ]
+            return self._runtime_unavailable_results(
+                cases=cases,
+                selected_metric_names=selected_metric_names,
+                error=exc,
+            )
 
+        dataset = Dataset.from_dict(self._ragas_dataset_dict(dataset_payloads))
+        evaluation = self._evaluate_ragas_dataset_with_retry(
+            aevaluate=aevaluate,
+            run_config_cls=RunConfig,
+            dataset=dataset,
+            metrics=selected_metrics,
+            llm=llm,
+            embeddings=embeddings,
+            runtime_config=runtime_config,
+        )
+        if evaluation["error"] is not None:
+            return self._evaluation_error_results(
+                cases=cases,
+                selected_metric_names=selected_metric_names,
+                answer_relevancy_strictness=answer_relevancy_strictness,
+                max_tokens=evaluation["max_tokens"],
+                retry_used=evaluation["retry_used"],
+                error=evaluation["error"],
+            )
+
+        max_tokens = evaluation["max_tokens"]
+        retry_used = evaluation["retry_used"]
+        result = evaluation["result"]
         score_payload = result.to_pandas().to_dict(orient="records")
 
         if not score_payload:
-            return [
-                {
-                    "enabled": True,
-                    "available": True,
-                    "selected_metrics": selected_metric_names,
-                    "llm_max_tokens": max_tokens,
-                    "answer_relevancy_strictness": answer_relevancy_strictness,
-                    "retry_used": retry_used,
-                    "error": "ragas_evaluation_failed: empty_result",
-                }
-                for _ in cases
-            ]
+            return self._evaluation_error_results(
+                cases=cases,
+                selected_metric_names=selected_metric_names,
+                answer_relevancy_strictness=answer_relevancy_strictness,
+                max_tokens=max_tokens,
+                retry_used=retry_used,
+                error="empty_result",
+            )
 
         if len(score_payload) < len(cases):
             score_payload.extend([{} for _ in range(len(cases) - len(score_payload))])
@@ -321,71 +190,475 @@ class RagasJudgeEvaluator:
         parsed_scores = [
             self._extract_numeric_scores(row) for row in score_payload[: len(cases)]
         ]
+        fallback_retry_used = self._fill_missing_ragas_scores(
+            dataset_cls=Dataset,
+            aevaluate=aevaluate,
+            run_config_cls=RunConfig,
+            selected_metrics=selected_metrics,
+            selected_metric_names=selected_metric_names,
+            llm=llm,
+            embeddings=embeddings,
+            runtime_config={**runtime_config, "max_tokens": max_tokens},
+            dataset_payloads=dataset_payloads,
+            parsed_scores=parsed_scores,
+        )
+        return self._ragas_success_results(
+            parsed_scores=parsed_scores,
+            selected_metric_names=selected_metric_names,
+            max_tokens=max_tokens,
+            answer_relevancy_strictness=answer_relevancy_strictness,
+            retry_used=retry_used or fallback_retry_used,
+        )
+
+    def _import_ragas_dependencies(self) -> tuple[dict[str, Any], Exception | None]:
+        try:
+            from datasets import Dataset
+            from ragas import aevaluate
+            from ragas.metrics import (
+                answer_relevancy,
+                context_precision,
+                context_recall,
+                faithfulness,
+            )
+            from ragas.run_config import RunConfig
+        except Exception as exc:
+            return {}, exc
+
+        return {
+            "Dataset": Dataset,
+            "RunConfig": RunConfig,
+            "aevaluate": aevaluate,
+            "faithfulness": faithfulness,
+            "answer_relevancy": answer_relevancy,
+            "context_precision": context_precision,
+            "context_recall": context_recall,
+        }, None
+
+    def _no_metric_results(self, cases: list[BenchmarkCase]) -> list[dict[str, Any]]:
+        return [
+            {
+                "enabled": True,
+                "available": True,
+                "selected_metrics": [],
+                "scores": {},
+                "warning": "No valid ragas metrics configured",
+            }
+            for _ in cases
+        ]
+
+    def _build_ragas_dataset_payloads(
+        self,
+        *,
+        cases: list[BenchmarkCase],
+        runtime_outputs: list[dict[str, Any]],
+        ragas_context_top_k: int,
+        ragas_context_char_limit: int,
+    ) -> dict[str, list[Any]]:
+        question_texts: list[str] = []
+        answer_texts: list[str] = []
+        reference_texts: list[str] = []
+        contexts_batch: list[list[str]] = []
+
+        for case, runtime_output in zip(cases, runtime_outputs):
+            generation_output = runtime_output.get("generation_output", {}) or {}
+            question_text = str(case.question or "").strip()
+            contexts = self._contexts_for_ragas_case(
+                runtime_output=runtime_output,
+                question_text=question_text,
+                default_top_k=ragas_context_top_k,
+                char_limit=ragas_context_char_limit,
+            )
+            question_texts.append(question_text)
+            answer_texts.append(str(generation_output.get("final_answer", "")).strip())
+            reference_texts.append(str(case.reference_answer or "").strip())
+            contexts_batch.append(contexts)
+
+        return {
+            "question_texts": question_texts,
+            "answer_texts": answer_texts,
+            "reference_texts": reference_texts,
+            "contexts_batch": contexts_batch,
+        }
+
+    def _contexts_for_ragas_case(
+        self,
+        *,
+        runtime_output: dict[str, Any],
+        question_text: str,
+        default_top_k: int,
+        char_limit: int,
+    ) -> list[str]:
+        generation_output = runtime_output.get("generation_output", {}) or {}
+        retrieval_output = runtime_output.get("retrieval_output", {}) or {}
+        try:
+            contexts = self._build_judge_contexts(
+                retrieval_output=retrieval_output,
+                generation_output=generation_output,
+                question_text=question_text,
+                default_top_k=default_top_k,
+                char_limit=char_limit,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Ragas context collection fallback to legacy ordering: %s", exc
+            )
+            contexts = []
+
+        if contexts:
+            return contexts
+        raw_contexts = self._collect_runtime_contexts(
+            runtime_output,
+            question_text=question_text,
+        )
+        effective_top_k = self._resolve_dynamic_context_top_k(
+            question_text=question_text,
+            default_top_k=default_top_k,
+        )
+        return self._prepare_ragas_contexts(
+            raw_contexts=raw_contexts,
+            top_k=effective_top_k,
+            char_limit=char_limit,
+        )
+
+    def _ragas_runtime_config(self, *, case_count: int) -> dict[str, int]:
+        max_tokens = self._get_int_config(
+            key="RAGAS_LLM_MAX_TOKENS",
+            default=DEFAULT_RAGAS_MAX_TOKENS,
+            minimum=512,
+            maximum=32768,
+        )
+        return {
+            "timeout_seconds": self._get_int_config(
+                key="RAGAS_TIMEOUT_SECONDS",
+                default=DEFAULT_RAGAS_TIMEOUT_SECONDS,
+                minimum=30,
+                maximum=900,
+            ),
+            "max_tokens": max_tokens,
+            "retry_max_tokens": self._get_int_config(
+                key="RAGAS_LLM_RETRY_MAX_TOKENS",
+                default=max(DEFAULT_RAGAS_RETRY_MAX_TOKENS, max_tokens),
+                minimum=max_tokens,
+                maximum=65536,
+            ),
+            "max_workers": self._get_int_config(
+                key="RAGAS_MAX_WORKERS",
+                default=DEFAULT_RAGAS_MAX_WORKERS,
+                minimum=1,
+                maximum=16,
+            ),
+            "batch_size": self._get_int_config(
+                key="RAGAS_BATCH_SIZE",
+                default=min(DEFAULT_RAGAS_BATCH_SIZE, case_count),
+                minimum=1,
+                maximum=128,
+            ),
+        }
+
+    def _runtime_unavailable_results(
+        self,
+        *,
+        cases: list[BenchmarkCase],
+        selected_metric_names: list[str],
+        error: Exception,
+    ) -> list[dict[str, Any]]:
+        return [
+            {
+                "enabled": True,
+                "available": False,
+                "selected_metrics": selected_metric_names,
+                "error": f"ragas_runtime_unavailable: {error}",
+            }
+            for _ in cases
+        ]
+
+    def _ragas_dataset_dict(
+        self,
+        dataset_payloads: dict[str, list[Any]],
+    ) -> dict[str, list[Any]]:
+        return {
+            "user_input": dataset_payloads["question_texts"],
+            "response": dataset_payloads["answer_texts"],
+            "retrieved_contexts": dataset_payloads["contexts_batch"],
+            "reference": dataset_payloads["reference_texts"],
+        }
+
+    def _evaluate_ragas_dataset_with_retry(
+        self,
+        *,
+        aevaluate: Any,
+        run_config_cls: Any,
+        dataset: Any,
+        metrics: list[Any],
+        llm: Any,
+        embeddings: Any,
+        runtime_config: dict[str, int],
+    ) -> dict[str, Any]:
+        try:
+            result = self._run_configured_ragas_evaluate(
+                aevaluate=aevaluate,
+                run_config_cls=run_config_cls,
+                dataset=dataset,
+                metrics=metrics,
+                llm=llm,
+                embeddings=embeddings,
+                runtime_config=runtime_config,
+            )
+        except Exception as exc:
+            return self._retry_ragas_after_error(
+                exc=exc,
+                aevaluate=aevaluate,
+                run_config_cls=run_config_cls,
+                dataset=dataset,
+                metrics=metrics,
+                runtime_config=runtime_config,
+            )
+        return {
+            "result": result,
+            "error": None,
+            "retry_used": False,
+            "max_tokens": runtime_config["max_tokens"],
+        }
+
+    def _retry_ragas_after_error(
+        self,
+        *,
+        exc: Exception,
+        aevaluate: Any,
+        run_config_cls: Any,
+        dataset: Any,
+        metrics: list[Any],
+        runtime_config: dict[str, int],
+    ) -> dict[str, Any]:
+        max_tokens = runtime_config["max_tokens"]
+        retry_max_tokens = runtime_config["retry_max_tokens"]
+        if (
+            not self._is_incomplete_generation_error(exc)
+            or retry_max_tokens <= max_tokens
+        ):
+            return {
+                "result": None,
+                "error": exc,
+                "retry_used": False,
+                "max_tokens": max_tokens,
+            }
+
+        try:
+            retry_llm, retry_embeddings = self._create_ragas_models(
+                max_tokens=retry_max_tokens
+            )
+            retry_config = {**runtime_config, "max_tokens": retry_max_tokens}
+            result = self._run_configured_ragas_evaluate(
+                aevaluate=aevaluate,
+                run_config_cls=run_config_cls,
+                dataset=dataset,
+                metrics=metrics,
+                llm=retry_llm,
+                embeddings=retry_embeddings,
+                runtime_config=retry_config,
+            )
+        except Exception as retry_exc:
+            return {
+                "result": None,
+                "error": retry_exc,
+                "retry_used": True,
+                "max_tokens": retry_max_tokens,
+            }
+        return {
+            "result": result,
+            "error": None,
+            "retry_used": True,
+            "max_tokens": retry_max_tokens,
+        }
+
+    def _run_configured_ragas_evaluate(
+        self,
+        *,
+        aevaluate: Any,
+        run_config_cls: Any,
+        dataset: Any,
+        metrics: list[Any],
+        llm: Any,
+        embeddings: Any,
+        runtime_config: dict[str, int],
+    ) -> Any:
+        return self._run_ragas_evaluate(
+            aevaluate=aevaluate,
+            run_config_cls=run_config_cls,
+            dataset=dataset,
+            metrics=metrics,
+            llm=llm,
+            embeddings=embeddings,
+            timeout_seconds=runtime_config["timeout_seconds"],
+            max_workers=runtime_config["max_workers"],
+            batch_size=runtime_config["batch_size"],
+        )
+
+    def _evaluation_error_results(
+        self,
+        *,
+        cases: list[BenchmarkCase],
+        selected_metric_names: list[str],
+        answer_relevancy_strictness: int,
+        max_tokens: int,
+        retry_used: bool,
+        error: Exception | str,
+    ) -> list[dict[str, Any]]:
+        return [
+            {
+                "enabled": True,
+                "available": True,
+                "selected_metrics": selected_metric_names,
+                "llm_max_tokens": max_tokens,
+                "answer_relevancy_strictness": answer_relevancy_strictness,
+                "retry_used": retry_used,
+                "error": f"ragas_evaluation_failed: {error}",
+            }
+            for _ in cases
+        ]
+
+    def _fill_missing_ragas_scores(
+        self,
+        *,
+        dataset_cls: Any,
+        aevaluate: Any,
+        run_config_cls: Any,
+        selected_metrics: list[Any],
+        selected_metric_names: list[str],
+        llm: Any,
+        embeddings: Any,
+        runtime_config: dict[str, int],
+        dataset_payloads: dict[str, list[Any]],
+        parsed_scores: list[dict[str, float]],
+    ) -> bool:
         fallback_retry_used = False
         fallback_single_case_count = 0
         for idx, scores in enumerate(parsed_scores):
-            missing_metric_names = [
-                metric_name
-                for metric_name in selected_metric_names
-                if metric_name not in scores
-            ]
+            missing_metric_names = self._missing_metric_names(
+                selected_metric_names=selected_metric_names,
+                scores=scores,
+            )
             if not missing_metric_names:
                 continue
 
             fallback_single_case_count += 1
-            try:
-                fallback_scores, used_retry = self._evaluate_single_case_fallback(
-                    dataset_cls=Dataset,
+            fallback_retry_used = (
+                self._fill_single_case_scores(
+                    idx=idx,
+                    missing_metric_names=missing_metric_names,
+                    scores=scores,
+                    dataset_cls=dataset_cls,
                     aevaluate=aevaluate,
-                    run_config_cls=RunConfig,
-                    metrics=selected_metrics,
+                    run_config_cls=run_config_cls,
+                    selected_metrics=selected_metrics,
                     llm=llm,
                     embeddings=embeddings,
-                    timeout_seconds=timeout_seconds,
-                    max_workers=max_workers,
-                    max_tokens=max_tokens,
-                    retry_max_tokens=retry_max_tokens,
-                    user_input=question_texts[idx],
-                    response=answer_texts[idx],
-                    retrieved_contexts=contexts_batch[idx],
-                    reference=reference_texts[idx],
+                    runtime_config=runtime_config,
+                    dataset_payloads=dataset_payloads,
                 )
-                if used_retry:
-                    fallback_retry_used = True
-                for metric_name in missing_metric_names:
-                    metric_value = fallback_scores.get(metric_name)
-                    if metric_value is not None:
-                        scores[metric_name] = metric_value
-            except Exception as exc:
-                logger.warning(
-                    "Ragas single-case fallback failed for case index %s "
-                    "(missing=%s): %s",
-                    idx,
-                    ",".join(missing_metric_names),
-                    exc,
-                )
+                or fallback_retry_used
+            )
 
+        self._log_single_case_fallback_count(
+            fallback_single_case_count=fallback_single_case_count,
+            total_cases=len(parsed_scores),
+        )
+        return fallback_retry_used
+
+    def _missing_metric_names(
+        self,
+        *,
+        selected_metric_names: list[str],
+        scores: dict[str, float],
+    ) -> list[str]:
+        return [
+            metric_name
+            for metric_name in selected_metric_names
+            if metric_name not in scores
+        ]
+
+    def _fill_single_case_scores(
+        self,
+        *,
+        idx: int,
+        missing_metric_names: list[str],
+        scores: dict[str, float],
+        dataset_cls: Any,
+        aevaluate: Any,
+        run_config_cls: Any,
+        selected_metrics: list[Any],
+        llm: Any,
+        embeddings: Any,
+        runtime_config: dict[str, int],
+        dataset_payloads: dict[str, list[Any]],
+    ) -> bool:
+        try:
+            fallback_scores, used_retry = self._evaluate_single_case_fallback(
+                dataset_cls=dataset_cls,
+                aevaluate=aevaluate,
+                run_config_cls=run_config_cls,
+                metrics=selected_metrics,
+                llm=llm,
+                embeddings=embeddings,
+                timeout_seconds=runtime_config["timeout_seconds"],
+                max_workers=runtime_config["max_workers"],
+                max_tokens=runtime_config["max_tokens"],
+                retry_max_tokens=runtime_config["retry_max_tokens"],
+                user_input=dataset_payloads["question_texts"][idx],
+                response=dataset_payloads["answer_texts"][idx],
+                retrieved_contexts=dataset_payloads["contexts_batch"][idx],
+                reference=dataset_payloads["reference_texts"][idx],
+            )
+        except Exception as exc:
+            logger.warning(
+                "Ragas single-case fallback failed for case index %s "
+                "(missing=%s): %s",
+                idx,
+                ",".join(missing_metric_names),
+                exc,
+            )
+            return False
+
+        for metric_name in missing_metric_names:
+            metric_value = fallback_scores.get(metric_name)
+            if metric_value is not None:
+                scores[metric_name] = metric_value
+        return used_retry
+
+    def _log_single_case_fallback_count(
+        self,
+        *,
+        fallback_single_case_count: int,
+        total_cases: int,
+    ) -> None:
         if fallback_single_case_count:
             logger.warning(
                 "Ragas single-case fallback applied for %s/%s cases with missing metrics.",
                 fallback_single_case_count,
-                len(cases),
+                total_cases,
             )
 
-        results: list[dict[str, Any]] = []
-        for scores in parsed_scores:
-            results.append(
-                {
-                    "enabled": True,
-                    "available": True,
-                    "selected_metrics": selected_metric_names,
-                    "llm_max_tokens": max_tokens,
-                    "answer_relevancy_strictness": answer_relevancy_strictness,
-                    "retry_used": retry_used or fallback_retry_used,
-                    "scores": scores,
-                }
-            )
-        return results
+    def _ragas_success_results(
+        self,
+        *,
+        parsed_scores: list[dict[str, float]],
+        selected_metric_names: list[str],
+        max_tokens: int,
+        answer_relevancy_strictness: int,
+        retry_used: bool,
+    ) -> list[dict[str, Any]]:
+        return [
+            {
+                "enabled": True,
+                "available": True,
+                "selected_metrics": selected_metric_names,
+                "llm_max_tokens": max_tokens,
+                "answer_relevancy_strictness": answer_relevancy_strictness,
+                "retry_used": retry_used,
+                "scores": scores,
+            }
+            for scores in parsed_scores
+        ]
 
     def _run_ragas_evaluate(
         self,
@@ -948,28 +1221,31 @@ class RagasJudgeEvaluator:
         if not lowered:
             return set()
 
-        detected: set[str] = set()
-        if "symptom" in lowered or "triệu chứng" in lowered:
-            detected.add("symptom")
-        if "cause" in lowered or "nguyên nhân" in lowered or "aetiolog" in lowered:
-            detected.add("aetiologies")
-        if "risk" in lowered or "yếu tố nguy cơ" in lowered:
-            detected.add("risk")
-        if "prevention" in lowered or "phòng ngừa" in lowered:
-            detected.add("living_and_preventive")
+        detected = self._detect_keyword_sections(lowered)
         if "covid-19 is an infectious disease caused by" in lowered:
-            if "risk" in target_sections:
-                detected.add("risk")
-            if "aetiologies" in target_sections:
-                detected.add("aetiologies")
-            if "symptom" in target_sections:
-                detected.add("symptom")
-            if not target_sections:
-                detected.update({"aetiologies", "symptom"})
+            detected.update(self._detect_general_covid_sections(target_sections))
 
         if target_sections:
             return detected.intersection(target_sections)
         return detected
+
+    def _detect_keyword_sections(self, lowered: str) -> set[str]:
+        section_keywords = {
+            "symptom": ("symptom", "triệu chứng"),
+            "aetiologies": ("cause", "nguyên nhân", "aetiolog"),
+            "risk": ("risk", "yếu tố nguy cơ"),
+            "living_and_preventive": ("prevention", "phòng ngừa"),
+        }
+        return {
+            section
+            for section, keywords in section_keywords.items()
+            if any(keyword in lowered for keyword in keywords)
+        }
+
+    def _detect_general_covid_sections(self, target_sections: set[str]) -> set[str]:
+        if not target_sections:
+            return {"aetiologies", "symptom"}
+        return target_sections.intersection({"risk", "aetiologies", "symptom"})
 
     def _ensure_target_section_coverage(
         self,

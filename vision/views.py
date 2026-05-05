@@ -25,6 +25,10 @@ from vision.serializers import (
     SimilarItemSerializer,
     SimilarRequestSerializer,
 )
+from vision.services.ingest_embeddings import ingest_embeddings
+from vision.services.retrieval_pipeline import get_conn, query_similar
+from vision.services.vision_service import analyze_xray
+from vision.utils import load_config
 
 logger = logging.getLogger(__name__)
 
@@ -40,8 +44,6 @@ class AnalyzeView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request: Request) -> Response:
-        from vision.services.vision_service import analyze_xray
-
         serializer = AnalyzeRequestSerializer(data=request.data)
         if not serializer.is_valid():
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
@@ -114,8 +116,6 @@ class EmbedView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request: Request) -> Response:
-        from vision.services.ingest_embeddings import ingest_embeddings
-
         serializer = EmbedRequestSerializer(data=request.data)
         if not serializer.is_valid():
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
@@ -151,9 +151,6 @@ class SimilarView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request: Request) -> Response:
-        from vision.services.retrieval_pipeline import get_conn, query_similar
-        from vision.utils import load_config
-
         serializer = SimilarRequestSerializer(data=request.data)
         if not serializer.is_valid():
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)

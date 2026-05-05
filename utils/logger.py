@@ -62,6 +62,7 @@ class SQLDebugSanitizerFilter(logging.Filter):
     EMBEDDING_DIM_THRESHOLD = 64
     MAX_TEXT_PREVIEW = 160
     MAX_SEQUENCE_ITEMS = 8
+    _BINARY_TYPES = (bytes, bytearray, memoryview)
     _BASE64_RE = re.compile(r"^[A-Za-z0-9+/=\s]+$")
     _SQL_WHITESPACE_RE = re.compile(r"\s+")
 
@@ -109,40 +110,47 @@ class SQLDebugSanitizerFilter(logging.Filter):
         """Sanitize a logged SQL parameter recursively."""
         if value is None:
             return None
-
         if isinstance(value, str):
             return self._sanitize_text(value)
-
-        if isinstance(value, (bytes, bytearray, memoryview)):
+        if isinstance(value, self._BINARY_TYPES):
             return f"<binary payload {len(value)} bytes>"
-
         if isinstance(value, Mapping):
-            items = list(value.items())
-            sanitized: dict[Any, Any] = {}
-            for idx, (key, item) in enumerate(items[: self.MAX_SEQUENCE_ITEMS]):
-                sanitized[key] = self._sanitize_value(item)
-            if len(items) > self.MAX_SEQUENCE_ITEMS:
-                sanitized["..."] = f"{len(items) - self.MAX_SEQUENCE_ITEMS} more fields"
-            return sanitized
-
+            return self._sanitize_mapping(value)
         if self._looks_like_embedding(value):
             return f"<embedding vector dims={len(value)}>"
-
-        if isinstance(value, Sequence) and not isinstance(
-            value,
-            (str, bytes, bytearray, memoryview),
-        ):
-            limited_items = list(itertools.islice(iter(value), self.MAX_SEQUENCE_ITEMS))
-            sanitized_items = [self._sanitize_value(item) for item in limited_items]
-            if hasattr(value, "__len__") and len(value) > self.MAX_SEQUENCE_ITEMS:
-                sanitized_items.append(
-                    f"... ({len(value) - self.MAX_SEQUENCE_ITEMS} more items)"
-                )
-            if isinstance(value, tuple):
-                return tuple(sanitized_items)
-            return sanitized_items
-
+        if self._is_sanitizable_sequence(value):
+            return self._sanitize_sequence(value)
         return value
+
+    def _sanitize_mapping(self, value: Mapping[Any, Any]) -> dict[Any, Any]:
+        """Sanitize a mapping while limiting logged field count."""
+        items = list(value.items())
+        sanitized = {
+            key: self._sanitize_value(item)
+            for key, item in items[: self.MAX_SEQUENCE_ITEMS]
+        }
+        if len(items) > self.MAX_SEQUENCE_ITEMS:
+            sanitized["..."] = f"{len(items) - self.MAX_SEQUENCE_ITEMS} more fields"
+        return sanitized
+
+    def _is_sanitizable_sequence(self, value: Any) -> bool:
+        """Return whether a value should be logged as a limited sequence."""
+        return isinstance(value, Sequence) and not isinstance(
+            value,
+            (str, *self._BINARY_TYPES),
+        )
+
+    def _sanitize_sequence(self, value: Sequence[Any]) -> Sequence[Any]:
+        """Sanitize a sequence while preserving tuple/list shape."""
+        limited_items = list(itertools.islice(iter(value), self.MAX_SEQUENCE_ITEMS))
+        sanitized_items = [self._sanitize_value(item) for item in limited_items]
+        if hasattr(value, "__len__") and len(value) > self.MAX_SEQUENCE_ITEMS:
+            sanitized_items.append(
+                f"... ({len(value) - self.MAX_SEQUENCE_ITEMS} more items)"
+            )
+        if isinstance(value, tuple):
+            return tuple(sanitized_items)
+        return sanitized_items
 
     def _looks_like_embedding(self, value: Any) -> bool:
         """Detect long numeric vectors such as embeddings."""

@@ -13,12 +13,16 @@ from django.test import TestCase
 import pandas as pd
 
 from chatbot.models import IndexType, MedicalDocument, SectionType
+from vector_store.services.embedding_docs_pipeline.article_schema import (
+    parse_list_items,
+)
 from vector_store.services.embedding_docs_pipeline.covidqa_pipeline import (
     COVIDQAEmbeddingPipeline,
 )
 from vector_store.services.embedding_docs_pipeline.load_covid_qa import (
     get_unique_context_records,
 )
+from vector_store.services.quality_service import QualityService
 from vector_store.services.vector_store_manager import VectorStoreManager
 
 
@@ -76,6 +80,47 @@ class VectorStoreManagerTestCase(TestCase):
         self.mock_embedding_service.embed_text.assert_called_once_with(
             "Test symptom content"
         )
+
+    def test_detect_duplicate_embeddings_groups_similar_documents(self) -> None:
+        """Duplicate detection should group near-identical embedded documents."""
+        first = MedicalDocument.objects.create(
+            title="Disease A",
+            content="content a",
+            section_type=SectionType.GENERAL,
+            index_type=IndexType.A,
+            source="test",
+            embedding=[1.0] * 768,
+        )
+        second = MedicalDocument.objects.create(
+            title="Disease A copy",
+            content="content b",
+            section_type=SectionType.GENERAL,
+            index_type=IndexType.A,
+            source="test",
+            embedding=[1.0] * 768,
+        )
+        MedicalDocument.objects.create(
+            title="Disease B",
+            content="content c",
+            section_type=SectionType.GENERAL,
+            index_type=IndexType.A,
+            source="test",
+            embedding=[0.0] * 768,
+        )
+
+        result = QualityService.detect_duplicate_embeddings()
+
+        self.assertEqual(result["count"], 1)
+        duplicate_ids = {doc["id"] for doc in result["duplicates"][0]["documents"]}
+        self.assertEqual(duplicate_ids, {first.pk, second.pk})
+
+    def test_parse_list_items_accepts_json_python_and_delimited_text(self) -> None:
+        """List parsing should normalize, split, and deduplicate source values."""
+        self.assertEqual(parse_list_items('["Sốt", "sốt", "Ho"]'), ["Sốt", "Ho"])
+        self.assertEqual(
+            parse_list_items("['Đau đầu', 'Buồn nôn']"), ["Đau đầu", "Buồn nôn"]
+        )
+        self.assertEqual(parse_list_items("sốt; ho, mệt mỏi"), ["sốt", "ho", "mệt mỏi"])
 
     def test_add_documents_batch(self) -> None:
         """Test that add_documents creates multiple documents in batch."""
