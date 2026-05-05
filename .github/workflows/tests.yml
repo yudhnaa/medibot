@@ -100,7 +100,7 @@ jobs:
           python manage.py collectstatic --no-input --clear
       - name: Load fixture
         run: |
-          python manage.py loaddata authentication/fixtures/customer.json --app authentication.customer
+          python manage.py loaddata authentication/fixtures/customer.json --app authentication
       - name: Check linter
         run: |
           flake8 .

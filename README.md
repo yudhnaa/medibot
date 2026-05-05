@@ -130,7 +130,7 @@ coverage html
 ## Load fixture data
 
 ```sh
-python manage.py loaddata authentication/fixtures/customer.json --app authentication.customer
+python manage.py loaddata authentication/fixtures/customer.json --app authentication
 ```
 
 ## Run docker

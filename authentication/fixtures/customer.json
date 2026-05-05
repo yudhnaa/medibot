@@ -3,7 +3,10 @@
     "model": "authentication.customer",
     "pk": 1,
     "fields": {
-        "user": 1,
+        "username": "fixture-customer-1",
+        "password": "!fixture-unusable-password",
+        "email": "fixture-customer-1@example.com",
+        "is_active": true,
         "bio": "abc",
         "birth_date": "2023-05-13",
         "address": "HCM"
@@ -13,7 +16,10 @@
     "model": "authentication.customer",
     "pk": 2,
     "fields": {
-        "user": 3,
+        "username": "fixture-customer-2",
+        "password": "!fixture-unusable-password",
+        "email": "fixture-customer-2@example.com",
+        "is_active": true,
         "bio": "abc",
         "birth_date": "2023-05-13",
         "address": "HCM"
@@ -23,7 +29,10 @@
     "model": "authentication.customer",
     "pk": 3,
     "fields": {
-        "user": 2,
+        "username": "fixture-customer-3",
+        "password": "!fixture-unusable-password",
+        "email": "fixture-customer-3@example.com",
+        "is_active": true,
         "bio": "abc",
         "birth_date": "2023-05-13",
         "address": "HCM"
