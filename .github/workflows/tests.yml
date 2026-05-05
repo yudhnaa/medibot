@@ -1,30 +1,64 @@
 ---
-name: Tests CI
+name: Backend CI
 
 on:
   push:
     branches:
       - main
+      - develop
   pull_request:
     branches:
       - main
+      - develop
 
 jobs:
   tests:
     runs-on: ubuntu-latest
+    env:
+      SECRET_KEY: test-secret-key
+      DEBUG: "False"
+      DJANGO_SETTINGS_MODULE: django_template.settings.dev
+      ENABLE_STARTUP_WARMUP: "False"
+      DB_DEV_NAME: django_template
+      DB_DEV_USER: postgres
+      DB_DEV_PASSWORD: postgres
+      DB_DEV_HOST: 127.0.0.1
+      DB_DEV_PORT: 5432
+      BROKER_URL: redis://localhost:6379/0
+      CELERY_RESULT_BACKEND: redis://localhost:6379/1
+      CELERY_CACHE_BACKEND: redis://localhost:6379/2
+      REDIS_HOST: localhost
+      GOOGLE_API_KEY: test-google-key
+      GOOGLE_GEMINI_API_KEYS: test-google-key
+      OPENROUTER_API_KEY: test-openrouter-key
     strategy:
       fail-fast: false
       max-parallel: 4
       matrix:
-        python-version: [3.13.x]
+        python-version: [3.12.x]
 
     services:
       postgres:
-        image: postgres:14-alpine
+        image: pgvector/pgvector:pg16
         env:
           POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: django_template
         ports:
           - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d django_template"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7.2.3-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
 
     steps:
       - uses: actions/checkout@v4
@@ -35,13 +69,19 @@ jobs:
       - name: Install dependencies
         run: |
           uv pip install --system -r requirements/test.txt
-      - name: Set up databases
+      - name: Check Django project
         run: |
-          PGPASSWORD="postgres" createuser -U postgres -d django_template --superuser -h localhost
-          PGPASSWORD="postgres" createdb -U postgres -O django_template django_template -h localhost
-      - name: Create .env file
+          python manage.py check
+      - name: Check migrations
         run: |
-          echo "${{ secrets.ENV_FILE }}" > .env
+          python manage.py makemigrations \
+            authentication \
+            chatbot \
+            rag_benchmark \
+            vector_store \
+            vision \
+            --check \
+            --dry-run
       - name: Migrate database
         run: |
           python manage.py migrate
@@ -54,10 +94,10 @@ jobs:
       - name: Check linter
         run: |
           flake8 .
-      - name: Format code
+      - name: Check formatting
         run: |
-          black .
-          isort .
+          black --check .
+          isort --check-only .
       - name: Run unit test and report coverage
         run: |
           coverage run --source='.' manage.py test

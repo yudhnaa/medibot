@@ -1,13 +1,32 @@
+minimum_pre_commit_version: 4.0.0
+default_stages: [pre-commit]
+
+exclude: |
+  (?x)^(
+    .*\/migrations\/.*|
+    django_template\/settings\/.*|
+    \.venv\/.*|
+    venv\/.*|
+    env\/.*
+  )$
+
 repos:
--   repo: https://github.com/psf/black
-    rev: "25.1.0"
+  - repo: local
     hooks:
-        - id: black
-- repo: https://github.com/pycqa/isort
-    rev: "5.13.2"
-    hooks:
-        - id: isort
-- repo: https://github.com/pycqa/flake8
-    rev: "7.1.1"
-    hooks:
-        - id: flake8
+      - id: black
+        name: black
+        entry: python -m black
+        language: system
+        types_or: [python, pyi]
+
+      - id: isort
+        name: isort
+        entry: python -m isort
+        language: system
+        types_or: [python, pyi]
+
+      - id: flake8
+        name: flake8
+        entry: python -m flake8
+        language: system
+        types_or: [python, pyi]

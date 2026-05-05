@@ -22,6 +22,18 @@ You can install all the required dependencies by running
 pip install -r requirements/dev.txt
 ```
 
+Install Git hooks so formatting and lint checks run before every commit:
+
+```sh
+pre-commit install
+```
+
+Run the hooks manually against the full repo:
+
+```sh
+pre-commit run --all-files
+```
+
 ## Start and Use
 Run migration
 ```sh
@@ -124,7 +136,85 @@ python manage.py loaddata authentication/fixtures/customer.json --app authentica
 ## Run docker
 
 ```sh
-docker compose up
+docker compose -f docker-compose.dev.yml up
+```
+
+## Production CI/CD
+
+The backend deploy pipeline is GitHub Actions -> GHCR -> DigitalOcean Docker
+Compose. Pull requests run `Backend CI`; after `main` passes CI, `Backend
+Deploy` builds one immutable image tagged with the commit SHA, pushes it to
+GHCR, SSHes into the DigitalOcean droplet, runs migrations, restarts the
+production compose stack, and smoke-checks:
+
+```sh
+https://medibot-api.yudhna.id.vn/swagger.json
+```
+
+Production GitHub Environment setup:
+
+```sh
+Environment name: Production
+Allowed branch: main
+
+# Environment secrets
+DO_SSH_KEY=<private-ssh-key>
+GHCR_USERNAME=<github-username-or-machine-user>
+GHCR_TOKEN=<token-with-read:packages-for-private-images>
+
+# Environment variables
+DO_HOST=<digitalocean-droplet-ip-or-host>
+DO_USER=<ssh-user>
+DO_SSH_PORT=22
+DO_APP_DIR=/opt/medibot/backend
+```
+
+Staging GitHub Environment setup for the manual `Backend Staging Deploy`
+workflow:
+
+```sh
+Environment name: Staging
+Allowed branch: develop
+
+# Environment secrets
+STAGING_DO_SSH_KEY=<private-ssh-key>
+STAGING_GHCR_USERNAME=<github-username-or-machine-user>
+STAGING_GHCR_TOKEN=<token-with-read:packages-for-private-images>
+
+# Environment variables
+STAGING_DO_HOST=<staging-droplet-ip-or-host>
+STAGING_DO_USER=<ssh-user>
+STAGING_DO_SSH_PORT=22
+STAGING_DO_APP_DIR=/opt/medibot-staging/backend
+```
+
+The staging workflow is triggered manually from GitHub Actions. It accepts a
+Git ref and a smoke-test URL, builds a `staging-<sha>` image tag, deploys it to
+the staging droplet, runs migrations, restarts the compose stack, and checks
+`<smoke_url>/swagger.json`. Because the `Staging` environment only allows
+`develop`, run this workflow from the `develop` branch in the GitHub Actions UI.
+
+The deploy script expects the backend repo on the droplet at
+`/opt/medibot/backend` unless `DO_APP_DIR` is set. The server keeps production
+secrets in `.env`; do not commit that file.
+
+Production compose uses the published image:
+
+```sh
+export MEDIBOT_BACKEND_IMAGE=ghcr.io/<owner>/<repo>
+export IMAGE_TAG=<commit-sha>
+docker compose -f docker-compose.yml pull
+docker compose -f docker-compose.yml up -d
+```
+
+Rollback is a redeploy with a previous image tag:
+
+```sh
+export MEDIBOT_BACKEND_IMAGE=ghcr.io/<owner>/<repo>
+export IMAGE_TAG=<previous-commit-sha>
+docker compose -f docker-compose.yml pull
+docker compose -f docker-compose.yml up -d --remove-orphans
+curl -fsS https://medibot-api.yudhna.id.vn/swagger.json >/dev/null
 ```
 
 ## Clean expired token
