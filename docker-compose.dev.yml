@@ -36,7 +36,7 @@ services:
       medibot-redis:
         condition: service_healthy
   medibot-db:
-    image: pgvector/pgvector:pg16
+    image: pgvector/pgvector:pg17
     volumes:
       - django_template_db:/var/lib/postgresql/data
     environment:
