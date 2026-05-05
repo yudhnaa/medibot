@@ -14,6 +14,7 @@ services:
     volumes:
       - torch_weights:/root/.cache/torch
       - media_data:/usr/src/app/media
+      - static_root:/usr/src/app/static
       - ./nlp/services/libs:/usr/src/app/nlp/services/libs:ro
     expose:
       - "8000"
@@ -171,6 +172,7 @@ volumes:
   redis_data:
   torch_weights:
   media_data:
+  static_root:
 
 networks:
   medibot_app_internal:

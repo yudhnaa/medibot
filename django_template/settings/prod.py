@@ -34,7 +34,7 @@ AUTH_SESSION = {
 
 DEBUG = os.getenv("DEBUG", "False").lower() in ("true", "1", "yes")
 
-STATIC_ROOT = os.path.join(BASE_DIR, "static")
+STATIC_ROOT = os.path.join(os.path.dirname(BASE_DIR), "static")
 
 # Database
 # https://docs.djangoproject.com/en/2.0/ref/settings/#databases
