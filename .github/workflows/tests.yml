@@ -1,0 +1,114 @@
+---
+name: Backend CI
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+  pull_request:
+    branches:
+      - main
+      - develop
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    environment:
+      name: Testing
+    env:
+      SECRET_KEY: test-secret-key
+      DEBUG: "False"
+      DJANGO_SETTINGS_MODULE: django_template.settings.dev
+      ENABLE_STARTUP_WARMUP: "False"
+      DB_DEV_NAME: django_template
+      DB_DEV_USER: postgres
+      DB_DEV_PASSWORD: postgres
+      DB_DEV_HOST: 127.0.0.1
+      DB_DEV_PORT: 5432
+      BROKER_URL: redis://localhost:6379/0
+      CELERY_RESULT_BACKEND: redis://localhost:6379/1
+      CELERY_CACHE_BACKEND: redis://localhost:6379/2
+      REDIS_HOST: localhost
+      GOOGLE_API_KEY: test-google-key
+      GOOGLE_GEMINI_API_KEYS: test-google-key
+      OPENROUTER_API_KEY: test-openrouter-key
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      R2_ACCOUNT_ID: ${{ vars.R2_ACCOUNT_ID }}
+      R2_BUCKET: ${{ vars.R2_BUCKET }}
+      R2_LIBS_PREFIX: ${{ vars.R2_LIBS_PREFIX || 'libs' }}
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        python-version: [3.12.x]
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: django_template
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d django_template"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7.2.3-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - uses: astral-sh/setup-uv@v5
+      - name: Install dependencies
+        run: |
+          uv pip install --system -r requirements/test.txt
+      - name: Sync NLP libs from R2
+        run: |
+          ./scripts/sync-r2-libs.sh
+      - name: Check Django project
+        run: |
+          python manage.py check
+      - name: Check migrations
+        run: |
+          python manage.py makemigrations \
+            authentication \
+            chatbot \
+            rag_benchmark \
+            vector_store \
+            vision \
+            --check \
+            --dry-run
+      - name: Migrate database
+        run: |
+          python manage.py migrate
+      - name: Collect static
+        run: |
+          python manage.py collectstatic --no-input --clear
+      - name: Load fixture
+        run: |
+          python manage.py loaddata authentication/fixtures/customer.json --app authentication
+      - name: Check linter
+        run: |
+          flake8 .
+      - name: Check formatting
+        run: |
+          black --check .
+          isort --check-only .
+      - name: Run unit test and report coverage
+        run: |
+          coverage run --source='.' manage.py test
+          coverage report

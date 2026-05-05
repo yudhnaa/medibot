@@ -1,0 +1,22 @@
+[flake8]
+max-line-length = 88
+extend-ignore =
+    E203,
+    E501,
+    W503,
+    E231,
+exclude =
+    .git,
+    __pycache__,
+    .venv,
+    venv,
+    migrations,
+    settings,
+    build,
+    dist,
+    *.egg-info,
+    __init__.py
+per-file-ignores =
+    __init__.py:F401
+    django_template/settings/*.py:F401,F403,F405
+max-complexity = 10

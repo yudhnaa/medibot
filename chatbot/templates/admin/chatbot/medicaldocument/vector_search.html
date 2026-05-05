@@ -1,0 +1,156 @@
+{% extends "admin/base_site.html" %}
+{% load static %}
+
+{% block title %}Vector Similarity Search - Django Admin{% endblock %}
+
+{% block extrahead %}
+<style>
+    .search-container {
+        background: #f9f9f9;
+        padding: 20px;
+        border-radius: 5px;
+        margin-bottom: 30px;
+    }
+    
+    .results-container {
+        margin-top: 30px;
+    }
+    
+    .result-item {
+        border: 1px solid #ddd;
+        padding: 15px;
+        margin-bottom: 15px;
+        border-radius: 5px;
+        background: #fff;
+    }
+    
+    .result-item:hover {
+        background: #f5f5f5;
+    }
+    
+    .similarity-score {
+        display: inline-block;
+        background: #28a745;
+        color: white;
+        padding: 3px 10px;
+        border-radius: 3px;
+        font-weight: bold;
+        margin-right: 10px;
+    }
+    
+    .result-title {
+        font-size: 16px;
+        font-weight: bold;
+        margin-bottom: 5px;
+    }
+    
+    .result-snippet {
+        color: #666;
+        font-size: 13px;
+        margin-bottom: 10px;
+        max-height: 100px;
+        overflow: hidden;
+    }
+    
+    .result-metadata {
+        font-size: 12px;
+        color: #999;
+    }
+    
+    .result-actions {
+        margin-top: 10px;
+    }
+    
+    .result-actions a {
+        text-decoration: none;
+        color: #417690;
+        margin-right: 10px;
+    }
+    
+    .result-actions a:hover {
+        text-decoration: underline;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div id="content-main">
+    <h1>Vector Similarity Search</h1>
+    
+    <div class="search-container">
+        <form method="post">
+            {% csrf_token %}
+            
+            {% if form.non_field_errors %}
+                <div class="errorlist">
+                    {% for error in form.non_field_errors %}
+                        <div>{{ error }}</div>
+                    {% endfor %}
+                </div>
+            {% endif %}
+            
+            <div class="form-group">
+                <label for="{{ form.query_text.id_for_label }}">{{ form.query_text.label }}</label>
+                {{ form.query_text }}
+                {% if form.query_text.errors %}
+                    <ul class="errorlist">
+                        {% for error in form.query_text.errors %}
+                            <li>{{ error }}</li>
+                        {% endfor %}
+                    </ul>
+                {% endif %}
+            </div>
+            
+            <div class="form-group" style="display: inline-block; margin-right: 20px;">
+                <label for="{{ form.k.id_for_label }}">{{ form.k.label }}</label>
+                {{ form.k }}
+            </div>
+            
+            <div class="form-group" style="display: inline-block;">
+                <label for="{{ form.min_similarity.id_for_label }}">{{ form.min_similarity.label }}</label>
+                {{ form.min_similarity }}
+            </div>
+            
+            <br><br>
+            
+            <div class="form-group">
+                <label for="{{ form.section_types.id_for_label }}">{{ form.section_types.label }}</label>
+                {{ form.section_types }}
+            </div>
+            
+            <button type="submit" class="button default">Search</button>
+        </form>
+    </div>
+    
+    {% if results %}
+    <div class="results-container">
+        <h2>Results ({{ count }} documents found)</h2>
+        
+        {% for result in results %}
+        <div class="result-item">
+            <div class="result-title">
+                <span class="similarity-score">{{ result.similarity|floatformat:3 }}</span>
+                {{ result.title }}
+            </div>
+            <div class="result-snippet">
+                {{ result.content|truncatewords:30 }}
+            </div>
+            <div class="result-metadata">
+                <strong>Section:</strong> {{ result.section_type }} | 
+                <strong>Index:</strong> {{ result.index_type }} | 
+                <strong>Provider:</strong> {{ result.embedding_provider }}
+            </div>
+            <div class="result-actions">
+                <a href="/admin/chatbot/medicaldocument/{{ result.id }}/change/">View in Admin</a>
+                <a href="/admin/chatbot/medicaldocument/{{ result.id }}/delete/">Delete</a>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    {% elif query %}
+    <div class="results-container">
+        <p style="color: #999;">No results found for your query.</p>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

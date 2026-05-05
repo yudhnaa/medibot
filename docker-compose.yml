@@ -1,0 +1,186 @@
+services:
+  medibot-web:
+    image: ${MEDIBOT_BACKEND_IMAGE:-ghcr.io/yudhna/medibot-django-backend}:${IMAGE_TAG:-latest}
+    command:
+      [
+        "./docker-entrypoint.sh",
+        "daphne",
+        "-b",
+        "0.0.0.0",
+        "-p",
+        "8000",
+        "django_template.asgi:application",
+      ]
+    volumes:
+      - torch_weights:/root/.cache/torch
+      - media_data:/usr/src/app/media
+      - static_root:/usr/src/app/static
+      - ./nlp/services/libs:/usr/src/app/nlp/services/libs:ro
+    expose:
+      - "8000"
+    env_file:
+      - .env
+    environment:
+      SECRET_KEY: ${SECRET_KEY}
+      DEBUG: "False"
+      DJANGO_SETTINGS_MODULE: django_template.settings.prod
+      DB_HOST: medibot-db
+      DB_PORT: 5432
+      BROKER_URL: redis://medibot-redis:6379/0
+      CELERY_RESULT_BACKEND: redis://medibot-redis:6379/1
+      CELERY_CACHE_BACKEND: redis://medibot-redis:6379/2
+      REDIS_HOST: medibot-redis
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS:-localhost,127.0.0.1}
+      RUN_DB_MIGRATIONS: ${RUN_DB_MIGRATIONS:-false}
+      RUN_COLLECTSTATIC: ${RUN_COLLECTSTATIC:-false}
+    depends_on:
+      medibot-db:
+        condition: service_healthy
+      medibot-redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/swagger.json"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+    networks:
+      medibot_app_internal:
+      homelab:
+        aliases:
+          - ${WEB_NETWORK_ALIAS:-medibot-web}
+  medibot-db:
+    image: pgvector/pgvector:pg17
+    volumes:
+      - django_template_db:/var/lib/postgresql/data
+    environment:
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
+      POSTGRES_DB: ${DB_NAME:-medibot}
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${DB_USER:-postgres} -d ${DB_NAME:-medibot}",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - medibot_app_internal
+  medibot-redis:
+    image: redis:7.2.3-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped
+    networks:
+      - medibot_app_internal
+  medibot-worker:
+    image: ${MEDIBOT_BACKEND_IMAGE:-ghcr.io/yudhna/medibot-django-backend}:${IMAGE_TAG:-latest}
+    command:
+      ["celery", "-A", "django_template.celery", "worker", "-l", "info", "-E"]
+    volumes:
+      - torch_weights:/root/.cache/torch
+      - media_data:/usr/src/app/media
+      - ./nlp/services/libs:/usr/src/app/nlp/services/libs:ro
+    env_file:
+      - .env
+    environment:
+      DEBUG: "False"
+      DJANGO_SETTINGS_MODULE: django_template.settings.prod
+      DB_HOST: medibot-db
+      DB_PORT: 5432
+      BROKER_URL: redis://medibot-redis:6379/0
+      CELERY_RESULT_BACKEND: redis://medibot-redis:6379/1
+      CELERY_CACHE_BACKEND: redis://medibot-redis:6379/2
+      REDIS_HOST: medibot-redis
+    depends_on:
+      medibot-db:
+        condition: service_healthy
+      medibot-redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - medibot_app_internal
+  medibot-beat:
+    image: ${MEDIBOT_BACKEND_IMAGE:-ghcr.io/yudhna/medibot-django-backend}:${IMAGE_TAG:-latest}
+    command:
+      [
+        "celery",
+        "-A",
+        "django_template.celery",
+        "beat",
+        "-l",
+        "info",
+        "--scheduler",
+        "django_celery_beat.schedulers:DatabaseScheduler",
+      ]
+    env_file:
+      - .env
+    volumes:
+      - ./nlp/services/libs:/usr/src/app/nlp/services/libs:ro
+    environment:
+      DEBUG: "False"
+      DJANGO_SETTINGS_MODULE: django_template.settings.prod
+      DB_HOST: medibot-db
+      DB_PORT: 5432
+      BROKER_URL: redis://medibot-redis:6379/0
+      CELERY_RESULT_BACKEND: redis://medibot-redis:6379/1
+      CELERY_CACHE_BACKEND: redis://medibot-redis:6379/2
+      REDIS_HOST: medibot-redis
+    depends_on:
+      medibot-db:
+        condition: service_healthy
+      medibot-redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - medibot_app_internal
+  medibot-flower:
+    image: ${MEDIBOT_BACKEND_IMAGE:-ghcr.io/yudhna/medibot-django-backend}:${IMAGE_TAG:-latest}
+    command: ["celery", "-A", "django_template.celery", "flower", "--port=5555"]
+    expose:
+      - "5555"
+    profiles:
+      - ops
+    env_file:
+      - .env
+    volumes:
+      - ./nlp/services/libs:/usr/src/app/nlp/services/libs:ro
+    environment:
+      DEBUG: "False"
+      DJANGO_SETTINGS_MODULE: django_template.settings.prod
+      BROKER_URL: redis://medibot-redis:6379/0
+      CELERY_RESULT_BACKEND: redis://medibot-redis:6379/1
+      ENABLE_STARTUP_WARMUP: "False"
+    depends_on:
+      medibot-worker:
+        condition: service_started
+      medibot-redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - medibot_app_internal
+
+volumes:
+  django_template_db:
+  redis_data:
+  torch_weights:
+  media_data:
+  static_root:
+
+networks:
+  medibot_app_internal:
+    driver: bridge
+  homelab:
+    external: true

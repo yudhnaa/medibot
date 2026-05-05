@@ -1,0 +1,405 @@
+{% extends "admin/base_site.html" %}
+{% load static %}
+
+{% block title %}Embedding Dashboard - Django Admin{% endblock %}
+
+{% block extrahead %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<style>
+    .dashboard-container {
+        padding: 20px 0;
+    }
+    
+    .dashboard-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+        gap: 20px;
+        margin-bottom: 30px;
+    }
+    
+    .stat-card {
+        background: white;
+        border: 1px solid #ddd;
+        border-radius: 5px;
+        padding: 20px;
+        text-align: center;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    
+    .stat-card.primary {
+        border-left: 4px solid #417690;
+    }
+    
+    .stat-card.success {
+        border-left: 4px solid #28a745;
+    }
+    
+    .stat-card.warning {
+        border-left: 4px solid #ffc107;
+    }
+    
+    .stat-card.danger {
+        border-left: 4px solid #dc3545;
+    }
+    
+    .stat-value {
+        font-size: 36px;
+        font-weight: bold;
+        color: #417690;
+        margin-bottom: 10px;
+    }
+    
+    .stat-label {
+        font-size: 14px;
+        color: #666;
+        margin-bottom: 0;
+    }
+    
+    .stat-card.success .stat-value { color: #28a745; }
+    .stat-card.warning .stat-value { color: #ffc107; }
+    .stat-card.danger .stat-value { color: #dc3545; }
+    
+    .chart-container {
+        position: relative;
+        height: 300px;
+        margin-bottom: 30px;
+        background: white;
+        padding: 20px;
+        border-radius: 5px;
+        border: 1px solid #ddd;
+    }
+    
+    .charts-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+        gap: 20px;
+        margin-bottom: 30px;
+    }
+    
+    .section-title {
+        font-size: 20px;
+        font-weight: bold;
+        color: #417690;
+        margin-top: 30px;
+        margin-bottom: 20px;
+        border-bottom: 2px solid #417690;
+        padding-bottom: 10px;
+    }
+    
+    .nav-links {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        gap: 15px;
+        margin-bottom: 30px;
+    }
+    
+    .nav-link {
+        background: white;
+        border: 1px solid #ddd;
+        border-radius: 5px;
+        padding: 15px;
+        text-align: center;
+        text-decoration: none;
+        color: #417690;
+        transition: all 0.3s ease;
+    }
+    
+    .nav-link:hover {
+        background: #f9f9f9;
+        border-color: #417690;
+        text-decoration: none;
+    }
+    
+    .nav-link strong {
+        display: block;
+        font-size: 16px;
+        margin-bottom: 5px;
+    }
+    
+    .nav-link span {
+        font-size: 12px;
+        color: #999;
+    }
+    
+    .jobs-list {
+        background: white;
+        border: 1px solid #ddd;
+        border-radius: 5px;
+        padding: 20px;
+    }
+    
+    .job-item {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 10px 0;
+        border-bottom: 1px solid #eee;
+    }
+    
+    .job-item:last-child {
+        border-bottom: none;
+    }
+    
+    .job-info {
+        flex: 1;
+    }
+    
+    .job-title {
+        font-weight: bold;
+        margin-bottom: 3px;
+    }
+    
+    .job-meta {
+        font-size: 12px;
+        color: #999;
+    }
+    
+    .status-badge {
+        display: inline-block;
+        padding: 3px 10px;
+        border-radius: 3px;
+        font-size: 12px;
+        font-weight: bold;
+        color: white;
+    }
+    
+    .status-pending { background: #ffc107; }
+    .status-processing { background: #4169e1; }
+    .status-completed { background: #28a745; }
+    .status-failed { background: #dc3545; }
+    .status-cancelled { background: #6c757d; }
+    
+    .coverage-text {
+        font-size: 18px;
+        font-weight: bold;
+        color: #417690;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div id="content-main">
+    <h1>Embedding Dashboard</h1>
+    
+    <!-- Quick Navigation -->
+    <div class="section-title">Quick Actions</div>
+    <div class="nav-links">
+        <a href="{% url 'admin:chatbot_medicaldocument_vector_search' %}" class="nav-link">
+            <strong>Vector Search</strong>
+            <span>Test similarity search</span>
+        </a>
+        <a href="{% url 'admin:chatbot_medicaldocument_quality_check' %}" class="nav-link">
+            <strong>Quality Check</strong>
+            <span>Detect embedding issues</span>
+        </a>
+        <a href="{% url 'admin:chatbot_medicaldocument_reembed_manager' %}" class="nav-link">
+            <strong>Re-embedding Manager</strong>
+            <span>Manage re-embedding jobs</span>
+        </a>
+        <a href="{% url 'admin:chatbot_medicaldocument_upload_csv' %}" class="nav-link">
+            <strong>Upload & Embed Articles</strong>
+            <span>Upload article files for embedding</span>
+        </a>
+        <a href="{% url 'admin:chatbot_medicaldocument_embed_url' %}" class="nav-link">
+            <strong>Crawl URL & Embed</strong>
+            <span>Crawl one article URL and auto-index</span>
+        </a>
+        <a href="{% url 'admin:chatbot_medicaldocument_changelist' %}" class="nav-link">
+            <strong>Manage Documents</strong>
+            <span>View all documents</span>
+        </a>
+    </div>
+    
+    <!-- Key Metrics -->
+    <div class="section-title">Key Metrics</div>
+    <div class="dashboard-grid">
+        <div class="stat-card primary">
+            <div class="stat-value">{{ stats.total_documents }}</div>
+            <div class="stat-label">Total Documents</div>
+        </div>
+        
+        <div class="stat-card success">
+            <div class="stat-value">{{ stats.with_embeddings }}</div>
+            <div class="stat-label">With Embeddings</div>
+        </div>
+        
+        <div class="stat-card success">
+            <div class="stat-value">
+                <span class="coverage-text">{{ stats.coverage_percent|floatformat:1 }}%</span>
+            </div>
+            <div class="stat-label">Coverage</div>
+        </div>
+        
+        <div class="stat-card danger">
+            <div class="stat-value">{{ stats.missing_embeddings }}</div>
+            <div class="stat-label">Missing Embeddings</div>
+        </div>
+    </div>
+    
+    <!-- Charts -->
+    <div class="section-title">Distribution</div>
+    <div class="charts-grid">
+        <div class="chart-container">
+            <canvas id="section-chart"></canvas>
+        </div>
+        <div class="chart-container">
+            <canvas id="index-chart"></canvas>
+        </div>
+        <div class="chart-container">
+            <canvas id="provider-chart"></canvas>
+        </div>
+    </div>
+    
+    <!-- Recent Jobs -->
+    <div class="section-title">Recent Re-embedding Jobs</div>
+    <div class="jobs-list">
+        {% if recent_jobs %}
+            {% for job in recent_jobs %}
+            <div class="job-item">
+                <div class="job-info">
+                    <div class="job-title">
+                        {{ job.get_job_type_display }}
+                        <a href="{% url 'admin:chatbot_embeddingjob_change' job.id %}" 
+                           style="text-decoration: none; color: #999; font-size: 12px;">#{{ job.id }}</a>
+                    </div>
+                    <div class="job-meta">
+                        {{ job.total_documents }} docs → 
+                        {{ job.successful_documents }} ok {{ job.failed_documents }} failed | 
+                        {{ job.started_at|date:"Y-m-d H:i" }}
+                    </div>
+                </div>
+                <span class="status-badge status-{{ job.status }}">
+                    {{ job.get_status_display }}
+                </span>
+            </div>
+            {% endfor %}
+        {% else %}
+            <p style="color: #999; text-align: center; padding: 20px;">
+                No re-embedding jobs yet. Start one from the <a href="{% url 'admin:chatbot_medicaldocument_reembed_manager' %}">Re-embedding Manager</a>.
+            </p>
+        {% endif %}
+    </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    // Section Type Chart
+    const sectionCtx = document.getElementById('section-chart')?.getContext('2d');
+    if (sectionCtx) {
+        new Chart(sectionCtx, {
+            type: 'doughnut',
+            data: {
+                labels: [
+                    {% for section, count in stats.by_section.items %}
+                        '{{ section }}',
+                    {% endfor %}
+                ],
+                datasets: [{
+                    data: [
+                        {% for section, count in stats.by_section.items %}
+                            {{ count }},
+                        {% endfor %}
+                    ],
+                    backgroundColor: [
+                        '#667eea', '#764ba2', '#f093fb', '#4facfe', '#00f2fe', '#43e97b'
+                    ]
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    title: {
+                        display: true,
+                        text: 'Documents by Section Type'
+                    },
+                    legend: {
+                        position: 'bottom'
+                    }
+                }
+            }
+        });
+    }
+    
+    // Index Type Chart
+    const indexCtx = document.getElementById('index-chart')?.getContext('2d');
+    if (indexCtx) {
+        new Chart(indexCtx, {
+            type: 'bar',
+            data: {
+                labels: [
+                    {% for index, count in stats.by_index.items %}
+                        'Index {{ index }}',
+                    {% endfor %}
+                ],
+                datasets: [{
+                    label: 'Document Count',
+                    data: [
+                        {% for index, count in stats.by_index.items %}
+                            {{ count }},
+                        {% endfor %}
+                    ],
+                    backgroundColor: '#417690'
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    title: {
+                        display: true,
+                        text: 'Documents by Index Type'
+                    },
+                    legend: {
+                        display: false
+                    }
+                },
+                scales: {
+                    y: {
+                        beginAtZero: true
+                    }
+                }
+            }
+        });
+    }
+    
+    // Provider Chart
+    const providerCtx = document.getElementById('provider-chart')?.getContext('2d');
+    if (providerCtx) {
+        new Chart(providerCtx, {
+            type: 'pie',
+            data: {
+                labels: [
+                    {% for provider, count in stats.by_provider.items %}
+                        '{{ provider }}',
+                    {% endfor %}
+                ],
+                datasets: [{
+                    data: [
+                        {% for provider, count in stats.by_provider.items %}
+                            {{ count }},
+                        {% endfor %}
+                    ],
+                    backgroundColor: [
+                        '#28a745', '#ffc107', '#4169e1'
+                    ]
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    title: {
+                        display: true,
+                        text: 'Documents by Embedding Provider'
+                    },
+                    legend: {
+                        position: 'bottom'
+                    }
+                }
+            }
+        });
+    }
+});
+</script>
+{% endblock %}

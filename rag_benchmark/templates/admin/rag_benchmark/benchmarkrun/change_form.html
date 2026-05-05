@@ -1,0 +1,15 @@
+{% extends "admin/change_form.html" %}
+
+{% block object-tools-items %}
+  {% if dashboard_url %}
+    <li>
+      <a href="{{ dashboard_url }}" class="historylink">Dashboard</a>
+    </li>
+  {% endif %}
+  {% if case_metrics_url %}
+    <li>
+      <a href="{{ case_metrics_url }}" class="historylink">Case Metrics</a>
+    </li>
+  {% endif %}
+  {{ block.super }}
+{% endblock %}

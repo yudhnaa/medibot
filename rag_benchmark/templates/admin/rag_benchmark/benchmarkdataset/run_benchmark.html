@@ -1,0 +1,16 @@
+{% extends "admin/base_site.html" %}
+
+{% block content %}
+  <div id="content-main">
+    <h1>{{ title }}</h1>
+    <p>Select dataset + split and run offline benchmark directly from admin.</p>
+    <form method="post" novalidate>
+      {% csrf_token %}
+      {{ form.as_p }}
+      <div class="submit-row">
+        <input type="submit" value="Run Benchmark" class="default" />
+        <a href="{% url 'admin:rag_benchmark_benchmarkdataset_changelist' %}" class="button cancel-link">Cancel</a>
+      </div>
+    </form>
+  </div>
+{% endblock %}

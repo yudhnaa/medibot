@@ -1,0 +1,159 @@
+services:
+  medibot-web:
+    build:
+      context: ./
+      dockerfile: Dockerfile
+      args:
+        REQUIREMENTS_FILE: requirements/dev.txt
+    command:
+      [
+        "./docker-entrypoint.sh",
+        "python",
+        "manage.py",
+        "runserver",
+        "0.0.0.0:8000",
+      ]
+    volumes:
+      - .:/usr/src/app/
+      - torch_weights:/root/.cache/torch
+      - media_data:/usr/src/app/media
+    ports:
+      - 8000:8000
+    env_file:
+      - .env
+    environment:
+      SECRET_KEY: ${SECRET_KEY}
+      DJANGO_SETTINGS_MODULE: django_template.settings.dev
+      DB_DEV_HOST: medibot-db
+      DB_DEV_PORT: 5432
+      BROKER_URL: redis://medibot-redis:6379/0
+      CELERY_RESULT_BACKEND: redis://medibot-redis:6379/1
+      CELERY_CACHE_BACKEND: redis://medibot-redis:6379/2
+      REDIS_HOST: medibot-redis
+    depends_on:
+      medibot-db:
+        condition: service_healthy
+      medibot-redis:
+        condition: service_healthy
+  medibot-db:
+    image: pgvector/pgvector:pg17
+    volumes:
+      - django_template_db:/var/lib/postgresql/data
+    environment:
+      POSTGRES_USER: ${DB_DEV_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_DEV_PASSWORD:-postgres}
+      POSTGRES_DB: ${DB_DEV_NAME:-medibot}
+    ports:
+      - 5432:5432
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${DB_DEV_USER:-postgres} -d ${DB_DEV_NAME:-medibot}",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+  medibot-redis:
+    image: redis:7.2.3-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - ./tmp/redis/data:/data
+    ports:
+      - 6379:6379
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+  medibot-worker:
+    build:
+      context: ./
+      dockerfile: Dockerfile
+      args:
+        REQUIREMENTS_FILE: requirements/dev.txt
+    command:
+      ["celery", "-A", "django_template.celery", "worker", "-l", "info", "-E"]
+    volumes:
+      - .:/usr/src/app/
+      - torch_weights:/root/.cache/torch
+      - media_data:/usr/src/app/media
+    env_file:
+      - .env
+    environment:
+      DJANGO_SETTINGS_MODULE: django_template.settings.dev
+      DB_DEV_HOST: medibot-db
+      DB_DEV_PORT: 5432
+      BROKER_URL: redis://medibot-redis:6379/0
+      CELERY_RESULT_BACKEND: redis://medibot-redis:6379/1
+      CELERY_CACHE_BACKEND: redis://medibot-redis:6379/2
+      REDIS_HOST: medibot-redis
+    depends_on:
+      medibot-db:
+        condition: service_healthy
+      medibot-redis:
+        condition: service_healthy
+  medibot-beat:
+    build:
+      context: ./
+      dockerfile: Dockerfile
+      args:
+        REQUIREMENTS_FILE: requirements/dev.txt
+    command:
+      [
+        "celery",
+        "-A",
+        "django_template.celery",
+        "beat",
+        "-l",
+        "info",
+        "--scheduler",
+        "django_celery_beat.schedulers:DatabaseScheduler",
+      ]
+    volumes:
+      - .:/usr/src/app/
+    env_file:
+      - .env
+    environment:
+      DJANGO_SETTINGS_MODULE: django_template.settings.dev
+      DB_DEV_HOST: medibot-db
+      DB_DEV_PORT: 5432
+      BROKER_URL: redis://medibot-redis:6379/0
+      CELERY_RESULT_BACKEND: redis://medibot-redis:6379/1
+      CELERY_CACHE_BACKEND: redis://medibot-redis:6379/2
+      REDIS_HOST: medibot-redis
+    depends_on:
+      medibot-db:
+        condition: service_healthy
+      medibot-redis:
+        condition: service_healthy
+  medibot-flower:
+    build:
+      context: ./
+      dockerfile: Dockerfile
+      args:
+        REQUIREMENTS_FILE: requirements/dev.txt
+    command: ["celery", "-A", "django_template.celery", "flower", "--port=5555"]
+    volumes:
+      - .:/usr/src/app/
+    ports:
+      - 5555:5555
+    env_file:
+      - .env
+    environment:
+      DJANGO_SETTINGS_MODULE: django_template.settings.dev
+      BROKER_URL: redis://medibot-redis:6379/0
+      CELERY_RESULT_BACKEND: redis://medibot-redis:6379/1
+      ENABLE_STARTUP_WARMUP: "False"
+    depends_on:
+      medibot-worker:
+        condition: service_started
+      medibot-redis:
+        condition: service_healthy
+
+volumes:
+  django_template_db:
+  torch_weights:
+  media_data:
