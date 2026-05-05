@@ -108,4 +108,21 @@ jobs:
               medibot-web ./docker-entrypoint.sh true
             docker compose -f docker-compose.yml up -d --remove-orphans
             docker compose -f docker-compose.yml ps
-            curl -fsS "${STAGING_URL}/swagger.json" >/dev/null
+
+            # Wait for app to be ready with retry logic
+            echo "Waiting for app to be ready at ${STAGING_URL}..."
+            echo "Initial startup delay: 10 seconds..."
+            sleep 10
+
+            for i in {1..30}; do
+              if curl -fsS "${STAGING_URL}/swagger.json" >/dev/null 2>&1; then
+                echo "Smoke test passed! App is ready."
+                exit 0
+              fi
+              echo "Attempt $i/30: Waiting 5s for app to be ready..."
+              sleep 5
+            done
+
+            echo "App failed to respond after startup + 150 seconds"
+            docker compose -f docker-compose.yml logs medibot-web | tail -50
+            exit 1
