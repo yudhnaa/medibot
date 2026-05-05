@@ -1,6 +1,7 @@
 from typing import Any
 
 from rest_framework.request import Request
+
 from rest_framework_simplejwt.authentication import JWTAuthentication
 
 from authentication.session import get_access_token_from_request_cookie

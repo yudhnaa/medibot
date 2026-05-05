@@ -3,26 +3,27 @@ Enhanced Admin Classes for Document Embedding Management.
 """
 
 from __future__ import annotations
-import json
+
 import csv
+import json
 from io import StringIO
 
 from django.contrib import admin, messages
+from django.db.models import Count, QuerySet
 from django.http import HttpRequest, HttpResponse, JsonResponse
 from django.shortcuts import redirect, render
 from django.urls import path
 from django.utils.html import format_html
-from django.db.models import Count, QuerySet
 
-from chatbot.models import (
-    MedicalDocument,
-    EmbeddingJob,
-    EmbeddingAuditLog,
-    EmbeddingJobStatus,
-)
 from chatbot.forms import (
-    VectorSearchForm,
     ReembeddingForm,
+    VectorSearchForm,
+)
+from chatbot.models import (
+    EmbeddingAuditLog,
+    EmbeddingJob,
+    EmbeddingJobStatus,
+    MedicalDocument,
 )
 
 

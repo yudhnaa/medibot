@@ -9,12 +9,12 @@ from django.test import TestCase, override_settings
 
 from typing_extensions import override
 
+from nlp.services.medical_ner import MedicalNER
 from nlp.services.negation_detector import (
     CueType,
     NegationCue,
     VietnameseNegationDetector,
 )
-from nlp.services.medical_ner import MedicalNER
 from nlp.services.runtime import get_shared_integrator, reset_nlp_runtime_cache
 from nlp.services.text_normalizer import TextNormalizer
 

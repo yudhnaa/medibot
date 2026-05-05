@@ -24,9 +24,7 @@ class RagasBenchmarkScorer:
         release_thresholds: dict[str, tuple[str, float]] | None = None,
         active_metrics: list[str] | None = None,
     ) -> None:
-        base_thresholds = release_thresholds or dict(
-            RAGAS_RELEASE_GATE_THRESHOLDS
-        )
+        base_thresholds = release_thresholds or dict(RAGAS_RELEASE_GATE_THRESHOLDS)
         requested = self._normalize_metric_names(active_metrics)
         if requested:
             filtered = {

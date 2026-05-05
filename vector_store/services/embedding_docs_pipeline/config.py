@@ -9,6 +9,7 @@ import os
 from typing import cast
 
 import django
+
 from dotenv import load_dotenv
 
 # Setup environment & Django
@@ -19,15 +20,17 @@ load_dotenv(os.path.join(PROJECT_ROOT, ".env"))
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "django_template.settings.dev")
 django.setup()
 
-from chatbot.models import ChatbotConfig  # noqa: E402
 from django.conf import settings  # noqa: E402
+
+from chatbot.models import ChatbotConfig  # noqa: E402
 from vector_store.services.constants import (  # noqa: E402
     DEFAULT_EMBEDDING_PROVIDER,
     DEFAULT_OPENROUTER_BASE_URL,
 )
 
 GOOGLE_API_KEY = cast(
-    str, ChatbotConfig.get_config("GOOGLE_API_KEY", getattr(settings, "GOOGLE_API_KEY", ""))
+    str,
+    ChatbotConfig.get_config("GOOGLE_API_KEY", getattr(settings, "GOOGLE_API_KEY", "")),
 )
 
 # DB-driven settings (read from ChatbotConfig)

@@ -68,18 +68,16 @@ class Command(BaseCommand):
             user.save()
 
         if created:
-            self.stdout.write(
-                self.style.SUCCESS(f"Created admin user '{username}'.")
-            )
+            self.stdout.write(self.style.SUCCESS(f"Created admin user '{username}'."))
             return
 
         if changed_fields:
             fields = ", ".join(sorted(changed_fields))
             self.stdout.write(
-                self.style.SUCCESS(
-                    f"Updated admin user '{username}' ({fields})."
-                )
+                self.style.SUCCESS(f"Updated admin user '{username}' ({fields}).")
             )
             return
 
-        self.stdout.write(self.style.NOTICE(f"Admin user '{username}' already up to date."))
+        self.stdout.write(
+            self.style.NOTICE(f"Admin user '{username}' already up to date.")
+        )

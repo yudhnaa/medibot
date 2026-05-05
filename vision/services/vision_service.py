@@ -5,14 +5,14 @@ from typing import Any, Optional
 
 import cv2
 import numpy as np
-import torch
 import skimage.io
+import torch
 
 from vision.datasets.build_dataset import XRayPreprocess
-from vision.ml_models.xrv_densenet import build_model, extract_features
-from vision.utils import load_config, get_device
 from vision.explain.gradcam import GradCAM
 from vision.explain.lung_mask import LungMasker, resize_mask
+from vision.ml_models.xrv_densenet import build_model, extract_features
+from vision.utils import get_device, load_config
 
 logger = logging.getLogger(__name__)
 

@@ -319,8 +319,7 @@ class RagasJudgeEvaluator:
             score_payload.extend([{} for _ in range(len(cases) - len(score_payload))])
 
         parsed_scores = [
-            self._extract_numeric_scores(row)
-            for row in score_payload[: len(cases)]
+            self._extract_numeric_scores(row) for row in score_payload[: len(cases)]
         ]
         fallback_retry_used = False
         fallback_single_case_count = 0
@@ -767,7 +766,9 @@ class RagasJudgeEvaluator:
         section_count = 0
         if any(token in q_tokens for token in {"risk", "nguy", "cơ"}):
             section_count += 1
-        if any(token in q_tokens for token in {"symptom", "symptoms", "triệu", "chứng"}):
+        if any(
+            token in q_tokens for token in {"symptom", "symptoms", "triệu", "chứng"}
+        ):
             section_count += 1
         if any(
             token in q_tokens
@@ -788,7 +789,14 @@ class RagasJudgeEvaluator:
             )
             has_aetiology = any(
                 token in q_tokens
-                for token in {"cause", "causes", "nguyên", "nhân", "aetiology", "etiology"}
+                for token in {
+                    "cause",
+                    "causes",
+                    "nguyên",
+                    "nhân",
+                    "aetiology",
+                    "etiology",
+                }
             )
             if has_symptom and has_aetiology:
                 return max(2, min(default_top_k, 4))
@@ -801,7 +809,13 @@ class RagasJudgeEvaluator:
                 section
                 for section in target_sections
                 if section
-                in {"risk", "symptom", "aetiologies", "living_and_preventive", "general"}
+                in {
+                    "risk",
+                    "symptom",
+                    "aetiologies",
+                    "living_and_preventive",
+                    "general",
+                }
             }
         )
 
@@ -1130,7 +1144,9 @@ class RagasJudgeEvaluator:
             )
 
         legacy = self._append_legacy_fallback_contexts(
-            contexts=self._rank_context_candidates(candidates, target_sections=target_sections),
+            contexts=self._rank_context_candidates(
+                candidates, target_sections=target_sections
+            ),
             summaries=summaries_map,
             context_snapshot=context_snapshot,
         )
@@ -1252,7 +1268,9 @@ class RagasJudgeEvaluator:
             )
 
         return self._append_legacy_fallback_contexts(
-            contexts=self._rank_context_candidates(candidates, target_sections=target_sections),
+            contexts=self._rank_context_candidates(
+                candidates, target_sections=target_sections
+            ),
             summaries=summaries_map,
             context_snapshot=context_snapshot,
         )
@@ -1284,11 +1302,15 @@ class RagasJudgeEvaluator:
             if raw_contexts:
                 return raw_contexts
         except Exception as exc:
-            logger.warning("Ragas context collection fallback to legacy ordering: %s", exc)
+            logger.warning(
+                "Ragas context collection fallback to legacy ordering: %s", exc
+            )
 
         return self._collect_runtime_contexts_legacy(runtime_output)
 
-    def _collect_runtime_contexts_legacy(self, runtime_output: dict[str, Any]) -> list[str]:
+    def _collect_runtime_contexts_legacy(
+        self, runtime_output: dict[str, Any]
+    ) -> list[str]:
         retrieval_output = runtime_output.get("retrieval_output", {}) or {}
         generation_output = runtime_output.get("generation_output", {}) or {}
         raw_contexts: list[str] = []
@@ -1414,7 +1436,9 @@ class RagasJudgeEvaluator:
         question_tokens: set[str],
         target_sections: set[str],
     ) -> list[_ContextCandidate]:
-        retrieved_context_texts = retrieval_output.get("retrieved_context_texts", []) or []
+        retrieved_context_texts = (
+            retrieval_output.get("retrieved_context_texts", []) or []
+        )
         if not isinstance(retrieved_context_texts, list):
             return []
 
@@ -1508,7 +1532,9 @@ class RagasJudgeEvaluator:
                 targets = intent.get("target_sections", [])
                 if isinstance(targets, list):
                     sections.update(
-                        str(item).strip().lower() for item in targets if str(item).strip()
+                        str(item).strip().lower()
+                        for item in targets
+                        if str(item).strip()
                     )
 
         if sections:
@@ -1517,9 +1543,14 @@ class RagasJudgeEvaluator:
         q_tokens = self._tokenize_context_text(question_text)
         if any(token in q_tokens for token in {"risk", "nguy", "cơ"}):
             sections.add("risk")
-        if any(token in q_tokens for token in {"symptom", "symptoms", "triệu", "chứng"}):
+        if any(
+            token in q_tokens for token in {"symptom", "symptoms", "triệu", "chứng"}
+        ):
             sections.add("symptom")
-        if any(token in q_tokens for token in {"cause", "causes", "nguyên", "nhân", "aetiology", "etiology"}):
+        if any(
+            token in q_tokens
+            for token in {"cause", "causes", "nguyên", "nhân", "aetiology", "etiology"}
+        ):
             sections.add("aetiologies")
         if any(
             token in q_tokens
@@ -1548,4 +1579,3 @@ class RagasJudgeEvaluator:
     def _tokenize_context_text(self, text: str) -> set[str]:
         normalized = re.sub(r"[^0-9a-zA-ZÀ-ỹ]+", " ", str(text or "").lower())
         return {token for token in normalized.split() if token}
-

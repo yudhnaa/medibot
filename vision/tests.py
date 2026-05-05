@@ -5,13 +5,18 @@ Tests model builder, preprocessing, Grad-CAM, findings, and config loading.
 
 import base64
 import tempfile
+from io import BytesIO
 from unittest.mock import MagicMock, patch
+
+from django.core.files.uploadedfile import SimpleUploadedFile
+from django.test import TestCase
+
+from rest_framework.test import APIClient
 
 import numpy as np
 import torch
-from django.test import TestCase
+from PIL import Image
 
-from vision.utils import load_config, get_device, compute_metrics
 from vision.services.vision_service import (
     clear_vision_runtime_cache,
     derive_findings,
@@ -19,6 +24,7 @@ from vision.services.vision_service import (
     load_image,
     overlay_heatmap,
 )
+from vision.utils import compute_metrics, get_device, load_config
 
 
 class GetDeviceTests(TestCase):
@@ -262,13 +268,6 @@ class GradCAMTests(TestCase):
 # =============================================================================
 # Phase 2: API endpoint tests
 # =============================================================================
-
-from io import BytesIO
-
-from django.core.files.uploadedfile import SimpleUploadedFile
-from rest_framework.test import APIClient
-
-from PIL import Image
 
 
 def _create_test_image() -> SimpleUploadedFile:

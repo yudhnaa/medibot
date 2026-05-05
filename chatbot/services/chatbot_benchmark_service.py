@@ -340,8 +340,7 @@ class ChatbotBenchmarkService(ChatbotService):
             f"Question type: {intent.get('question_type', 'open')}.\n"
             f"{section_hint}"
             f"Question: {question.strip()}\n\n"
-            "Snippets:\n"
-            + "\n".join(snippets)
+            "Snippets:\n" + "\n".join(snippets)
         )
 
         try:
@@ -833,18 +832,17 @@ class ChatbotBenchmarkService(ChatbotService):
         )
         target_sections = cast(
             list[str],
-            intent_info.get("target_sections", [])
-            if isinstance(intent_info, dict)
-            else [],
+            (
+                intent_info.get("target_sections", [])
+                if isinstance(intent_info, dict)
+                else []
+            ),
         )
 
         question_lower = str(question or "").strip().lower()
         asks_multi_aspect = (
             len(target_sections) >= 3
-            or (
-                len(target_sections) >= 2
-                and "general" not in set(target_sections)
-            )
+            or (len(target_sections) >= 2 and "general" not in set(target_sections))
             or any(
                 token in question_lower
                 for token in (
@@ -921,7 +919,9 @@ class ChatbotBenchmarkService(ChatbotService):
                 )
 
             if "aetiologies" in target_sections and target_language == "en":
-                policies.append("When cause is asked, explicitly mention SARS-CoV-2 as the cause.")
+                policies.append(
+                    "When cause is asked, explicitly mention SARS-CoV-2 as the cause."
+                )
             elif "aetiologies" in target_sections and target_language == "vi":
                 policies.append(
                     "Khi được hỏi nguyên nhân, nêu rõ SARS-CoV-2 là tác nhân gây bệnh."

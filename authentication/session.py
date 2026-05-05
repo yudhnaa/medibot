@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from django.conf import settings
+
 from rest_framework.request import Request
 from rest_framework.response import Response
 
@@ -39,9 +40,7 @@ def get_auth_session_config() -> AuthSessionConfig:
         refresh_cookie_path=str(session_settings["REFRESH_COOKIE_PATH"]),
         cookie_domain=session_settings.get("COOKIE_DOMAIN"),
         cookie_secure=bool(session_settings["COOKIE_SECURE"]),
-        cookie_samesite=_normalize_cookie_samesite(
-            session_settings["COOKIE_SAMESITE"]
-        ),
+        cookie_samesite=_normalize_cookie_samesite(session_settings["COOKIE_SAMESITE"]),
         access_cookie_max_age=int(session_settings["ACCESS_COOKIE_MAX_AGE"]),
         refresh_cookie_max_age=int(session_settings["REFRESH_COOKIE_MAX_AGE"]),
     )
@@ -103,9 +102,7 @@ def get_access_token_from_request_cookie(request: Request) -> str | None:
 def get_refresh_token_from_request(request: Request) -> str | None:
     request_data = request.data
     request_refresh_token = (
-        request_data.get("refresh")
-        if isinstance(request_data, Mapping)
-        else None
+        request_data.get("refresh") if isinstance(request_data, Mapping) else None
     )
     if isinstance(request_refresh_token, str) and request_refresh_token:
         return request_refresh_token

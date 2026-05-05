@@ -432,14 +432,18 @@ class COVIDQAEmbeddingPipelineTestCase(TestCase):
         self.assertEqual(records[0]["context"], "Article B")
 
     def test_create_llm_with_openrouter_uses_langchain_chatopenai(self) -> None:
-        with patch(
-            "vector_store.services.embedding_docs_pipeline.base.EmbeddingService"
-        ) as mock_embedding_service, patch(
-            "vector_store.services.embedding_docs_pipeline.base.ChatOpenAI"
-        ) as mock_chat_openai, patch.dict(
-            "os.environ",
-            {"OPENROUTER_API_KEY": "test-openrouter-key"},
-            clear=False,
+        with (
+            patch(
+                "vector_store.services.embedding_docs_pipeline.base.EmbeddingService"
+            ) as mock_embedding_service,
+            patch(
+                "vector_store.services.embedding_docs_pipeline.base.ChatOpenAI"
+            ) as mock_chat_openai,
+            patch.dict(
+                "os.environ",
+                {"OPENROUTER_API_KEY": "test-openrouter-key"},
+                clear=False,
+            ),
         ):
             mock_embedding_service.return_value = MagicMock()
             mock_chat_openai.return_value = MagicMock()
@@ -455,13 +459,17 @@ class COVIDQAEmbeddingPipelineTestCase(TestCase):
             self.assertEqual(kwargs["model"], "openai/gpt-4.1-mini")
 
     def test_stage_1_index_c_stores_article_ids_in_metadata(self) -> None:
-        with patch(
-            "vector_store.services.embedding_docs_pipeline.base.EmbeddingService"
-        ) as mock_embedding_service, patch(
-            "vector_store.services.embedding_docs_pipeline.base.ChatGoogleGenerativeAI"
-        ) as mock_chat_gemini, patch(
-            "vector_store.services.embedding_docs_pipeline.base.time.sleep",
-            return_value=None,
+        with (
+            patch(
+                "vector_store.services.embedding_docs_pipeline.base.EmbeddingService"
+            ) as mock_embedding_service,
+            patch(
+                "vector_store.services.embedding_docs_pipeline.base.ChatGoogleGenerativeAI"
+            ) as mock_chat_gemini,
+            patch(
+                "vector_store.services.embedding_docs_pipeline.base.time.sleep",
+                return_value=None,
+            ),
         ):
             mock_embedding = MagicMock()
             mock_embedding.embed_documents.return_value = [[0.1] * 768]
@@ -498,11 +506,14 @@ class COVIDQAEmbeddingPipelineTestCase(TestCase):
             self.assertEqual(doc.metadata["source_article_ids"], ["covidqa-001"])
 
     def test_run_persists_extraction_dataset_file(self) -> None:
-        with patch(
-            "vector_store.services.embedding_docs_pipeline.base.EmbeddingService"
-        ) as mock_embedding_service, patch(
-            "vector_store.services.embedding_docs_pipeline.base.ChatGoogleGenerativeAI"
-        ) as mock_chat_gemini:
+        with (
+            patch(
+                "vector_store.services.embedding_docs_pipeline.base.EmbeddingService"
+            ) as mock_embedding_service,
+            patch(
+                "vector_store.services.embedding_docs_pipeline.base.ChatGoogleGenerativeAI"
+            ) as mock_chat_gemini,
+        ):
             mock_embedding_service.return_value = MagicMock()
             mock_chat_gemini.return_value = MagicMock()
 
@@ -519,14 +530,15 @@ class COVIDQAEmbeddingPipelineTestCase(TestCase):
                         "context": "Sample article context",
                     }
                 ]
-                with patch.object(
-                    pipeline, "load_contexts", return_value=contexts
-                ), patch.object(
-                    pipeline, "stage_1_index_c", return_value={"covid-19": {"ctx-001"}}
-                ), patch.object(
-                    pipeline, "stage_2_index_a", return_value=1
-                ), patch.object(
-                    pipeline, "stage_3_index_b", return_value=2
+                with (
+                    patch.object(pipeline, "load_contexts", return_value=contexts),
+                    patch.object(
+                        pipeline,
+                        "stage_1_index_c",
+                        return_value={"covid-19": {"ctx-001"}},
+                    ),
+                    patch.object(pipeline, "stage_2_index_a", return_value=1),
+                    patch.object(pipeline, "stage_3_index_b", return_value=2),
                 ):
                     stats = pipeline.run(num_docs=1)
 
@@ -539,13 +551,17 @@ class COVIDQAEmbeddingPipelineTestCase(TestCase):
                 self.assertEqual(payload["articles"][0]["article_id"], "covidqa-001")
 
     def test_stage_2_uses_canonical_title_only(self) -> None:
-        with patch(
-            "vector_store.services.embedding_docs_pipeline.base.EmbeddingService"
-        ) as mock_embedding_service, patch(
-            "vector_store.services.embedding_docs_pipeline.base.ChatGoogleGenerativeAI"
-        ) as mock_chat_gemini, patch(
-            "vector_store.services.embedding_docs_pipeline.base.time.sleep",
-            return_value=None,
+        with (
+            patch(
+                "vector_store.services.embedding_docs_pipeline.base.EmbeddingService"
+            ) as mock_embedding_service,
+            patch(
+                "vector_store.services.embedding_docs_pipeline.base.ChatGoogleGenerativeAI"
+            ) as mock_chat_gemini,
+            patch(
+                "vector_store.services.embedding_docs_pipeline.base.time.sleep",
+                return_value=None,
+            ),
         ):
             mock_embedding = MagicMock()
             mock_embedding.embed_documents.return_value = [[0.1] * 768]
@@ -594,13 +610,17 @@ class COVIDQAEmbeddingPipelineTestCase(TestCase):
                 )
 
     def test_stage_3_uses_canonical_title_only(self) -> None:
-        with patch(
-            "vector_store.services.embedding_docs_pipeline.base.EmbeddingService"
-        ) as mock_embedding_service, patch(
-            "vector_store.services.embedding_docs_pipeline.base.ChatGoogleGenerativeAI"
-        ) as mock_chat_gemini, patch(
-            "vector_store.services.embedding_docs_pipeline.base.time.sleep",
-            return_value=None,
+        with (
+            patch(
+                "vector_store.services.embedding_docs_pipeline.base.EmbeddingService"
+            ) as mock_embedding_service,
+            patch(
+                "vector_store.services.embedding_docs_pipeline.base.ChatGoogleGenerativeAI"
+            ) as mock_chat_gemini,
+            patch(
+                "vector_store.services.embedding_docs_pipeline.base.time.sleep",
+                return_value=None,
+            ),
         ):
             mock_embedding = MagicMock()
             mock_embedding.embed_documents.side_effect = [

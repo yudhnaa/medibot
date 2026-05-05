@@ -1,7 +1,8 @@
 from django.conf import settings
 from django.db import models
-from typing_extensions import override
+
 from pgvector.django import VectorField
+from typing_extensions import override
 
 
 class XRayAnalysis(models.Model):

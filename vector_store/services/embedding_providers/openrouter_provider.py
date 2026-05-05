@@ -7,9 +7,8 @@ import logging
 import os
 
 import numpy as np
-from pydantic import SecretStr
-
 from langchain_openai import OpenAIEmbeddings
+from pydantic import SecretStr
 from typing_extensions import override
 
 from chatbot.models import ChatbotConfig

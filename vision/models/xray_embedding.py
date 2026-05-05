@@ -1,6 +1,7 @@
 from django.db import models
-from typing_extensions import override
+
 from pgvector.django import HnswIndex, VectorField
+from typing_extensions import override
 
 
 class XRayEmbedding(models.Model):

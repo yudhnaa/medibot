@@ -5,10 +5,11 @@ Handles selective, bulk, and provider-switching re-embedding operations.
 
 import logging
 from typing import Any
-from django.utils import timezone
-from django.db import transaction
 
-from chatbot.models import MedicalDocument, EmbeddingJob, EmbeddingJobStatus
+from django.db import transaction
+from django.utils import timezone
+
+from chatbot.models import EmbeddingJob, EmbeddingJobStatus, MedicalDocument
 from vector_store.services.embedding_service import EmbeddingService
 
 logger = logging.getLogger(__name__)

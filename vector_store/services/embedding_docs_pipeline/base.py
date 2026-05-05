@@ -2,8 +2,8 @@
 Base classes and shared logic for the embedding pipelines.
 """
 
-import json
 import hashlib
+import json
 import logging
 import os
 import re
@@ -14,6 +14,7 @@ from typing import Any
 
 from django.conf import settings
 from django.core.exceptions import SynchronousOnlyOperation
+
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_openai import ChatOpenAI
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -29,6 +30,10 @@ from tqdm import tqdm
 from chatbot.models import MedicalDocument
 from chatbot.models.chatbot_config import ChatbotConfig
 from chatbot.models.medical_document import IndexType, SectionType
+from vector_store.services.constants import (
+    OPENROUTER_API_KEY_ENV_NAME,
+    OPENROUTER_BASE_URL_ENV_NAME,
+)
 from vector_store.services.embedding_docs_pipeline.constants import (
     CHUNK_OVERLAP,
     CHUNK_SIZE,
@@ -38,8 +43,8 @@ from vector_store.services.embedding_docs_pipeline.constants import (
     EMBEDDING_PROVIDER,
     EMBEDDING_SLEEP_SECONDS,
     EXTRACTION_DATASET_OUTPUT_PATH,
-    LLM_PROVIDER,
     LLM_MODEL,
+    LLM_PROVIDER,
     OPENROUTER_LLM_BASE_URL,
     PROMPT_CLASSIFY_SECTIONS,
     PROMPT_EXTRACT_DISEASES,
@@ -49,10 +54,6 @@ from vector_store.services.embedding_docs_pipeline.constants import (
     RETRY_WAIT_MIN,
     SECTION_TYPE_MAP,
     VALID_SECTIONS,
-)
-from vector_store.services.constants import (
-    OPENROUTER_API_KEY_ENV_NAME,
-    OPENROUTER_BASE_URL_ENV_NAME,
 )
 from vector_store.services.embedding_service import EmbeddingService
 
@@ -82,9 +83,10 @@ class BaseEmbeddingPipeline(ABC):
             self.get_runtime_config("EMBEDDING_PROVIDER", EMBEDDING_PROVIDER)
         )
         self.llm_provider = (
-            llm_provider
-            or str(self.get_runtime_config("LLM_PROVIDER", LLM_PROVIDER))
-        ).strip().lower()
+            (llm_provider or str(self.get_runtime_config("LLM_PROVIDER", LLM_PROVIDER)))
+            .strip()
+            .lower()
+        )
         self.llm_model_override = llm_model
         self.llm_base_url_override = llm_base_url
         self.llm_api_key_override = llm_api_key
@@ -125,7 +127,9 @@ class BaseEmbeddingPipeline(ABC):
                 self.get_runtime_config("LLM_MODEL", "openai/gpt-4.1-mini")
             )
             self.llm_model = model_name
-            base_url_default = os.getenv(OPENROUTER_BASE_URL_ENV_NAME) or OPENROUTER_LLM_BASE_URL
+            base_url_default = (
+                os.getenv(OPENROUTER_BASE_URL_ENV_NAME) or OPENROUTER_LLM_BASE_URL
+            )
             base_url = (
                 self.llm_base_url_override
                 or str(
@@ -133,9 +137,14 @@ class BaseEmbeddingPipeline(ABC):
                 ).strip()
             )
             api_key_default = os.getenv(OPENROUTER_API_KEY_ENV_NAME, "")
-            api_key = self.llm_api_key_override or str(
-                self.get_runtime_config(OPENROUTER_API_KEY_ENV_NAME, api_key_default)
-            ).strip()
+            api_key = (
+                self.llm_api_key_override
+                or str(
+                    self.get_runtime_config(
+                        OPENROUTER_API_KEY_ENV_NAME, api_key_default
+                    )
+                ).strip()
+            )
             if not api_key:
                 raise ValueError(
                     f"{OPENROUTER_API_KEY_ENV_NAME} is required for openrouter LLM provider"
@@ -152,12 +161,16 @@ class BaseEmbeddingPipeline(ABC):
             self.get_runtime_config("LLM_MODEL", LLM_MODEL)
         )
         self.llm_model = model_name
-        google_api_key_default = os.getenv("GOOGLE_API_KEY") or str(
-            getattr(settings, "GOOGLE_API_KEY", "")
-        ).strip()
-        google_api_key = self.llm_api_key_override or str(
-            self.get_runtime_config("GOOGLE_API_KEY", google_api_key_default)
-        ).strip()
+        google_api_key_default = (
+            os.getenv("GOOGLE_API_KEY")
+            or str(getattr(settings, "GOOGLE_API_KEY", "")).strip()
+        )
+        google_api_key = (
+            self.llm_api_key_override
+            or str(
+                self.get_runtime_config("GOOGLE_API_KEY", google_api_key_default)
+            ).strip()
+        )
         return ChatGoogleGenerativeAI(
             model=model_name,
             google_api_key=SecretStr(google_api_key),
@@ -423,11 +436,16 @@ class BaseEmbeddingPipeline(ABC):
             {
                 self._normalize_text(alias)
                 for alias in aliases
-                if self._normalize_text(alias) and self._normalize_text(alias) != canonical_title
+                if self._normalize_text(alias)
+                and self._normalize_text(alias) != canonical_title
             }
         )
         question_block = " | ".join(
-            [self._normalize_text(question) for question in sample_questions[:3] if question]
+            [
+                self._normalize_text(question)
+                for question in sample_questions[:3]
+                if question
+            ]
         )
         alias_block = ", ".join(deduped_aliases)
         parts = [canonical_title, intent]
@@ -846,16 +864,18 @@ class BaseEmbeddingPipeline(ABC):
                         "canonical_title": canonical_title,
                         "intent": intent,
                     }
-                    stage_1_route_units = self.extraction_records[article_id]["stage_1"][
-                        "route_units"
-                    ]
+                    stage_1_route_units = self.extraction_records[article_id][
+                        "stage_1"
+                    ]["route_units"]
                     if route_item not in stage_1_route_units:
                         stage_1_route_units.append(route_item)
 
         route_payloads: list[dict[str, Any]] = []
         for route_unit_id, unit in route_units.items():
             canonical_title = str(unit["canonical_title"])
-            aliases = sorted({str(alias) for alias in unit["aliases"] if str(alias).strip()})
+            aliases = sorted(
+                {str(alias) for alias in unit["aliases"] if str(alias).strip()}
+            )
             intent = str(unit["intent"])
             questions = [
                 self._normalize_text(question)
@@ -918,12 +938,16 @@ class BaseEmbeddingPipeline(ABC):
         logger.info("STAGE 2: Index A — FAQ Question Embedding")
         logger.info("%s", "=" * 60)
 
-        ctx_lookup = {str(ctx["context_id"]): ctx for ctx in contexts if ctx.get("context_id")}
+        ctx_lookup = {
+            str(ctx["context_id"]): ctx for ctx in contexts if ctx.get("context_id")
+        }
         context_aliases = self._build_context_aliases(disease_to_contexts)
         count = 0
         qa_seen: set[str] = set()
 
-        for context_id, aliases in tqdm(context_aliases.items(), desc="Stage 2: Building FAQs"):
+        for context_id, aliases in tqdm(
+            context_aliases.items(), desc="Stage 2: Building FAQs"
+        ):
             ctx_data = ctx_lookup.get(context_id)
             if not ctx_data:
                 continue
@@ -940,7 +964,11 @@ class BaseEmbeddingPipeline(ABC):
                 if not context_text.strip():
                     continue
                 try:
-                    text = context_text[:8000] if len(context_text) > 8000 else context_text
+                    text = (
+                        context_text[:8000]
+                        if len(context_text) > 8000
+                        else context_text
+                    )
                     prompt = PROMPT_EXTRACT_SUMMARY.format(
                         disease_name=canonical_title, text=text
                     )
@@ -1077,7 +1105,9 @@ class BaseEmbeddingPipeline(ABC):
             separators=["\n\n", "\n", ". ", ", ", " ", ""],
         )
 
-        ctx_lookup = {str(ctx["context_id"]): ctx for ctx in contexts if ctx.get("context_id")}
+        ctx_lookup = {
+            str(ctx["context_id"]): ctx for ctx in contexts if ctx.get("context_id")
+        }
         count = 0
         context_aliases = self._build_context_aliases(disease_to_contexts)
 
@@ -1138,7 +1168,9 @@ class BaseEmbeddingPipeline(ABC):
                     )
                     continue
 
-                for i, (chunk_text, embedding) in enumerate(zip(chunks_lower, embeddings)):
+                for i, (chunk_text, embedding) in enumerate(
+                    zip(chunks_lower, embeddings)
+                ):
                     evidence_id = f"{context_id}:{section_key}:{i}"
                     MedicalDocument.objects.create(
                         title=canonical_title,

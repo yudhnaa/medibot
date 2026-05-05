@@ -8,7 +8,6 @@ import os
 from typing import override
 
 import numpy as np
-
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from pydantic import SecretStr
 

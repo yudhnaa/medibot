@@ -5,17 +5,15 @@ DRF views for chat API endpoints.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
-import asyncio
-from typing import Any, cast
-from typing_extensions import override
+from typing import TYPE_CHECKING, Any, cast
 from uuid import UUID
 
 from django.db import transaction
 from django.db.models import QuerySet
 from django.http import StreamingHttpResponse
-from asgiref.sync import sync_to_async
 
 from rest_framework import permissions, status, viewsets
 from rest_framework.decorators import action
@@ -23,7 +21,8 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from vision.models import XRayAnalysis
+from asgiref.sync import sync_to_async
+from typing_extensions import override
 
 from chatbot.models import ChatMessage, ChatSession
 from chatbot.serializers import (
@@ -36,6 +35,10 @@ from chatbot.serializers import (
     UserIntakeInputSerializer,
     UserIntakeOutputSerializer,
 )
+from vision.models import XRayAnalysis
+
+if TYPE_CHECKING:
+    from chatbot.services.chatbot_service import ChatbotService
 
 logger = logging.getLogger(__name__)
 
@@ -180,7 +183,9 @@ class ChatView(APIView):
         if uploaded_image and not xray_analysis_id:
             import os
             import tempfile
+
             from django.conf import settings
+
             from vision.services.vision_service import analyze_xray
 
             suffix: str = os.path.splitext(str(uploaded_image.name))[1] or ".png"

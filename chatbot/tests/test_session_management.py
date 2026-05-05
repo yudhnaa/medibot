@@ -1,6 +1,8 @@
 from django.urls import reverse
+
 from rest_framework import status
 from rest_framework.test import APITestCase
+
 from authentication.factories import CustomerFactory
 from chatbot.models import ChatSession
 
@@ -48,10 +50,6 @@ class SessionManagementTests(APITestCase):
 
     def test_active_session_allows_chat(self):
         """Test that posting to an active session works."""
-        session = ChatSession.objects.create(customer=self.user, is_active=True)
-
-        data = {"session_id": session.session_id, "message": "Hello"}
-
         # Note: We expect code execution to proceed. It might fail later due to
         # missing external services/mocks (Gemini), but status code should NOT be 403.
         # We Mock the service to avoid external calls if possible, or expect 200/500 but not 403.

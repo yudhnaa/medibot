@@ -12,14 +12,14 @@ from django.db import transaction
 import pandas as pd
 
 from chatbot.models import IndexType, MedicalDocument, SectionType
-from vector_store.services.embedding_service import EmbeddingService
-from vector_store.services.embedding_docs_pipeline.csv_pipeline import (
-    CSVEmbeddingPipeline,
-)
 from vector_store.services.embedding_docs_pipeline.article_schema import (
     normalize_article_record,
     parse_list_items,
 )
+from vector_store.services.embedding_docs_pipeline.csv_pipeline import (
+    CSVEmbeddingPipeline,
+)
+from vector_store.services.embedding_service import EmbeddingService
 
 logger = logging.getLogger(__name__)
 
@@ -56,11 +56,15 @@ class VectorStoreManager:
     def _metadata_value_matches(self, actual: Any, expected: Any) -> bool:
         """Match a metadata value with case-insensitive scalar/list semantics."""
         if isinstance(expected, (list, tuple, set)):
-            expected_values = {str(item).strip().lower() for item in expected if item is not None}
+            expected_values = {
+                str(item).strip().lower() for item in expected if item is not None
+            }
             if not expected_values:
                 return False
             if isinstance(actual, list):
-                actual_values = {str(item).strip().lower() for item in actual if item is not None}
+                actual_values = {
+                    str(item).strip().lower() for item in actual if item is not None
+                }
                 return bool(actual_values.intersection(expected_values))
             return str(actual).strip().lower() in expected_values
 

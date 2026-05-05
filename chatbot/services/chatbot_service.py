@@ -3,8 +3,8 @@ Chatbot Service
 Main service for medical RAG chatbot with NER, negation detection, and streaming support.
 """
 
-import logging
 import json
+import logging
 import math
 import re
 import time
@@ -27,23 +27,22 @@ from chatbot.models import (
     UserIntake,
 )
 from chatbot.prompts.system_vi import SYSTEM_PROMPT_VI
-from vision.models import XRayAnalysis
-from vision.serializers import XRayAnalysisDisplaySerializer
 from chatbot.services.constants import (
-    DEFAULT_DOCS_CACHE_SIZE,
     DEFAULT_DOC_PREVIEW_LENGTH,
+    DEFAULT_DOCS_CACHE_SIZE,
     DEFAULT_INDEX_B_K,
     DEFAULT_RAG_B_TOPK,
     DEFAULT_RAG_FINAL_TITLES,
-    DEFAULT_RAG_MERGED_LIMIT,
     DEFAULT_RAG_MERGE_WEIGHT_ENTITIES,
     DEFAULT_RAG_MERGE_WEIGHT_QUERY,
+    DEFAULT_RAG_MERGED_LIMIT,
     DEFAULT_RAG_NEG_SYM_SIM_THRESH,
     DEFAULT_RAG_PENALTY_ALPHA,
     DEFAULT_RAG_THRESH_C,
     DEFAULT_RAG_TITLE_TOP_M,
     DEFAULT_SECTION_ITEMS_LIMIT,
     DEFAULT_SINGLE_DISEASE_DOCS_K,
+    GENERIC_SYMPTOM_TERMS,
     HEADER_EVIDENCE_BLOCK,
     HEADER_FAQ_MATCH,
     HEADER_MULTI_DISEASE_ANALYSIS,
@@ -56,23 +55,24 @@ from chatbot.services.constants import (
     HEADER_XRAY_FINDINGS,
     HEADER_XRAY_PREDICTION,
     HEADER_XRAY_PROBABILITIES,
-    GENERIC_SYMPTOM_TERMS,
     MSG_ANALYSIS_ERROR,
     MSG_CONTEXT_HINT_MULTI,
     MSG_CONTEXT_HINT_SINGLE,
-    QUERY_ANALYZER_PROMPT,
     MSG_NO_DOCS_FOR_TITLE,
     MSG_PROCESSING_ERROR,
     MSG_STREAMING_ERROR,
     MSG_XRAY_INSTRUCTION,
+    QUERY_ANALYZER_PROMPT,
     SECTION_HEADERS,
     SECTION_ORDER,
     SYNONYM_MAP,
     XRAY_RESPIRATORY_DOMAIN_CONTEXT_VI,
 )
 from chatbot.services.gemini_manager import get_gemini_manager
-from vector_store.services import VectorStoreManager
 from nlp.services.runtime import get_shared_integrator
+from vector_store.services import VectorStoreManager
+from vision.models import XRayAnalysis
+from vision.serializers import XRayAnalysisDisplaySerializer
 
 logger = logging.getLogger(__name__)
 
@@ -1704,4 +1704,3 @@ class ChatbotService:
     def get_last_audit(self) -> dict[str, Any]:
         """Get last audit info for metadata."""
         return self._last_audit
-

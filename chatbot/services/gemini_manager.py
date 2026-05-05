@@ -91,7 +91,9 @@ class GeminiAPIManager:
         is_paid = bool(
             ChatbotConfig.get_config("IS_USE_PAID_GOOGLE_GEMINI_API_KEY", False)
         )
-        key_name = "GOOGLE_GEMINI_PAID_API_KEYS" if is_paid else "GOOGLE_GEMINI_API_KEYS"
+        key_name = (
+            "GOOGLE_GEMINI_PAID_API_KEYS" if is_paid else "GOOGLE_GEMINI_API_KEYS"
+        )
 
         keys = self._to_str_list(self._get_db_or_setting(key_name))
         if keys:

@@ -1,5 +1,7 @@
 from typing import override
+
 from rest_framework import generics, permissions
+
 from authentication.models import Customer
 from authentication.serializers.user_profile_serializer import UserProfileSerializer
 
@@ -19,6 +21,8 @@ class UserProfileView(generics.RetrieveUpdateAPIView):
     permission_classes = [permissions.IsAuthenticated]
 
     @override
-    def get_object(self) -> Customer:  # pyright: ignore[reportIncompatibleMethodOverride]
+    def get_object(
+        self,
+    ) -> Customer:  # pyright: ignore[reportIncompatibleMethodOverride]
         """Return the authenticated user."""
         return self.request.user  # pyright: ignore[reportReturnType]

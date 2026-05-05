@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+import os
 from typing import Any, cast, override
 
 from django.contrib import admin, messages
 from django.http import HttpRequest
 from django.shortcuts import redirect, render
 from django.urls import path
-import os
 
+from chatbot.admin.document_admin import MedicalDocumentAdmin
+from chatbot.forms import CsvUploadForm
 from chatbot.models import (
     ChatbotConfig,
     ChatMessage,
@@ -15,8 +17,6 @@ from chatbot.models import (
     MedicalDocument,
     UserPreference,
 )
-from chatbot.forms import CsvUploadForm
-from chatbot.admin.document_admin import MedicalDocumentAdmin
 
 
 @admin.register(ChatSession)

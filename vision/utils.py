@@ -1,7 +1,7 @@
-import yaml
 import numpy as np
 import torch
-from sklearn.metrics import accuracy_score, f1_score, confusion_matrix, roc_auc_score
+import yaml
+from sklearn.metrics import accuracy_score, confusion_matrix, f1_score, roc_auc_score
 
 
 def load_config(path: str) -> dict:

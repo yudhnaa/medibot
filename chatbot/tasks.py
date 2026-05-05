@@ -7,10 +7,10 @@ from typing import Any
 
 from celery import shared_task
 
-from vector_store.services.embedding_service import EmbeddingService
 from chatbot.models import EmbeddingJobStatus
-from vector_store.services.vector_store_manager import VectorStoreManager
 from vector_store.services.embedding_docs_pipeline.embed_contexts import embed_contexts
+from vector_store.services.embedding_service import EmbeddingService
+from vector_store.services.vector_store_manager import VectorStoreManager
 
 logger = logging.getLogger(__name__)
 
@@ -98,7 +98,8 @@ def process_csv_upload(
 
         if job:
             failed_rows_total = sum(
-                int(report.get("failed_rows", 0)) for report in per_index_reports.values()
+                int(report.get("failed_rows", 0))
+                for report in per_index_reports.values()
             )
             report_chunks = [
                 f"{index_type}: rows={report.get('total_rows', 0)}, "
@@ -237,7 +238,9 @@ def process_article_url_embed(
             **result,
         }
     except Exception as exc:
-        logger.error("Error processing URL embedding for %s: %s", url, exc, exc_info=True)
+        logger.error(
+            "Error processing URL embedding for %s: %s", url, exc, exc_info=True
+        )
         if job:
             job.status = EmbeddingJobStatus.FAILED
             job.error_messages = [str(exc)]

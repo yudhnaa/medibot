@@ -10,7 +10,7 @@ from django.db import transaction
 from django.db.models import Count, Max
 from django.utils import timezone
 
-from chatbot.models import ChatSession, ChatbotConfig, MedicalDocument
+from chatbot.models import ChatbotConfig, ChatSession, MedicalDocument
 from chatbot.services.chatbot_benchmark_service import ChatbotBenchmarkService
 from rag_benchmark.models import (
     BenchmarkCase,
@@ -67,7 +67,9 @@ class OfflineBenchmarkRunner:
 
         judge_conf = dict(judge_configuration or {})
         judge_conf["enable_ragas"] = True
-        requested_metrics = self._normalize_metric_names(judge_conf.get("ragas_metrics"))
+        requested_metrics = self._normalize_metric_names(
+            judge_conf.get("ragas_metrics")
+        )
         disabled_metrics = self._normalize_metric_names(
             judge_conf.get("disabled_ragas_metrics")
         )

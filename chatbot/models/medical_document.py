@@ -1,8 +1,7 @@
-from typing_extensions import override
-
 from django.db import models
 
 from pgvector.django import HnswIndex, VectorField
+from typing_extensions import override
 
 
 class IndexType(models.TextChoices):

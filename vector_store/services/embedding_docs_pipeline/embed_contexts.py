@@ -1,11 +1,11 @@
 """Compatibility wrapper for the class-based embedding pipelines."""
 
 from vector_store.services.embedding_docs_pipeline.base import clear_covid_qa_documents
-from vector_store.services.embedding_docs_pipeline.csv_pipeline import (
-    CSVEmbeddingPipeline,
-)
 from vector_store.services.embedding_docs_pipeline.covidqa_pipeline import (
     COVIDQAEmbeddingPipeline,
+)
+from vector_store.services.embedding_docs_pipeline.csv_pipeline import (
+    CSVEmbeddingPipeline,
 )
 
 

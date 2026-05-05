@@ -3,14 +3,14 @@ import logging
 from typing import Optional
 
 import torch
-from torch.utils.data import DataLoader
 from psycopg2.extras import execute_values
+from torch.utils.data import DataLoader
 
-from vision.datasets.kaggle_loader import KaggleCovidDataset
 from vision.datasets.build_dataset import XRayPreprocess
+from vision.datasets.kaggle_loader import KaggleCovidDataset
 from vision.ml_models.xrv_densenet import build_model, extract_features
-from vision.utils import load_config, get_device
-from vision.services.retrieval_pipeline import get_conn, ensure_table
+from vision.services.retrieval_pipeline import ensure_table, get_conn
+from vision.utils import get_device, load_config
 
 logger = logging.getLogger(__name__)
 

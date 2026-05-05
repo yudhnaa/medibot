@@ -6,7 +6,6 @@ Main service for generating text embeddings using different providers.
 import logging
 
 from chatbot.models import ChatbotConfig
-
 from vector_store.services.constants import (
     DEFAULT_EMBEDDING_PROVIDER,
     EMBEDDING_PROVIDER_GEMINI,
@@ -68,7 +67,9 @@ class EmbeddingService:
             return DEFAULT_EMBEDDING_PROVIDER
         return resolved
 
-    def __init__(self, provider: str | None = None, **kwargs):  # pyright: ignore[reportUnknownParameterType]
+    def __init__(
+        self, provider: str | None = None, **kwargs
+    ):  # pyright: ignore[reportUnknownParameterType]
         """
         Initialize embedding service with specified provider.
 

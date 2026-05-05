@@ -77,9 +77,7 @@ class RagasJudgeEvaluatorTests(SimpleTestCase):
         }
 
     def test_evaluate_batch_falls_back_single_case_when_metric_missing(self):
-        evaluator = RagasJudgeEvaluator(
-            metrics=["answer_relevancy", "context_recall"]
-        )
+        evaluator = RagasJudgeEvaluator(metrics=["answer_relevancy", "context_recall"])
         fake_modules = self._build_fake_modules()
         run_calls: list[dict] = []
 
@@ -328,10 +326,15 @@ class RagasJudgeEvaluatorTests(SimpleTestCase):
         self.assertIn("symptom", lowered)
         self.assertTrue("cause:" in lowered or "caused by" in lowered)
         self.assertFalse(
-            any(text.lower().startswith("coronavirus disease (covid-19) ") for text in contexts)
+            any(
+                text.lower().startswith("coronavirus disease (covid-19) ")
+                for text in contexts
+            )
         )
 
-    def test_build_judge_contexts_drops_redundant_general_summary_for_risk_queries(self):
+    def test_build_judge_contexts_drops_redundant_general_summary_for_risk_queries(
+        self,
+    ):
         evaluator = RagasJudgeEvaluator(metrics=["faithfulness"])
         contexts = evaluator._build_judge_contexts(
             retrieval_output={
@@ -378,14 +381,22 @@ class RagasJudgeEvaluatorTests(SimpleTestCase):
         lowered = "\n".join(contexts).lower()
         self.assertIn("risk factors include", lowered)
         self.assertFalse(
-            any(text.lower().startswith("coronavirus disease (covid-19) ") for text in contexts)
+            any(
+                text.lower().startswith("coronavirus disease (covid-19) ")
+                for text in contexts
+            )
         )
         self.assertTrue(
-            any("covid-19 is an infectious disease caused by" in text.lower() for text in contexts)
+            any(
+                "covid-19 is an infectious disease caused by" in text.lower()
+                for text in contexts
+            )
         )
         self.assertLessEqual(len(contexts), 3)
 
-    def test_detect_context_sections_maps_general_covid_context_to_risk_when_targeted(self):
+    def test_detect_context_sections_maps_general_covid_context_to_risk_when_targeted(
+        self,
+    ):
         evaluator = RagasJudgeEvaluator(metrics=["faithfulness"])
         sections = evaluator._detect_context_sections(
             text=(
@@ -397,7 +408,9 @@ class RagasJudgeEvaluatorTests(SimpleTestCase):
 
         self.assertEqual(sections, {"risk"})
 
-    def test_detect_context_sections_keeps_aetiology_signal_for_symptom_cause_target(self):
+    def test_detect_context_sections_keeps_aetiology_signal_for_symptom_cause_target(
+        self,
+    ):
         evaluator = RagasJudgeEvaluator(metrics=["faithfulness"])
         sections = evaluator._detect_context_sections(
             text=(

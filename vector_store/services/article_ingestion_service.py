@@ -103,7 +103,9 @@ class ArticleIngestionService:
     def _parse_json_response(self, response_text: str) -> dict[str, Any]:
         text = str(response_text or "").strip()
         if text.startswith("```"):
-            lines = [line for line in text.splitlines() if not line.strip().startswith("```")]
+            lines = [
+                line for line in text.splitlines() if not line.strip().startswith("```")
+            ]
             text = "\n".join(lines).strip()
         parsed = json.loads(text)
         if not isinstance(parsed, dict):
@@ -127,8 +129,13 @@ class ArticleIngestionService:
         )
         with urlopen(req, timeout=20) as response:  # nosec B310
             content_type = response.headers.get("Content-Type", "")
-            if "text/html" not in content_type and "application/xhtml+xml" not in content_type:
-                raise ValueError(f"URL is not an HTML page (content-type={content_type})")
+            if (
+                "text/html" not in content_type
+                and "application/xhtml+xml" not in content_type
+            ):
+                raise ValueError(
+                    f"URL is not an HTML page (content-type={content_type})"
+                )
             raw_html = response.read()
 
         html = raw_html.decode("utf-8", errors="ignore")

@@ -4,9 +4,10 @@ Standardizes all API responses with a consistent format.
 """
 
 from typing import Any
-from typing_extensions import override
 
 from rest_framework.renderers import JSONRenderer
+
+from typing_extensions import override
 
 
 class CustomJSONRenderer(JSONRenderer):

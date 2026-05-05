@@ -456,7 +456,9 @@ class BenchmarkRunAdmin(admin.ModelAdmin):
         )
 
         release_gate = run.release_gate if isinstance(run.release_gate, dict) else {}
-        checks = release_gate.get("checks", {}) if isinstance(release_gate, dict) else {}
+        checks = (
+            release_gate.get("checks", {}) if isinstance(release_gate, dict) else {}
+        )
         release_checks = checks if isinstance(checks, dict) else {}
         metric_thresholds: dict[str, str] = {}
         for metric_key in (
@@ -473,9 +475,11 @@ class BenchmarkRunAdmin(admin.ModelAdmin):
             operator = str(check_payload.get("operator", "")).strip()
             threshold = check_payload.get("threshold")
             if not operator or threshold is None:
-                fallback_operator, fallback_threshold = RAGAS_RELEASE_GATE_THRESHOLDS.get(
-                    metric_key,
-                    ("", None),
+                fallback_operator, fallback_threshold = (
+                    RAGAS_RELEASE_GATE_THRESHOLDS.get(
+                        metric_key,
+                        ("", None),
+                    )
                 )
                 operator = str(fallback_operator).strip()
                 threshold = fallback_threshold
@@ -486,7 +490,9 @@ class BenchmarkRunAdmin(admin.ModelAdmin):
 
         case_rows: list[dict[str, Any]] = []
         for result in results:
-            pass_flags = result.pass_flags if isinstance(result.pass_flags, dict) else {}
+            pass_flags = (
+                result.pass_flags if isinstance(result.pass_flags, dict) else {}
+            )
             metrics = result.metrics if isinstance(result.metrics, dict) else {}
             failed_checks = [
                 self._humanize_metric_name(str(key).removesuffix("_pass"))
@@ -660,7 +666,9 @@ class BenchmarkRunAdmin(admin.ModelAdmin):
             )
             return str(label)
 
-        error_payload = result.error_payload if isinstance(result.error_payload, dict) else {}
+        error_payload = (
+            result.error_payload if isinstance(result.error_payload, dict) else {}
+        )
         error_message = str(error_payload.get("message") or "").strip()
         if error_message:
             return error_message

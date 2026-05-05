@@ -1,7 +1,8 @@
 import uuid
-from typing_extensions import override
 
 from django.db import models
+
+from typing_extensions import override
 
 from authentication.models import Customer
 

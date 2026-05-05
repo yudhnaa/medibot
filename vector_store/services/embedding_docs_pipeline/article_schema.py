@@ -10,7 +10,6 @@ from typing import Any
 
 from chatbot.models import IndexType, SectionType
 
-
 SECTION_KEYS: tuple[str, ...] = (
     "general",
     "symptom",
@@ -69,7 +68,9 @@ def parse_list_items(value: Any) -> list[str]:
     if value is None:
         return []
     if isinstance(value, list):
-        return _dedupe_keep_order([_clean_text(item) for item in value if _clean_text(item)])
+        return _dedupe_keep_order(
+            [_clean_text(item) for item in value if _clean_text(item)]
+        )
     if not isinstance(value, str):
         return []
 
@@ -96,7 +97,9 @@ def parse_list_items(value: Any) -> list[str]:
             pass
 
     parts = re.split(r"[;\n•·]|,\s*", text)
-    return _dedupe_keep_order([_clean_text(part) for part in parts if _clean_text(part)])
+    return _dedupe_keep_order(
+        [_clean_text(part) for part in parts if _clean_text(part)]
+    )
 
 
 def summarize_items(items: list[str], limit: int = 3) -> list[str]:

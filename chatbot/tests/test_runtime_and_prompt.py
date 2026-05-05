@@ -3,6 +3,7 @@ from typing import cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from django.test import SimpleTestCase
+
 from langchain_core.documents import Document
 
 from chatbot.models import UserIntake
@@ -45,22 +46,27 @@ class GeminiProviderSelectionTests(SimpleTestCase):
         }
         mock_get_config.side_effect = lambda key, default=None: config.get(key, default)
 
-        with patch.object(
-            manager,
-            "_resolve_llm_provider",
-            return_value="openrouter",
-        ), patch.object(
-            manager,
-            "_resolve_openrouter_api_key",
-            return_value="test-key",
-        ), patch.object(
-            manager,
-            "_resolve_openrouter_base_url",
-            return_value="https://openrouter.ai/api/v1",
-        ), patch.object(
-            manager,
-            "_ensure_gemini_api_keys",
-            side_effect=AssertionError("Gemini path must not be used"),
+        with (
+            patch.object(
+                manager,
+                "_resolve_llm_provider",
+                return_value="openrouter",
+            ),
+            patch.object(
+                manager,
+                "_resolve_openrouter_api_key",
+                return_value="test-key",
+            ),
+            patch.object(
+                manager,
+                "_resolve_openrouter_base_url",
+                return_value="https://openrouter.ai/api/v1",
+            ),
+            patch.object(
+                manager,
+                "_ensure_gemini_api_keys",
+                side_effect=AssertionError("Gemini path must not be used"),
+            ),
         ):
             llm = manager.create_llm()
 
@@ -154,7 +160,9 @@ class RouterAndRetrievalTests(SimpleTestCase):
 
         urls = ChatbotService.get_last_source_urls(service)
 
-        self.assertEqual(urls, ["https://example.org/covid-19", "https://example.org/prevention"])
+        self.assertEqual(
+            urls, ["https://example.org/covid-19", "https://example.org/prevention"]
+        )
 
     def test_filter_generic_symptom_terms_removes_meta_terms(self) -> None:
         service = object.__new__(ChatbotService)
@@ -262,7 +270,11 @@ class RouterAndRetrievalTests(SimpleTestCase):
             analysis={
                 "q_cleaned": "tôi bị sốt phát ban",
                 "q_symptom": "sốt, phát ban",
-                "positives": {"SYMPTOM": ["sốt", "phát ban"], "ETIOLOGY": [], "RISK": []},
+                "positives": {
+                    "SYMPTOM": ["sốt", "phát ban"],
+                    "ETIOLOGY": [],
+                    "RISK": [],
+                },
                 "negatives": {"SYMPTOM": ["đau bụng"]},
             },
         )
@@ -361,7 +373,10 @@ class BenchmarkLanguagePolicyTests(SimpleTestCase):
         )
 
         self.assertIn("Output language: English only.", policy)
-        self.assertIn("For single-aspect questions, use 1-2 concise evidence-based sentences.", policy)
+        self.assertIn(
+            "For single-aspect questions, use 1-2 concise evidence-based sentences.",
+            policy,
+        )
         self.assertIn("start with `Yes.` or `No.`", policy)
 
     def test_build_benchmark_answer_policy_adds_what_is_definition_rule(self) -> None:
@@ -379,7 +394,9 @@ class BenchmarkLanguagePolicyTests(SimpleTestCase):
             output_language="en",
         )
 
-        self.assertIn("For 'what is' questions, answer in direct definitional form", policy)
+        self.assertIn(
+            "For 'what is' questions, answer in direct definitional form", policy
+        )
         self.assertIn("Prefer sentence shape", policy)
 
     def test_build_benchmark_answer_policy_adds_role_explanation_rule(self) -> None:
@@ -416,7 +433,9 @@ class BenchmarkLanguagePolicyTests(SimpleTestCase):
 
         self.assertIn("The risk for older people is higher", policy)
 
-    def test_build_benchmark_answer_policy_adds_multi_aspect_coverage_rule(self) -> None:
+    def test_build_benchmark_answer_policy_adds_multi_aspect_coverage_rule(
+        self,
+    ) -> None:
         service = object.__new__(ChatbotBenchmarkService)
 
         policy = ChatbotBenchmarkService._build_benchmark_answer_policy(
@@ -441,11 +460,18 @@ class BenchmarkLanguagePolicyTests(SimpleTestCase):
             output_language="en",
         )
 
-        self.assertIn("This is a multi-aspect question: cover each asked aspect", policy)
+        self.assertIn(
+            "This is a multi-aspect question: cover each asked aspect", policy
+        )
         self.assertIn("Use 2-4 sentences", policy)
         self.assertIn("Focus only on evidence relevant to sections", policy)
-        self.assertIn("When cause is asked, explicitly mention SARS-CoV-2 as the cause.", policy)
-        self.assertIn("For prevention-focused questions, include vaccination, masking, and distancing", policy)
+        self.assertIn(
+            "When cause is asked, explicitly mention SARS-CoV-2 as the cause.", policy
+        )
+        self.assertIn(
+            "For prevention-focused questions, include vaccination, masking, and distancing",
+            policy,
+        )
 
     def test_detect_benchmark_intent_includes_risk_for_older_people(self) -> None:
         service = object.__new__(ChatbotBenchmarkService)
@@ -457,7 +483,9 @@ class BenchmarkLanguagePolicyTests(SimpleTestCase):
 
         self.assertIn("risk", intent["target_sections"])
         self.assertIn("general", intent["target_sections"])
-        self.assertTrue(any(term in intent["matched_terms"] for term in ["risk", "older people"]))
+        self.assertTrue(
+            any(term in intent["matched_terms"] for term in ["risk", "older people"])
+        )
 
     def test_build_benchmark_answer_policy_includes_risk_specific_rule(self) -> None:
         service = object.__new__(ChatbotBenchmarkService)
@@ -490,9 +518,7 @@ class BenchmarkLanguagePolicyTests(SimpleTestCase):
             question="What is a cough a symptom of?",
             answer="Cough is a symptom of COVID-19.",
             retrieval_output={
-                "rerank": {
-                    "intent": {"target_sections": ["symptom", "general"]}
-                }
+                "rerank": {"intent": {"target_sections": ["symptom", "general"]}}
             },
             output_language="en",
         )
@@ -507,9 +533,7 @@ class BenchmarkLanguagePolicyTests(SimpleTestCase):
             question="What is the risk of COVID-19 for older people?",
             answer="Older people are at higher risk of becoming seriously ill from COVID-19.",
             retrieval_output={
-                "rerank": {
-                    "intent": {"target_sections": ["risk", "general"]}
-                }
+                "rerank": {"intent": {"target_sections": ["risk", "general"]}}
             },
             output_language="en",
         )
@@ -523,11 +547,7 @@ class BenchmarkLanguagePolicyTests(SimpleTestCase):
             service,
             question="What role does fever play as a symptom of COVID-19?",
             answer="Fever is listed as one of the top three most common symptoms of COVID-19.",
-            retrieval_output={
-                "rerank": {
-                    "intent": {"target_sections": ["symptom"]}
-                }
-            },
+            retrieval_output={"rerank": {"intent": {"target_sections": ["symptom"]}}},
             output_language="en",
         )
 
@@ -543,13 +563,17 @@ class BenchmarkLanguagePolicyTests(SimpleTestCase):
                 "what is the name of the virus that causes it, the sars-cov-2?"
             ),
             answer="COVID-19 is caused by the SARS-CoV-2 virus.",
-            retrieval_output={"rerank": {"intent": {"target_sections": ["aetiologies"]}}},
+            retrieval_output={
+                "rerank": {"intent": {"target_sections": ["aetiologies"]}}
+            },
             output_language="en",
         )
 
         self.assertEqual(shaped, "The main cause of COVID-19 is the SARS-CoV-2 virus.")
 
-    def test_enforce_benchmark_output_language_rewrites_vietnamese_to_english(self) -> None:
+    def test_enforce_benchmark_output_language_rewrites_vietnamese_to_english(
+        self,
+    ) -> None:
         service = object.__new__(ChatbotBenchmarkService)
         service.llm = MagicMock(
             invoke=MagicMock(

@@ -23,8 +23,8 @@ import itertools
 import logging
 import numbers
 import re
-from collections.abc import Mapping, Sequence
 import sys
+from collections.abc import Mapping, Sequence
 from typing import Any, Literal
 
 from typing_extensions import override
@@ -164,9 +164,8 @@ class SQLDebugSanitizerFilter(logging.Filter):
             return f"<base64 image payload len={len(text)}>"
 
         compact = text.strip()
-        if (
-            len(compact) >= self.BASE64_LENGTH_THRESHOLD
-            and self._BASE64_RE.fullmatch(compact)
+        if len(compact) >= self.BASE64_LENGTH_THRESHOLD and self._BASE64_RE.fullmatch(
+            compact
         ):
             return f"<base64 payload len={len(text)}>"
 

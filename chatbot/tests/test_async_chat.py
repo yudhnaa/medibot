@@ -1,9 +1,10 @@
-import json
 import uuid
-from unittest.mock import MagicMock, patch, AsyncMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from django.test import RequestFactory, SimpleTestCase
+
 from rest_framework.request import Request as DRFRequest
+
 from chatbot.views.chat_views import ChatView
 
 

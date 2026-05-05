@@ -4,11 +4,13 @@ Detects issues: missing embeddings, duplicates, dimension mismatches, stale docu
 """
 
 import logging
-from typing import Any
-import numpy as np
-from django.db.models import Q, Count
-from django.utils import timezone
 from datetime import timedelta
+from typing import Any
+
+from django.db.models import Count, Q
+from django.utils import timezone
+
+import numpy as np
 
 from chatbot.models import MedicalDocument
 

@@ -2,8 +2,9 @@
 Tests for Vision app models.
 """
 
-from django.test import TestCase
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.test import TestCase
+
 from authentication.models import Customer
 from vision.models import XRayAnalysis, XRayEmbedding
 

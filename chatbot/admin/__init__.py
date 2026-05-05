@@ -3,28 +3,28 @@ Django admin configuration for chatbot app.
 Registers models and configures admin interfaces.
 """
 
+import os
 from typing import Any, cast
 
 from django.contrib import admin, messages
 from django.http import HttpRequest
 from django.shortcuts import redirect, render
 from django.urls import path
-import os
 
+from chatbot.admin.document_admin import (
+    EmbeddingAuditLogAdmin,
+    EmbeddingJobAdmin,
+    MedicalDocumentAdmin,
+)
+from chatbot.forms import ArticleUrlEmbedForm, CsvUploadForm
 from chatbot.models import (
     ChatbotConfig,
     ChatMessage,
     ChatSession,
+    EmbeddingAuditLog,
+    EmbeddingJob,
     MedicalDocument,
     UserPreference,
-    EmbeddingJob,
-    EmbeddingAuditLog,
-)
-from chatbot.forms import ArticleUrlEmbedForm, CsvUploadForm
-from chatbot.admin.document_admin import (
-    MedicalDocumentAdmin,
-    EmbeddingJobAdmin,
-    EmbeddingAuditLogAdmin,
 )
 
 

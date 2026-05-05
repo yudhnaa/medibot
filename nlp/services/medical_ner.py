@@ -231,7 +231,9 @@ class MedicalNER:
             predicted_labels = torch.argmax(predictions, dim=-1)[0]
             confidence_scores = torch.max(predictions, dim=-1)[0][0]
 
-        tokens = self.tokenizer.convert_ids_to_tokens(inputs["input_ids"][0])  # pyright: ignore[reportIndexIssue]
+        tokens = self.tokenizer.convert_ids_to_tokens(
+            inputs["input_ids"][0]
+        )  # pyright: ignore[reportIndexIssue]
         special_tokens = set(self.tokenizer.all_special_tokens)
         entities: list[dict[str, Any]] = []
         current_entity: dict[str, Any] | None = None

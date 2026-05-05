@@ -3,9 +3,9 @@ from typing import List, Tuple
 
 import torch
 import torchvision.transforms as T
-from torch.utils.data import DataLoader, Subset
 import torchxrayvision as xrv
 from sklearn.model_selection import train_test_split
+from torch.utils.data import DataLoader, Subset
 
 from vision.datasets.kaggle_loader import KaggleCovidDataset
 

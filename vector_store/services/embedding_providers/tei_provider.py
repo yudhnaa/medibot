@@ -4,9 +4,9 @@ TEI Embedding Provider
 
 import logging
 import os
-from typing_extensions import override
 
 import requests
+from typing_extensions import override
 
 from vector_store.services.constants import (
     TEI_EMBEDDING_ENDPOINT_SUFFIX,
