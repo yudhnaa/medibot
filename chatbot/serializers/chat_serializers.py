@@ -6,6 +6,7 @@ DRF serializers for chat API endpoints.
 from rest_framework import serializers
 
 from chatbot.models import ChatMessage, ChatSession
+from chatbot.serializers.user_intake_serializer import UserIntakeSerializer
 
 
 class ChatSessionSerializer(serializers.ModelSerializer):
@@ -41,6 +42,7 @@ class ChatSessionCreateSerializer(serializers.ModelSerializer):
     """Serializer for creating a chat session."""
 
     message_count = serializers.SerializerMethodField()
+    intake = UserIntakeSerializer(required=False, write_only=True)
 
     class Meta:
         model = ChatSession
@@ -49,6 +51,7 @@ class ChatSessionCreateSerializer(serializers.ModelSerializer):
             "session_id",
             "title",
             "max_messages",
+            "intake",
             "is_active",
             "created_at",
             "updated_at",

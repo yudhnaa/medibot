@@ -42,6 +42,9 @@ from chatbot.services.constants import (
     DEFAULT_RAG_TITLE_TOP_M,
     DEFAULT_SECTION_ITEMS_LIMIT,
     DEFAULT_SINGLE_DISEASE_DOCS_K,
+    FALLBACK_GREETING_TERMS,
+    FALLBACK_INTAKE_TERMS,
+    FALLBACK_NON_MEDICAL_TERMS,
     GENERIC_SYMPTOM_TERMS,
     HEADER_EVIDENCE_BLOCK,
     HEADER_FAQ_MATCH,
@@ -55,17 +58,32 @@ from chatbot.services.constants import (
     HEADER_XRAY_FINDINGS,
     HEADER_XRAY_PREDICTION,
     HEADER_XRAY_PROBABILITIES,
+    INTAKE_LINE_SPECS,
+    INTENT_GREETING,
+    INTENT_INTAKE_QUERY,
+    INTENT_MEDICAL_QUERY,
+    INTENT_NON_MEDICAL,
     MSG_ANALYSIS_ERROR,
     MSG_CONTEXT_HINT_MULTI,
     MSG_CONTEXT_HINT_SINGLE,
+    MSG_GREETING_RESPONSE,
+    MSG_INTAKE_RESPONSE_PREFIX,
     MSG_NO_DOCS_FOR_TITLE,
+    MSG_NO_INTAKE_CONTEXT,
+    MSG_NON_MEDICAL_RESPONSE,
     MSG_PROCESSING_ERROR,
     MSG_STREAMING_ERROR,
     MSG_XRAY_INSTRUCTION,
     QUERY_ANALYZER_PROMPT,
+    RESPONSE_MODE_GREETING,
+    RESPONSE_MODE_INTAKE,
+    RESPONSE_MODE_MEDICAL,
+    RESPONSE_MODE_NON_MEDICAL,
+    RESPONSE_ROUTES,
     SECTION_HEADERS,
     SECTION_ORDER,
     SYNONYM_MAP,
+    VALID_PATIENT_SEX_VALUES,
     XRAY_RESPIRATORY_DOMAIN_CONTEXT_VI,
 )
 from chatbot.services.gemini_manager import get_gemini_manager
@@ -245,55 +263,62 @@ class ChatbotService:
                 analysis = cast(dict[str, Any], analysis_input)
             else:
                 analysis = await sync_to_async(self._analyze_query)(question)
-            q_cleaned = cast(str, analysis.get("q_cleaned", question))
-            gate = await sync_to_async(self._gate_with_index_c)(q_cleaned)
-            await sync_to_async(self._log_stage2_gate)(
-                question=question,
-                q_cleaned=q_cleaned,
-                gate=gate,
-            )
-
-            if gate.get("go_single") and gate.get("title"):
-                title = str(gate.get("title", ""))
-                evidence_docs = await sync_to_async(self._fetch_docs_for_title)(
-                    title, index="B", k=DEFAULT_SINGLE_DISEASE_DOCS_K
-                )
-                summaries = await sync_to_async(self._fetch_summary_docs_for_titles)(
-                    [title], cast(str, analysis.get("q_cleaned", ""))
-                )
-                context = self._build_single_disease_context_with_summary(
-                    title=title,
-                    docs=evidence_docs,
-                    summaries=summaries,
-                )
-
-                self._last_docs_cache = evidence_docs[:DEFAULT_DOCS_CACHE_SIZE]
-                self._last_audit = {
-                    "audit_id": audit_id,
-                    "ts": time.time(),
-                    "mode": "single-disease",
-                    "title": title,
-                    "router_score": gate.get("top_score", 0.0),
-                    "doc_count": len(evidence_docs),
-                }
+            should_retrieve = bool(analysis.get("should_retrieve", True))
+            if not should_retrieve:
+                self._last_docs_cache = []
+                self._last_audit = {}
+                context = self._build_non_retrieval_context(analysis)
             else:
-                tier_result = await sync_to_async(self._multi_disease_retrieval)(
-                    analysis
+                q_cleaned = cast(str, analysis.get("q_cleaned", question))
+                gate = await sync_to_async(self._gate_with_index_c)(q_cleaned)
+                await sync_to_async(self._log_stage2_gate)(
+                    question=question,
+                    q_cleaned=q_cleaned,
+                    gate=gate,
                 )
-                context = self._build_multi_disease_context(
-                    question, analysis, tier_result
-                )
-                self._last_docs_cache = cast(
-                    list[Document], tier_result.get("evidence_docs", [])
-                )[:DEFAULT_DOCS_CACHE_SIZE]
-                self._last_audit = {
-                    "audit_id": audit_id,
-                    "ts": time.time(),
-                    "mode": "multi-disease-v2",
-                    "candidates": [
-                        c.get("title") for c in tier_result.get("candidates", [])[:5]
-                    ],
-                }
+
+                if gate.get("go_single") and gate.get("title"):
+                    title = str(gate.get("title", ""))
+                    evidence_docs = await sync_to_async(self._fetch_docs_for_title)(
+                        title, index="B", k=DEFAULT_SINGLE_DISEASE_DOCS_K
+                    )
+                    summaries = await sync_to_async(
+                        self._fetch_summary_docs_for_titles
+                    )([title], cast(str, analysis.get("q_cleaned", "")))
+                    context = self._build_single_disease_context_with_summary(
+                        title=title,
+                        docs=evidence_docs,
+                        summaries=summaries,
+                    )
+
+                    self._last_docs_cache = evidence_docs[:DEFAULT_DOCS_CACHE_SIZE]
+                    self._last_audit = {
+                        "audit_id": audit_id,
+                        "ts": time.time(),
+                        "mode": "single-disease",
+                        "title": title,
+                        "router_score": gate.get("top_score", 0.0),
+                        "doc_count": len(evidence_docs),
+                    }
+                else:
+                    tier_result = await sync_to_async(self._multi_disease_retrieval)(
+                        analysis
+                    )
+                    context = self._build_multi_disease_context(
+                        question, analysis, tier_result
+                    )
+                    self._last_docs_cache = cast(
+                        list[Document], tier_result.get("evidence_docs", [])
+                    )[:DEFAULT_DOCS_CACHE_SIZE]
+                    self._last_audit = {
+                        "audit_id": audit_id,
+                        "ts": time.time(),
+                        "mode": "multi-disease-v2",
+                        "candidates": [
+                            c.get("title")
+                            for c in tier_result.get("candidates", [])[:5]
+                        ],
+                    }
 
             self._last_query_text = question
 
@@ -337,18 +362,21 @@ class ChatbotService:
             analysis = self._analyze_query(question)
             self._apply_analysis_to_intake(question, analysis=analysis)
 
-            # Get chat history
-            chat_history = self._get_chat_history()
-
-            # Run chain
-            response = self._chain.invoke(
-                {
-                    "question": question,
-                    "chat_history": chat_history,
-                    "analysis": analysis,
-                }
-            )
-            response_text = str(response)
+            direct_response = self._get_non_retrieval_response(analysis)
+            if direct_response is not None:
+                response_text = direct_response
+                self._last_docs_cache = []
+                self._last_audit = {}
+            else:
+                chat_history = self._get_chat_history()
+                response = self._chain.invoke(
+                    {
+                        "question": question,
+                        "chat_history": chat_history,
+                        "analysis": analysis,
+                    }
+                )
+                response_text = str(response)
             source_urls = self.get_last_source_urls()
 
             response_time_ms = int((time.time() - start_time) * 1000)
@@ -357,6 +385,9 @@ class ChatbotService:
             assistant_metadata: dict[str, Any] = {
                 "audit_id": self._last_audit.get("audit_id"),
                 "mode": self._last_audit.get("mode"),
+                "intent": analysis.get("intent"),
+                "response_mode": analysis.get("response_mode"),
+                "should_retrieve": analysis.get("should_retrieve"),
             }
             if source_urls:
                 assistant_metadata["source_urls"] = source_urls
@@ -399,26 +430,34 @@ class ChatbotService:
                 question, analysis=analysis
             )
 
-            # Get chat history
-            chat_history = await sync_to_async(self._get_chat_history)()
-
-            # Run chain
-            response = await self._chain.ainvoke(
-                {
-                    "question": question,
-                    "chat_history": chat_history,
-                    "xray_analysis_id": xray_analysis_id,
-                    "xray_context": xray_payload["context"],
-                    "analysis": analysis,
-                }
+            direct_response = await sync_to_async(self._get_non_retrieval_response)(
+                analysis
             )
-            response_text = str(response)
+            if direct_response is not None:
+                response_text = direct_response
+                self._last_docs_cache = []
+                self._last_audit = {}
+            else:
+                chat_history = await sync_to_async(self._get_chat_history)()
+                response = await self._chain.ainvoke(
+                    {
+                        "question": question,
+                        "chat_history": chat_history,
+                        "xray_analysis_id": xray_analysis_id,
+                        "xray_context": xray_payload["context"],
+                        "analysis": analysis,
+                    }
+                )
+                response_text = str(response)
             source_urls = self.get_last_source_urls()
 
             response_time_ms = int((time.time() - start_time) * 1000)
             assistant_metadata = {
                 "audit_id": self._last_audit.get("audit_id"),
                 "mode": self._last_audit.get("mode"),
+                "intent": analysis.get("intent"),
+                "response_mode": analysis.get("response_mode"),
+                "should_retrieve": analysis.get("should_retrieve"),
             }
             if xray_payload["serialized"] is not None:
                 assistant_metadata["xray_analysis"] = xray_payload["serialized"]
@@ -460,30 +499,38 @@ class ChatbotService:
         analysis = self._analyze_query(question)
         self._apply_analysis_to_intake(question, analysis=analysis)
 
-        # Get history
-        chat_history = self._get_chat_history()
-
         start_time = time.time()
         full_response = ""
 
         try:
-            for chunk in self._streaming_chain.stream(
-                {
-                    "question": question,
-                    "chat_history": chat_history,
-                    "analysis": analysis,
-                }
-            ):
-                # StrOutputParser always returns str
-                full_response += chunk
-                yield chunk
+            direct_response = self._get_non_retrieval_response(analysis)
+            if direct_response is not None:
+                full_response = direct_response
+                self._last_docs_cache = []
+                self._last_audit = {}
+                yield direct_response
+            else:
+                chat_history = self._get_chat_history()
+                for chunk in self._streaming_chain.stream(
+                    {
+                        "question": question,
+                        "chat_history": chat_history,
+                        "analysis": analysis,
+                    }
+                ):
+                    full_response += chunk
+                    yield chunk
 
             response_with_sources = full_response
             source_urls = self.get_last_source_urls()
 
             # Save complete response
             response_time_ms = int((time.time() - start_time) * 1000)
-            assistant_metadata: dict[str, Any] = {}
+            assistant_metadata: dict[str, Any] = {
+                "intent": analysis.get("intent"),
+                "response_mode": analysis.get("response_mode"),
+                "should_retrieve": analysis.get("should_retrieve"),
+            }
             if source_urls:
                 assistant_metadata["source_urls"] = source_urls
             self._save_message(
@@ -526,25 +573,31 @@ class ChatbotService:
         analysis = await sync_to_async(self._analyze_query)(question)
         await sync_to_async(self._apply_analysis_to_intake)(question, analysis=analysis)
 
-        # Get history (DB op -> async)
-        chat_history = await sync_to_async(self._get_chat_history)()
-
         start_time = time.time()
         full_response = ""
 
         try:
-            async for chunk in self._streaming_chain.astream(
-                {
-                    "question": question,
-                    "chat_history": chat_history,
-                    "xray_analysis_id": xray_analysis_id,
-                    "xray_context": xray_payload["context"],
-                    "analysis": analysis,
-                }
-            ):
-                # StrOutputParser always returns str
-                full_response += chunk
-                yield chunk
+            direct_response = await sync_to_async(self._get_non_retrieval_response)(
+                analysis
+            )
+            if direct_response is not None:
+                full_response = direct_response
+                self._last_docs_cache = []
+                self._last_audit = {}
+                yield direct_response
+            else:
+                chat_history = await sync_to_async(self._get_chat_history)()
+                async for chunk in self._streaming_chain.astream(
+                    {
+                        "question": question,
+                        "chat_history": chat_history,
+                        "xray_analysis_id": xray_analysis_id,
+                        "xray_context": xray_payload["context"],
+                        "analysis": analysis,
+                    }
+                ):
+                    full_response += chunk
+                    yield chunk
 
             response_with_sources = full_response
             source_urls = self.get_last_source_urls()
@@ -553,6 +606,9 @@ class ChatbotService:
             assistant_metadata = {
                 "audit_id": self._last_audit.get("audit_id"),
                 "mode": self._last_audit.get("mode"),
+                "intent": analysis.get("intent"),
+                "response_mode": analysis.get("response_mode"),
+                "should_retrieve": analysis.get("should_retrieve"),
             }
             if xray_payload["serialized"] is not None:
                 assistant_metadata["xray_analysis"] = xray_payload["serialized"]
@@ -652,6 +708,68 @@ class ChatbotService:
     # ---------------------------
     # RAG Helper Methods
     # ---------------------------
+
+    def _classify_response_mode(self, question: str) -> dict[str, Any]:
+        text = re.sub(r"\s+", " ", str(question or "").strip().lower())
+        if text in FALLBACK_GREETING_TERMS:
+            return self._response_route(INTENT_GREETING)
+        if any(term in text for term in FALLBACK_INTAKE_TERMS):
+            return self._response_route(INTENT_INTAKE_QUERY)
+        if any(term in text for term in FALLBACK_NON_MEDICAL_TERMS):
+            return self._response_route(INTENT_NON_MEDICAL)
+        return self._response_route(INTENT_MEDICAL_QUERY)
+
+    def _response_route(self, intent: str) -> dict[str, Any]:
+        return {
+            "intent": intent,
+            "response_mode": RESPONSE_ROUTES[intent],
+            "should_retrieve": intent == INTENT_MEDICAL_QUERY,
+        }
+
+    def _add_response_route(
+        self,
+        analysis_result: dict[str, Any],
+        question: str,
+    ) -> dict[str, Any]:
+        route = self._analyzer_response_route(analysis_result)
+        if route is None:
+            route = self._fallback_response_route(analysis_result, question)
+        analysis_result.update(route)
+        return analysis_result
+
+    def _analyzer_response_route(
+        self,
+        analysis_result: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        intent = str(analysis_result.get("intent") or "").strip()
+        response_mode = str(analysis_result.get("response_mode") or "").strip()
+        should_retrieve = analysis_result.get("should_retrieve")
+        if (
+            intent not in RESPONSE_ROUTES
+            or response_mode != RESPONSE_ROUTES[intent]
+            or not isinstance(should_retrieve, bool)
+        ):
+            return None
+        return {
+            "intent": intent,
+            "response_mode": response_mode,
+            "should_retrieve": should_retrieve,
+        }
+
+    def _fallback_response_route(
+        self,
+        analysis_result: dict[str, Any],
+        question: str,
+    ) -> dict[str, Any]:
+        route = self._classify_response_mode(question)
+        has_medical_signal = bool(
+            analysis_result.get("disease_mentions")
+            or (analysis_result.get("positives", {}) or {}).get("SYMPTOM")
+            or (analysis_result.get("negatives", {}) or {}).get("SYMPTOM")
+        )
+        if has_medical_signal and route["intent"] != INTENT_INTAKE_QUERY:
+            return self._response_route(INTENT_MEDICAL_QUERY)
+        return route
 
     def _analyze_query(self, question: str) -> dict[str, Any]:
         """Analyze query via LLM JSON extraction with safe fallback."""
@@ -754,7 +872,11 @@ class ChatbotService:
                 "patient_state_extract": patient_state_extract,
                 "q_cleaned": q_cleaned,
                 "q_symptom": q_symptom,
+                "intent": payload.get("intent"),
+                "response_mode": payload.get("response_mode"),
+                "should_retrieve": payload.get("should_retrieve"),
             }
+            analysis_result = self._add_response_route(analysis_result, question)
             self._log_stage1_preprocess(
                 question=question,
                 raw_payload_text=raw_payload_text,
@@ -842,22 +964,25 @@ class ChatbotService:
             if not q_symptom:
                 q_symptom = q_cleaned or text
 
-            return {
-                "original": question,
-                "processed_text": text,
-                "positives": {
-                    "SYMPTOM": symptom_positive,
-                    "ETIOLOGY": etiology_terms,
-                    "RISK": risk_terms,
+            return self._add_response_route(
+                {
+                    "original": question,
+                    "processed_text": text,
+                    "positives": {
+                        "SYMPTOM": symptom_positive,
+                        "ETIOLOGY": etiology_terms,
+                        "RISK": risk_terms,
+                    },
+                    "negatives": {"SYMPTOM": symptom_negative},
+                    "has_negation": bool(symptom_negative),
+                    "entities_by_type": {},
+                    "disease_mentions": disease_mentions,
+                    "patient_state_extract": {},
+                    "q_cleaned": q_cleaned or text,
+                    "q_symptom": q_symptom or text,
                 },
-                "negatives": {"SYMPTOM": symptom_negative},
-                "has_negation": bool(symptom_negative),
-                "entities_by_type": {},
-                "disease_mentions": disease_mentions,
-                "patient_state_extract": {},
-                "q_cleaned": q_cleaned or text,
-                "q_symptom": q_symptom or text,
-            }
+                question,
+            )
         except Exception as exc:
             logger.warning("NER fallback failed: %s, using heuristic", exc)
             return self._fallback_query_analysis_heuristic(question)
@@ -888,18 +1013,21 @@ class ChatbotService:
                 if str(item).strip()
             )
         )
-        return {
-            "original": question,
-            "processed_text": text,
-            "positives": {"SYMPTOM": [], "ETIOLOGY": [], "RISK": []},
-            "negatives": {"SYMPTOM": neg_candidates},
-            "has_negation": bool(neg_candidates),
-            "entities_by_type": {},
-            "disease_mentions": [],
-            "patient_state_extract": {},
-            "q_cleaned": q_cleaned or text,
-            "q_symptom": q_symptom or text,
-        }
+        return self._add_response_route(
+            {
+                "original": question,
+                "processed_text": text,
+                "positives": {"SYMPTOM": [], "ETIOLOGY": [], "RISK": []},
+                "negatives": {"SYMPTOM": neg_candidates},
+                "has_negation": bool(neg_candidates),
+                "entities_by_type": {},
+                "disease_mentions": [],
+                "patient_state_extract": {},
+                "q_cleaned": q_cleaned or text,
+                "q_symptom": q_symptom or text,
+            },
+            question,
+        )
 
     def _log_stage1_preprocess(
         self,
@@ -945,6 +1073,9 @@ class ChatbotService:
             ),
             "disease_mentions": analysis_result.get("disease_mentions", []),
             "patient_state_extract": analysis_result.get("patient_state_extract", {}),
+            "intent": analysis_result.get("intent", ""),
+            "response_mode": analysis_result.get("response_mode", ""),
+            "should_retrieve": analysis_result.get("should_retrieve", ""),
         }
 
         logger.info(
@@ -1719,7 +1850,7 @@ class ChatbotService:
 
     def _apply_patient_sex(self, extracted_sex: Any) -> bool:
         sex = str(extracted_sex or "").strip().lower()
-        if sex not in {"male", "female", "unknown"}:
+        if sex not in VALID_PATIENT_SEX_VALUES:
             return False
         if self._user_intake_db.sex == sex:
             return False
@@ -1730,23 +1861,49 @@ class ChatbotService:
         """Get intake context string for LLM from database."""
         # Refresh to get latest data
         self._user_intake_db.refresh_from_db()
-        intake = self._user_intake_db
-        info: list[str] = []
+        info = self._format_intake_lines(self._user_intake_db)
+        if info:
+            return HEADER_PATIENT_INFO + "\n".join(info)
+        return ""
 
-        if intake.disease_name:
-            info.append(f"Bệnh: {intake.disease_name}")
-        if intake.symptoms:
-            info.append(f"Triệu chứng (+): {', '.join(intake.symptoms)}")
-        if intake.symptoms_negated:
-            info.append(f"Triệu chứng (-): {', '.join(intake.symptoms_negated)}")
+    def _format_intake_lines(self, intake: UserIntake) -> list[str]:
+        info = [
+            self._format_intake_line(getattr(intake, field_name), label)
+            for field_name, label in INTAKE_LINE_SPECS
+        ]
         if intake.age is not None:
             info.append(f"Tuổi: {intake.age}")
         if intake.sex and intake.sex != "unknown":
             info.append(f"Giới tính: {intake.sex}")
+        return [line for line in info if line]
 
-        if info:
-            return HEADER_PATIENT_INFO + "\n".join(info)
+    def _format_intake_line(self, value: Any, label: str) -> str:
+        if isinstance(value, list):
+            rendered = ", ".join(str(item) for item in value if str(item).strip())
+        else:
+            rendered = str(value or "").strip()
+        if not rendered:
+            return ""
+        return f"{label}: {rendered}"
+
+    def _build_non_retrieval_context(self, analysis: dict[str, Any]) -> str:
+        response_mode = str(analysis.get("response_mode", ""))
+        if response_mode == RESPONSE_MODE_INTAKE:
+            return self._get_intake_context()
         return ""
+
+    def _get_non_retrieval_response(self, analysis: dict[str, Any]) -> str | None:
+        response_mode = str(analysis.get("response_mode", RESPONSE_MODE_MEDICAL))
+        if response_mode == RESPONSE_MODE_GREETING:
+            return MSG_GREETING_RESPONSE
+        if response_mode == RESPONSE_MODE_NON_MEDICAL:
+            return MSG_NON_MEDICAL_RESPONSE
+        if response_mode == RESPONSE_MODE_INTAKE:
+            intake_context = self._get_intake_context().strip()
+            if not intake_context:
+                return MSG_NO_INTAKE_CONTEXT
+            return MSG_INTAKE_RESPONSE_PREFIX + intake_context
+        return None
 
     def update_intake(self, **kwargs: Any) -> UserIntake:
         """Update user intake fields and save to database."""

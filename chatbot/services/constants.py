@@ -48,7 +48,10 @@ Return ONLY valid JSON with these keys:
     "sex": null
   }},
   "q_cleaned": "query without negated entities",
-  "q_symptom": "symptom-centric query with positive symptoms + disease mentions + patient state"
+  "q_symptom": "symptom-centric query with positive symptoms + disease mentions + patient state",
+  "intent": "greeting|intake_query|medical_query|non_medical",
+  "response_mode": "greeting|intake|medical|non_medical",
+  "should_retrieve": true
 }}
 
 Rules:
@@ -61,6 +64,13 @@ Rules:
   "triệu chứng", "dấu hiệu", "biểu hiện", "tình trạng", "vấn đề sức khỏe".
 - If user asks about symptoms in general but does not provide concrete symptoms,
   return symptom_positive=[] and symptom_negative=[].
+- Set intent/response_mode/should_retrieve for routing:
+  * greeting: greetings/thanks/small talk, response_mode="greeting", should_retrieve=false.
+  * intake_query: user asks what saved intake/profile/basic information you know about them, including age, sex, symptoms, disease, pregnancy, onset, meds, allergies, or chronic conditions; response_mode="intake", should_retrieve=false.
+  * medical_query: user asks for medical advice, diagnosis, disease/symptom explanation, treatment, prevention, or triage; response_mode="medical", should_retrieve=true.
+  * non_medical: unrelated topics like weather, sports, finance, travel, or politics; response_mode="non_medical", should_retrieve=false.
+- Any question asking you to recall/know/report the user's saved personal or intake data is intake_query, even if worded indirectly. These are intake_query, not medical_query: "tôi bao nhiêu tuổi?", "có thể là tôi bao nhiêu tuổi?", "bạn biết tôi bao nhiêu tuổi không?", "bạn có nhận được các thông tin cơ bản của tôi không?", "bạn có nắm các thông tin cơ bản về tôi không?", "triệu chứng của tôi là gì?", "tôi đã cung cấp thông tin gì?".
+- For intake_query, do not turn known patient symptoms into symptom_positive unless the user states new symptoms in the current question.
 - If unknown, return empty arrays and null scalar values.
 - No markdown.
 
@@ -87,6 +97,86 @@ GENERIC_SYMPTOM_TERMS = {
     "sức khỏe",
     "suc khoe",
 }
+
+# Query routing constants
+INTENT_GREETING = "greeting"
+INTENT_INTAKE_QUERY = "intake_query"
+INTENT_MEDICAL_QUERY = "medical_query"
+INTENT_NON_MEDICAL = "non_medical"
+
+RESPONSE_MODE_GREETING = "greeting"
+RESPONSE_MODE_INTAKE = "intake"
+RESPONSE_MODE_MEDICAL = "medical"
+RESPONSE_MODE_NON_MEDICAL = "non_medical"
+
+RESPONSE_ROUTES = {
+    INTENT_GREETING: RESPONSE_MODE_GREETING,
+    INTENT_INTAKE_QUERY: RESPONSE_MODE_INTAKE,
+    INTENT_MEDICAL_QUERY: RESPONSE_MODE_MEDICAL,
+    INTENT_NON_MEDICAL: RESPONSE_MODE_NON_MEDICAL,
+}
+
+FALLBACK_GREETING_TERMS = {
+    "hi",
+    "hello",
+    "hey",
+    "xin chào",
+    "chào",
+    "chao",
+    "cảm ơn",
+    "cam on",
+    "thanks",
+    "thank you",
+}
+
+FALLBACK_INTAKE_TERMS = {
+    "intake",
+    "thông tin đã lưu",
+    "thong tin da luu",
+    "thông tin của tôi",
+    "thong tin cua toi",
+    "hồ sơ của tôi",
+    "ho so cua toi",
+    "triệu chứng của tôi",
+    "trieu chung cua toi",
+    "tuổi của tôi",
+    "tuoi cua toi",
+    "bao nhiêu tuổi",
+    "bao nhieu tuoi",
+    "bao nhiều tuổi",
+    "bao nhieu tuoi",
+    "thông tin cơ bản",
+    "thong tin co ban",
+    "thông tin cơ bản về tôi",
+    "thong tin co ban ve toi",
+    "tôi đã cung cấp gì",
+    "toi da cung cap gi",
+}
+
+FALLBACK_NON_MEDICAL_TERMS = {
+    "thời tiết",
+    "thoi tiet",
+    "bóng đá",
+    "bong da",
+    "chứng khoán",
+    "chung khoan",
+    "đổi tiền",
+    "doi tien",
+}
+
+VALID_PATIENT_SEX_VALUES = {"male", "female", "unknown"}
+
+INTAKE_LINE_SPECS = [
+    ("disease_name", "Bệnh"),
+    ("symptoms", "Triệu chứng (+)"),
+    ("symptoms_negated", "Triệu chứng (-)"),
+    ("pregnancy_status", "Tình trạng thai kỳ"),
+    ("location_country", "Quốc gia"),
+    ("chronic_conditions", "Bệnh nền"),
+    ("allergies", "Dị ứng"),
+    ("onset_days", "Số ngày khởi phát"),
+    ("meds", "Thuốc đang dùng"),
+]
 
 # Section ordering and header mappings
 SECTION_ORDER = [
@@ -165,6 +255,15 @@ MSG_CONTEXT_HINT_MULTI = (
 )
 MSG_PROCESSING_ERROR = "Xin lỗi, đã xảy ra lỗi khi xử lý câu hỏi của bạn: {error}"
 MSG_STREAMING_ERROR = "Lỗi: {error}"
+MSG_GREETING_RESPONSE = (
+    "Xin chào! Bạn có thể mô tả triệu chứng hoặc hỏi về thông tin intake đã lưu."
+)
+MSG_NON_MEDICAL_RESPONSE = (
+    "Mình chỉ hỗ trợ câu hỏi y tế và thông tin intake đã lưu. "
+    "Bạn có thể mô tả triệu chứng để mình hỗ trợ."
+)
+MSG_NO_INTAKE_CONTEXT = "Hiện chưa có thông tin intake đã lưu cho bạn."
+MSG_INTAKE_RESPONSE_PREFIX = "Thông tin intake hiện có của bạn:\n"
 
 # Context headers
 HEADER_SINGLE_DISEASE = "THÔNG TIN CHI TIẾT VỀ BỆNH: {title}"
