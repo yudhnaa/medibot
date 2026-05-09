@@ -69,27 +69,3 @@ class EmbedResponseSerializer(serializers.Serializer):
 
     status = serializers.CharField()
     count = serializers.IntegerField(help_text="Number of embeddings ingested.")
-
-
-class SimilarItemSerializer(serializers.Serializer):
-    """Single similar image result."""
-
-    image_id = serializers.CharField()
-    label = serializers.CharField()
-    metadata = serializers.DictField(allow_null=True)
-    distance = serializers.FloatField()
-
-
-class SimilarRequestSerializer(serializers.Serializer):
-    """Request for similarity search."""
-
-    embedding = serializers.ListField(
-        child=serializers.FloatField(),
-        help_text="Query embedding vector (1024-dim).",
-    )
-    k = serializers.IntegerField(
-        default=5,
-        min_value=1,
-        max_value=50,
-        help_text="Number of similar images to return.",
-    )

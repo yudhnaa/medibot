@@ -1,5 +1,5 @@
 from types import SimpleNamespace
-from typing import cast
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from django.test import SimpleTestCase
@@ -284,6 +284,127 @@ class RouterAndRetrievalTests(SimpleTestCase):
         self.assertEqual(first["title"], "bệnh sởi")
         self.assertIn("summary", first)
         self.assertTrue(first["final_score"] > 0)
+
+
+class IntakeRoutingTests(SimpleTestCase):
+    def _service_with_intake(self) -> ChatbotService:
+        service = object.__new__(ChatbotService)
+        service._user_intake_db = cast(
+            UserIntake,
+            SimpleNamespace(
+                disease_name="cúm mùa",
+                symptoms=["sốt", "ho"],
+                symptoms_negated=["khó thở"],
+                age=30,
+                sex="female",
+                pregnancy_status="no",
+                location_country="VN",
+                chronic_conditions=["hen suyễn"],
+                allergies=["penicillin"],
+                onset_days=3,
+                meds=["paracetamol"],
+                refresh_from_db=MagicMock(),
+            ),
+        )
+        setattr(service, "vector_manager", SimpleNamespace(search_similar=MagicMock()))
+        service._last_docs_cache = []
+        service._last_audit = {}
+        return service
+
+    def test_greeting_routes_without_retrieval_or_covid_context(self) -> None:
+        service = self._service_with_intake()
+
+        analysis = ChatbotService._fallback_query_analysis_heuristic(
+            service, "xin chào"
+        )
+        response = ChatbotService._get_non_retrieval_response(service, analysis)
+
+        self.assertEqual(analysis["intent"], "greeting")
+        self.assertFalse(analysis["should_retrieve"])
+        self.assertNotIn("COVID", response or "")
+        self.assertEqual(ChatbotService.get_last_source_urls(service), [])
+        vector_manager = cast(Any, service.vector_manager)
+        vector_manager.search_similar.assert_not_called()
+
+    def test_intake_query_uses_saved_user_intake_fields(self) -> None:
+        service = self._service_with_intake()
+
+        analysis = ChatbotService._fallback_query_analysis_heuristic(
+            service,
+            "Thông tin intake của tôi là gì?",
+        )
+        response = ChatbotService._get_non_retrieval_response(service, analysis)
+
+        self.assertEqual(analysis["intent"], "intake_query")
+        self.assertFalse(analysis["should_retrieve"])
+        assert response is not None
+        self.assertIn("cúm mùa", response)
+        self.assertIn("sốt, ho", response)
+        self.assertIn("Bệnh nền: hen suyễn", response)
+        self.assertIn("Dị ứng: penicillin", response)
+        self.assertIn("Số ngày khởi phát: 3", response)
+        self.assertNotIn("không có quyền truy cập", response.lower())
+        vector_manager = cast(Any, service.vector_manager)
+        vector_manager.search_similar.assert_not_called()
+
+    def test_analyzer_intake_route_overrides_saved_symptom_medical_signal(self) -> None:
+        service = self._service_with_intake()
+
+        analysis = ChatbotService._add_response_route(
+            service,
+            {
+                "intent": "intake_query",
+                "response_mode": "intake",
+                "should_retrieve": False,
+                "disease_mentions": [],
+                "positives": {"SYMPTOM": [], "ETIOLOGY": [], "RISK": []},
+                "negatives": {"SYMPTOM": []},
+            },
+            "Bạn có nắm các thông tin cơ bản về tôi không?",
+        )
+        response = ChatbotService._get_non_retrieval_response(service, analysis)
+
+        self.assertEqual(analysis["intent"], "intake_query")
+        self.assertFalse(analysis["should_retrieve"])
+        self.assertIn("Tuổi: 30", response or "")
+        self.assertEqual(ChatbotService.get_last_source_urls(service), [])
+
+    def test_vietnamese_basic_info_questions_route_to_intake_in_fallback(self) -> None:
+        service = self._service_with_intake()
+
+        for question in (
+            "Tôi bao nhiêu tuổi?",
+            "Bạn có nắm các thông tin cơ bản về tôi không?",
+            "Bạn biết tôi bao nhiều tuổi không?",
+            "Bạn biết tôi bao nhiêu tuổi không?",
+        ):
+            analysis = ChatbotService._fallback_query_analysis_heuristic(
+                service,
+                question,
+            )
+            response = ChatbotService._get_non_retrieval_response(service, analysis)
+
+            self.assertEqual(analysis["intent"], "intake_query")
+            self.assertFalse(analysis["should_retrieve"])
+            self.assertIn("Tuổi: 30", response or "")
+            self.assertEqual(ChatbotService.get_last_source_urls(service), [])
+
+    def test_medical_query_still_allows_retrieval(self) -> None:
+        service = self._service_with_intake()
+
+        analysis = ChatbotService._add_response_route(
+            service,
+            {
+                "disease_mentions": [],
+                "positives": {"SYMPTOM": ["sốt"], "ETIOLOGY": [], "RISK": []},
+                "negatives": {"SYMPTOM": []},
+            },
+            "Tôi bị sốt và ho",
+        )
+
+        self.assertEqual(analysis["intent"], "medical_query")
+        self.assertTrue(analysis["should_retrieve"])
+        self.assertIsNone(ChatbotService._get_non_retrieval_response(service, analysis))
 
 
 class BenchmarkIntakeTests(SimpleTestCase):

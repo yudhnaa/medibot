@@ -1,6 +1,6 @@
 """
 Vision Views
-DRF views for X-ray analysis, embedding ingestion, and similarity search.
+DRF views for X-ray analysis and embedding ingestion.
 """
 
 import base64
@@ -22,13 +22,9 @@ from vision.serializers import (
     AnalyzeResponseSerializer,
     EmbedRequestSerializer,
     EmbedResponseSerializer,
-    SimilarItemSerializer,
-    SimilarRequestSerializer,
 )
 from vision.services.ingest_embeddings import ingest_embeddings
-from vision.services.retrieval_pipeline import get_conn, query_similar
 from vision.services.vision_service import analyze_xray
-from vision.utils import load_config
 
 logger = logging.getLogger(__name__)
 
@@ -137,51 +133,5 @@ class EmbedView(APIView):
             logger.exception("Embedding ingestion failed")
             return Response(
                 {"error": "Embedding ingestion failed."},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
-
-
-class SimilarView(APIView):
-    """POST /api/v1/vision/similar/
-
-    Queries similar X-ray images by embedding vector.
-    Expects JSON body with 'embedding' (list of floats) and optional 'k'.
-    """
-
-    permission_classes = [permissions.IsAuthenticated]
-
-    def post(self, request: Request) -> Response:
-        serializer = SimilarRequestSerializer(data=request.data)
-        if not serializer.is_valid():
-            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-        validated = cast(dict[str, Any], serializer.validated_data)
-        embedding: list[float] = validated["embedding"]
-        k: int = validated["k"]
-
-        try:
-            cfg = load_config(settings.VISION_CONFIG_PATH)
-            conn = get_conn(cfg)
-            rows = query_similar(conn, cfg["pgvector"]["table"], embedding, k=k)
-            conn.close()
-
-            results = [
-                {
-                    "image_id": row[0],
-                    "label": row[1],
-                    "metadata": row[2],
-                    "distance": float(row[3]),
-                }
-                for row in rows
-            ]
-
-            return Response(
-                SimilarItemSerializer(results, many=True).data,
-                status=status.HTTP_200_OK,
-            )
-        except Exception:
-            logger.exception("Similarity search failed")
-            return Response(
-                {"error": "Similarity search failed."},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )

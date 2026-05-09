@@ -15,7 +15,7 @@ from django.db import transaction
 from django.db.models import QuerySet
 from django.http import StreamingHttpResponse
 
-from rest_framework import permissions, status, viewsets
+from rest_framework import permissions, serializers, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.request import Request
 from rest_framework.response import Response
@@ -24,7 +24,7 @@ from rest_framework.views import APIView
 from asgiref.sync import sync_to_async
 from typing_extensions import override
 
-from chatbot.models import ChatMessage, ChatSession
+from chatbot.models import ChatMessage, ChatSession, UserIntake
 from chatbot.serializers import (
     ChatInputSerializer,
     ChatMessageSerializer,
@@ -34,6 +34,7 @@ from chatbot.serializers import (
     RetrievedDocSerializer,
     UserIntakeInputSerializer,
     UserIntakeOutputSerializer,
+    UserIntakeSerializer,
 )
 from chatbot.services.chatbot_service import ChatbotService
 from vision.models import XRayAnalysis
@@ -66,15 +67,24 @@ class ChatSessionViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer: ChatSessionCreateSerializer) -> None:
         """Create a new session, deactivating any existing active sessions."""
         user = self.request.user
+        validated_data = cast(dict[str, Any], serializer.validated_data)
+        intake_data = validated_data.pop("intake", None)
 
         with transaction.atomic():
-            # Deactivate all current active sessions for this user
+            if intake_data is not None:
+                self._save_session_intake(user, intake_data)
+
             ChatSession.objects.filter(customer_id=user.pk, is_active=True).update(
                 is_active=False
             )
-
-            # Create new active session
             serializer.save(customer_id=user.pk, is_active=True)
+
+    def _save_session_intake(self, user: Any, intake_data: dict[str, Any]) -> None:
+        intake, _ = UserIntake.objects.get_or_create(customer=user)
+        serializer = UserIntakeSerializer(intake, data=intake_data, partial=True)
+        if not serializer.is_valid():
+            raise serializers.ValidationError({"intake": serializer.errors})
+        serializer.save()
 
     @action(detail=True, methods=["get"])
     def messages(
