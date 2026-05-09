@@ -1,228 +1,190 @@
-# python-django-api-template
+# MediBot Django Backend
 
-## Overview
-The python-django-api-template serves as the boilerplate for constructing a Django project. :goat: :goat: :goat:
-## Requirements
-- Python 3.12.6
-- Django 5.1.1
-- Django REST Framework
+Django REST backend for MediBot, a medical assistant platform with cookie-based JWT authentication, intake-aware chatbot sessions, retrieval-augmented generation, vector search, and chest X-ray vision analysis.
 
-## Install and run locally from a virtual environment
-After cloning the repository, you'll want to create a virtual environment to ensure a clean Python installation.
+## Skills & Badges
 
-You can achieve this by executing the following command.
-```sh
+<p align="center">
+    <img src="https://go-skill-icons.vercel.app/api/icons?i=python,django,postgres,redis,docker,githubactions,git" alt="Skills" />
+</p>
+
+<p align="center">
+    <a href="https://www.djangoproject.com/">
+        <img src="https://img.shields.io/badge/Django-6.0.1-092E20.svg" alt="Django">
+    </a>
+    <a href="https://www.django-rest-framework.org/">
+        <img src="https://img.shields.io/badge/DRF-3.16.1-red.svg" alt="Django REST Framework">
+    </a>
+    <a href="https://github.com/pgvector/pgvector">
+        <img src="https://img.shields.io/badge/PostgreSQL-pgvector-blue.svg" alt="PostgreSQL pgvector">
+    </a>
+    <a href="https://docs.celeryq.dev/">
+        <img src="https://img.shields.io/badge/Celery-5.6.2-green.svg" alt="Celery">
+    </a>
+    <a href="https://www.docker.com/">
+        <img src="https://img.shields.io/badge/platform-Docker%20%7C%20macOS%20%7C%20Linux-blue" alt="Platform">
+    </a>
+</p>
+
+## Features
+
+- Cookie-based JWT authentication with access and refresh token endpoints
+- Intake-aware chatbot sessions with Server-Sent Events streaming at `/api/v1/chatbot/chat/`
+- Retrieval-augmented generation using LangChain, LangGraph, Google Gemini, OpenRouter, and pgvector-backed storage
+- Vector-store APIs for embedding and medical document retrieval workflows
+- Chest X-ray vision module for image analysis, embedding, and similarity search
+- Vietnamese medical NLP services for NER, negation handling, and text normalization
+- Celery worker, beat scheduler, Redis broker, and Flower monitoring support
+- Swagger and Redoc API documentation generated with drf-yasg
+- Docker Compose profiles for local development, staging, and production deployment
+- Offline RAG benchmark tooling with RAGAS datasets and evaluation commands
+
+## Acknowledgements
+
+- [Django](https://www.djangoproject.com/) and [Django REST Framework](https://www.django-rest-framework.org/) for the API foundation
+- [LangChain](https://www.langchain.com/), [LangGraph](https://www.langchain.com/langgraph), and [Google Gemini](https://ai.google.dev/) for chatbot orchestration
+- [pgvector](https://github.com/pgvector/pgvector) for vector search in PostgreSQL
+- [Celery](https://docs.celeryq.dev/) and [Redis](https://redis.io/) for background processing
+- [torchxrayvision](https://github.com/mlmed/torchxrayvision) for X-ray model support
+
+## Installation
+
+Clone the repository, create a virtual environment, install dependencies, and copy environment defaults.
+
+```bash
 python -m venv env
-```
-
-After this, it is necessary to activate the virtual environment, you can get more information about this [here](https://docs.python.org/3/tutorial/venv.html)
-
-You can install all the required dependencies by running
-```sh
+source env/bin/activate
 pip install -r requirements/dev.txt
+cp .env.example .env
 ```
 
-Install Git hooks so formatting and lint checks run before every commit:
+Update `.env` with local secrets and API keys:
 
-```sh
-pre-commit install
+```bash
+SECRET_KEY=your-secret-key-here
+GOOGLE_API_KEY=your-google-api-key
+OPENROUTER_API_KEY=your-openrouter-key
+DB_DEV_NAME=medibot
+DB_DEV_USER=postgres
+DB_DEV_PASSWORD=postgres
+DB_DEV_HOST=localhost
+DB_DEV_PORT=5432
 ```
 
-Run the hooks manually against the full repo:
+Run migrations and start local server:
 
-```sh
-pre-commit run --all-files
-```
-
-## Start and Use
-Run migration
-```sh
+```bash
 python manage.py makemigrations
 python manage.py migrate
-```
-
-Run server.
-```sh
 python manage.py runserver
 ```
 
-Run redis server.
-```sh
+Start background services when chatbot or scheduled jobs need them:
+
+```bash
 redis-server
+celery -A django_template.celery worker -l info -E
+celery -A django_template.celery beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler
+celery -A django_template.celery flower --port=5555
 ```
 
-Run celery and celery beat.
-```sh
-celery -A django_template worker --beat --scheduler django -l info -E
+Run full development stack with Docker Compose:
+
+```bash
+docker compose -f docker-compose.dev.yml up --build
 ```
 
-Run celery flower
-```sh
-celery -A django_template flower
-```
-## Create users and Tokens
+Production-style compose uses published images and `.env` values:
 
-First, we need to create a user so that we can log in.
-```sh
-curl --location --request POST 'http://127.0.0.1:8000/api/v1/auth/register/' \
---header 'Content-Type: application/json' \
---data-raw '{
-    "email": "email@gmail.com",
-    "username": "username",
-    "password": "password"
-}'
-```
-
-Once we have created an account, we can utilize those credentials to obtain a token.
-
-First, we need to request a token.
-```sh
-curl --location --request POST 'http://127.0.0.1:8000/api/v1/auth/login/' \
---header 'Content-Type: application/json' \
---data-raw '{
-    "username": "username",
-    "password": "password"
-}'
-```
-after that, we get the token
-```sh
-{
-    "refresh": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJ0b2tlbl90eXBlIjoicmVmcmVzaCIsImV4cCI6MTYxNjI5MjMyMSwianRpIjoiNGNkODA3YTlkMmMxNDA2NWFhMzNhYzMxOTgyMzhkZTgiLCJ1c2VyX2lkIjozfQ.hP1wPOPvaPo2DYTC9M1AuOSogdRL_mGP30CHsbpf4zA",
-    "access": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJ0b2tlbl90eXBlIjoiYWNjZXNzIiwiZXhwIjoxNjE2MjA2MjIxLCJqdGkiOiJjNTNlNThmYjE4N2Q0YWY2YTE5MGNiMzhlNjU5ZmI0NSIsInVzZXJfaWQiOjN9.Csz-SgXoItUbT3RgB3zXhjA2DAv77hpYjqlgEMNAHps"
-}
-```
-We have obtained two tokens: the access token will be used to authenticate all the requests we need to make, and this access token will expire after some time.
-
-We can use the refresh token to request a new access token when needed.
-
-requesting new access token by refresh token
-```sh
-curl --location --request POST 'http://127.0.0.1:8000/api/v1/auth/token/refresh/' \
---header 'Content-Type: application/json' \
---data-raw '{
-    "refresh": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJ0b2tlbl90eXBlIjoiYWNjZXNzIiwiZXhwIjoxNjE2MjA2MjIxLCJqdGkiOiJjNTNlNThmYjE4N2Q0YWY2YTE5MGNiMzhlNjU5ZmI0NSIsInVzZXJfaWQiOjN9.Csz-SgXoItUbT3RgB3zXhjA2DAv77hpYjqlgEMNAHps"
-}'
-```
-and we will get a new access token
-```sh
-{
-    "access": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJ0b2tlbl90eXBlIjoiYWNjZXNzIiwiZXhwIjoxNjE2MjA4Mjk1LCJqdGkiOiI4NGNhZmMzMmFiZDA0MDQ2YjZhMzFhZjJjMmRiNjUyYyIsInVzZXJfaWQiOjJ9.NJrs-sXnghAwcMsIWyCvE2RuGcQ3Hiu5p3vBmLkHSvM"
-}
-```
-
-## API document
-
-Visit `http://127.0.0.1:8000/swagger/` to check API document.
-
-## Run unit test
-
-```sh
-python manage.py test
-```
-
-## Generate coverage report
-
-```sh
-coverage run --source='.' manage.py test
-coverage html
-```
-
-## Load fixture data
-
-```sh
-python manage.py loaddata authentication/fixtures/customer.json --app authentication
-```
-
-## Run docker
-
-```sh
-docker compose -f docker-compose.dev.yml up
-```
-
-## Production CI/CD
-
-The backend deploy pipeline is GitHub Actions -> GHCR -> DigitalOcean Docker
-Compose. Pull requests run `Backend CI`; after `main` passes CI, `Backend
-Deploy` builds one immutable image tagged with the commit SHA, pushes it to
-GHCR, SSHes into the DigitalOcean droplet, runs migrations, restarts the
-production compose stack, and smoke-checks:
-
-```sh
-https://medibot-api.yudhna.id.vn/swagger.json
-```
-
-Production GitHub Environment setup:
-
-```sh
-Environment name: Production
-Allowed branch: main
-
-# Environment secrets
-DO_SSH_KEY=<private-ssh-key>
-GHCR_USERNAME=<github-username-or-machine-user>
-GHCR_TOKEN=<token-with-read:packages-for-private-images>
-
-# Environment variables
-DO_HOST=<digitalocean-droplet-ip-or-host>
-DO_USER=<ssh-user>
-DO_SSH_PORT=22
-DO_APP_DIR=/opt/medibot/backend
-```
-
-Staging GitHub Environment setup for the manual `Backend Staging Deploy`
-workflow:
-
-```sh
-Environment name: Staging
-Allowed branch: develop
-
-# Environment secrets
-STAGING_DO_SSH_KEY=<private-ssh-key>
-STAGING_GHCR_USERNAME=<github-username-or-machine-user>
-STAGING_GHCR_TOKEN=<token-with-read:packages-for-private-images>
-
-# Environment variables
-STAGING_DO_HOST=<staging-droplet-ip-or-host>
-STAGING_DO_USER=<ssh-user>
-STAGING_DO_SSH_PORT=22
-STAGING_DO_APP_DIR=/opt/medibot-staging/backend
-```
-
-The staging workflow is triggered manually from GitHub Actions. It accepts a
-Git ref and a smoke-test URL, builds a `staging-<sha>` image tag, deploys it to
-the staging droplet, runs migrations, restarts the compose stack, and checks
-`<smoke_url>/swagger.json`. Because the `Staging` environment only allows
-`develop`, run this workflow from the `develop` branch in the GitHub Actions UI.
-
-The deploy script expects the backend repo on the droplet at
-`/opt/medibot/backend` unless `DO_APP_DIR` is set. The server keeps production
-secrets in `.env`; do not commit that file.
-
-Production compose uses the published image:
-
-```sh
+```bash
 export MEDIBOT_BACKEND_IMAGE=ghcr.io/<owner>/<repo>
 export IMAGE_TAG=<commit-sha>
 docker compose -f docker-compose.yml pull
 docker compose -f docker-compose.yml up -d
 ```
 
-Rollback is a redeploy with a previous image tag:
+## API Documentation
 
-```sh
-export MEDIBOT_BACKEND_IMAGE=ghcr.io/<owner>/<repo>
-export IMAGE_TAG=<previous-commit-sha>
-docker compose -f docker-compose.yml pull
-docker compose -f docker-compose.yml up -d --remove-orphans
-curl -fsS https://medibot-api.yudhna.id.vn/swagger.json >/dev/null
+After server starts, open generated API docs:
+
+```text
+http://127.0.0.1:8000/swagger/
+http://127.0.0.1:8000/redoc/
+http://127.0.0.1:8000/swagger.json
 ```
 
-## Clean expired token
+Public API routes are mounted under `/api/v1/`:
 
-```sh
+- `/api/v1/auth/` — authentication and session endpoints
+- `/api/v1/chatbot/` — chatbot sessions, intake flow, and streaming chat
+- `/api/v1/vector-store/` — embedding and retrieval endpoints
+- `/api/v1/vision/` — image analysis and similarity endpoints
+
+## Testing
+
+Run unit tests:
+
+```bash
+python manage.py test
+```
+
+Run coverage-backed tests:
+
+```bash
+coverage run --source='.' manage.py test
+coverage report
+coverage html
+```
+
+Run formatting and lint checks:
+
+```bash
+flake8 .
+black .
+isort .
+```
+
+Install and run pre-commit hooks:
+
+```bash
+pre-commit install
+pre-commit run --all-files
+```
+
+## Useful Commands
+
+Load default customer fixture:
+
+```bash
+python manage.py loaddata authentication/fixtures/customer.json --app authentication.customer
+```
+
+Clean expired JWT tokens:
+
+```bash
 python manage.py flushexpiredtokens
 ```
 
-## Database diagram
+Collect static files:
 
-![Database diagram](db_diagram.png)
+```bash
+python manage.py collectstatic --no-input --clear
+```
+
+## Contributing
+
+Contributions are welcome.
+
+Before opening a pull request:
+
+1. Create a focused branch from `develop`.
+2. Keep changes surgical and scoped to one purpose.
+3. Run formatting, linting, and tests.
+4. Update API docs or README details when behavior changes.
+5. Do not commit `.env`, local credentials, model weights, generated coverage HTML, or local database files.
+
+CI installs `requirements/test.txt`, runs migrations, collects static files, loads fixtures, checks `flake8`, `black`, `isort`, and runs coverage-backed Django tests.
+
+## License
+
+MediBot Project License.
