@@ -553,9 +553,14 @@ class ChatbotService:
             return payload
 
         try:
-            analysis_record = XRayAnalysis.objects.get(id=xray_analysis_id)
+            analysis_record = XRayAnalysis.objects.get(
+                id=xray_analysis_id,
+                user=self.session.customer,
+            )
         except XRayAnalysis.DoesNotExist:
-            logger.warning("XRayAnalysis not found for id=%s", xray_analysis_id)
+            logger.warning(
+                "XRayAnalysis not found for current session id=%s", xray_analysis_id
+            )
             return payload
         except Exception as exc:
             logger.warning(

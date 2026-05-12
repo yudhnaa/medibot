@@ -5,6 +5,7 @@ from django.test import RequestFactory, SimpleTestCase
 
 from rest_framework.request import Request as DRFRequest
 
+from chatbot.services.chatbot_service import ChatbotService
 from chatbot.views.chat_views import ChatView
 
 
@@ -111,38 +112,141 @@ class AsyncStreamingTest(SimpleTestCase):
 
         drf_request = DRFRequest(request)
         drf_request._full_data = data
+        analysis = MagicMock()
+        analysis.id = xray_id
 
         with patch("chatbot.views.chat_views.ChatSession") as MockSessionCls:
             mock_manager = MagicMock()
             mock_manager.aget = AsyncMock(return_value=self.session)
             MockSessionCls.objects = mock_manager
 
-            with patch("chatbot.views.chat_views.ChatbotService") as MockServiceCls:
-                mock_service = MockServiceCls.return_value
+            with patch("chatbot.views.chat_views.XRayAnalysis") as MockAnalysisCls:
+                MockAnalysisCls.DoesNotExist = Exception
+                analysis_manager = MagicMock()
+                analysis_manager.aget = AsyncMock(return_value=analysis)
+                MockAnalysisCls.objects = analysis_manager
 
-                captured_kwargs = {}
+                with patch("chatbot.views.chat_views.ChatbotService") as MockServiceCls:
+                    mock_service = MockServiceCls.return_value
 
-                async def mock_astream(question, **kwargs):
-                    captured_kwargs.update(kwargs)
-                    yield "X-ray analysis: COVID detected"
+                    captured_kwargs = {}
 
-                mock_service.astream_response = mock_astream
+                    async def mock_astream(question, **kwargs):
+                        captured_kwargs.update(kwargs)
+                        yield "X-ray analysis: COVID detected"
 
-                response = await view.post(drf_request)
+                    mock_service.astream_response = mock_astream
 
-                self.assertEqual(response.status_code, 200)
-                self.assertTrue(response.streaming)
+                    response = await view.post(drf_request)
 
-                # Consume content
-                chunks = []
-                if response.streaming_content:
-                    async for chunk in response.streaming_content:
-                        chunks.append(chunk.decode("utf-8"))
+                    self.assertEqual(response.status_code, 200)
+                    self.assertTrue(response.streaming)
 
-                full_text = "".join(chunks)
+                    chunks = []
+                    if response.streaming_content:
+                        async for chunk in response.streaming_content:
+                            chunks.append(chunk.decode("utf-8"))
 
-                # Verify xray_analysis_id was passed through
-                self.assertEqual(captured_kwargs.get("xray_analysis_id"), xray_id)
+                    full_text = "".join(chunks)
 
-                # Verify response content
-                self.assertIn("data: X-ray analysis: COVID detected", full_text)
+                    analysis_manager.aget.assert_awaited_once_with(
+                        id=xray_id,
+                        user=self.session.customer,
+                    )
+                    self.assertEqual(captured_kwargs.get("xray_analysis_id"), xray_id)
+                    self.assertIn("data: X-ray analysis: COVID detected", full_text)
+
+    async def test_chat_rejects_unowned_xray_analysis_id(self):
+        view = ChatView()
+        xray_id = 99
+        data = {
+            "session_id": str(self.session_id),
+            "message": "Phân tích ảnh X-quang này",
+            "stream": True,
+            "xray_analysis_id": xray_id,
+        }
+        request = self.factory.post(
+            "/chatbot/chat/", data=data, content_type="application/json"
+        )
+        request.user = self.user
+        drf_request = DRFRequest(request)
+        drf_request._full_data = data
+
+        class MissingAnalysis(Exception):
+            pass
+
+        with patch("chatbot.views.chat_views.ChatSession") as MockSessionCls:
+            mock_manager = MagicMock()
+            mock_manager.aget = AsyncMock(return_value=self.session)
+            MockSessionCls.objects = mock_manager
+
+            with patch("chatbot.views.chat_views.XRayAnalysis") as MockAnalysisCls:
+                MockAnalysisCls.DoesNotExist = MissingAnalysis
+                analysis_manager = MagicMock()
+                analysis_manager.aget = AsyncMock(side_effect=MissingAnalysis)
+                MockAnalysisCls.objects = analysis_manager
+
+                with patch("chatbot.views.chat_views.ChatbotService") as MockServiceCls:
+                    response = await view.post(drf_request)
+
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.data, {"error": "X-ray analysis not found"})
+        MockServiceCls.assert_not_called()
+        analysis_manager.aget.assert_awaited_once_with(
+            id=xray_id,
+            user=self.session.customer,
+        )
+
+    async def test_streaming_metadata_uses_authorized_analysis(self):
+        view = ChatView()
+        analysis = MagicMock()
+        analysis.id = 7
+        analysis.class_probs = {"normal": 0.9}
+        analysis.pred_label = "normal"
+        analysis.findings = []
+        analysis.heatmap_base64 = None
+
+        event = await view._xray_metadata_event(analysis)
+
+        self.assertIn("event: metadata", event)
+        self.assertIn('"id": 7', event)
+
+
+class XRayPayloadOwnershipTest(SimpleTestCase):
+    def test_xray_payload_filters_by_session_customer(self):
+        service = ChatbotService.__new__(ChatbotService)
+        service.session = MagicMock()
+        service.session.customer = MagicMock()
+        service._build_xray_context = MagicMock(return_value="xray context")
+        service._serialize_xray_analysis = MagicMock(return_value={"id": 42})
+        analysis = MagicMock()
+        analysis.image = None
+
+        with patch("chatbot.services.chatbot_service.XRayAnalysis") as MockAnalysisCls:
+            manager = MagicMock()
+            manager.get.return_value = analysis
+            MockAnalysisCls.objects = manager
+
+            payload = service._get_xray_analysis_payload(42)
+
+        manager.get.assert_called_once_with(id=42, user=service.session.customer)
+        self.assertEqual(payload["context"], "xray context")
+        self.assertEqual(payload["serialized"], {"id": 42})
+
+    def test_xray_payload_omits_unowned_or_missing_analysis(self):
+        service = ChatbotService.__new__(ChatbotService)
+        service.session = MagicMock()
+        service.session.customer = MagicMock()
+
+        with patch("chatbot.services.chatbot_service.XRayAnalysis") as MockAnalysisCls:
+            MockAnalysisCls.DoesNotExist = Exception
+            manager = MagicMock()
+            manager.get.side_effect = Exception
+            MockAnalysisCls.objects = manager
+
+            payload = service._get_xray_analysis_payload(42)
+
+        manager.get.assert_called_once_with(id=42, user=service.session.customer)
+        self.assertEqual(
+            payload, {"context": "", "serialized": None, "user_metadata": {}}
+        )

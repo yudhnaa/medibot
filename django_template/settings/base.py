@@ -37,6 +37,9 @@ REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": (
         "authentication.authentication.CookieJWTAuthentication",
     ),
+    "DEFAULT_PERMISSION_CLASSES": (
+        "rest_framework.permissions.IsAuthenticated",
+    ),
     "DEFAULT_FILTER_BACKENDS": ("django_filters.rest_framework.DjangoFilterBackend",),
     "DEFAULT_RENDERER_CLASSES": ("django_core.renderers.CustomJSONRenderer",),
     "EXCEPTION_HANDLER": "django_core.exceptions.custom_exception_handler",
@@ -94,6 +97,7 @@ ENABLE_SQL_DEBUG_LOGGING = os.getenv("ENABLE_SQL_DEBUG_LOGGING", "False").lower(
     "1",
     "yes",
 )
+PUBLIC_API_DOCS = _env_bool("PUBLIC_API_DOCS", "False")
 
 # Custom User Model
 AUTH_USER_MODEL = "authentication.Customer"

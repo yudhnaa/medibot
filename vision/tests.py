@@ -17,6 +17,7 @@ import numpy as np
 import torch
 from PIL import Image
 
+from authentication.models import Customer
 from vision.services.vision_service import (
     clear_vision_runtime_cache,
     derive_findings,
@@ -25,6 +26,45 @@ from vision.services.vision_service import (
     overlay_heatmap,
 )
 from vision.utils import compute_metrics, get_device, load_config
+
+
+class VisionEmbedEndpointPermissionTests(TestCase):
+    def setUp(self) -> None:
+        self.client = APIClient()
+        self.user = Customer.objects.create_user(
+            username="regular", email="regular@example.com", password="password"
+        )
+        self.staff = Customer.objects.create_user(
+            username="staff",
+            email="staff@example.com",
+            password="password",
+            is_staff=True,
+        )
+
+    def test_embed_denies_authenticated_non_staff(self) -> None:
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.post(
+            "/api/v1/vision/embed/",
+            {"batch_size": 1},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 403)
+
+    @patch("vision.views.ingest_embeddings")
+    def test_embed_allows_staff(self, mock_ingest_embeddings: MagicMock) -> None:
+        mock_ingest_embeddings.return_value = {"status": "ok", "count": 1}
+        self.client.force_authenticate(user=self.staff)
+
+        response = self.client.post(
+            "/api/v1/vision/embed/",
+            {"batch_size": 1},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        mock_ingest_embeddings.assert_called_once()
 
 
 class GetDeviceTests(TestCase):

@@ -8,6 +8,14 @@ from rest_framework import permissions
 from drf_yasg import openapi
 from drf_yasg.views import get_schema_view
 
+
+class ApiDocsPermission(permissions.BasePermission):
+    def has_permission(self, request, view):
+        if settings.DEBUG or settings.PUBLIC_API_DOCS:
+            return True
+        return bool(request.user and request.user.is_staff)
+
+
 SchemaView = get_schema_view(
     openapi.Info(
         title="MediBot Backend API",
@@ -27,7 +35,7 @@ SchemaView = get_schema_view(
         license=openapi.License(name="MediBot Project License"),
     ),
     public=True,
-    permission_classes=[permissions.AllowAny],
+    permission_classes=[ApiDocsPermission],
 )
 
 # urls

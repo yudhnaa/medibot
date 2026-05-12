@@ -109,7 +109,7 @@ class EmbedView(APIView):
     Batch-embeds images from the configured dataset into pgvector.
     """
 
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAdminUser]
 
     def post(self, request: Request) -> Response:
         serializer = EmbedRequestSerializer(data=request.data)

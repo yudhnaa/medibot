@@ -100,6 +100,14 @@ class TestCalls(TestCase):
         response_data = response.json().get("data", {})
         self.assertIn("access", response_data)
 
+    def test_call_me_without_access_cookie_returns_401(self):
+        response = self.client.get("/api/v1/auth/me/")
+
+        self.assertEqual(response.status_code, 401)
+        response_data = response.json()
+        self.assertFalse(response_data.get("success"))
+        self.assertEqual(response_data.get("status_code"), 401)
+
     def test_call_me_with_access_cookie(self):
         login_data = {"username": TestCalls.username, "password": TestCalls.password}
         self.client.post(
@@ -157,3 +165,7 @@ class TestCalls(TestCase):
         self.assertIn(
             "authentication.authentication.CookieJWTAuthentication", auth_classes
         )
+
+    def test_drf_requires_authentication_by_default(self):
+        permission_classes = settings.REST_FRAMEWORK["DEFAULT_PERMISSION_CLASSES"]
+        self.assertIn("rest_framework.permissions.IsAuthenticated", permission_classes)
