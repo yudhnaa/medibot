@@ -9,7 +9,7 @@ import math
 import re
 import time
 import uuid
-from collections.abc import AsyncGenerator, Generator
+from collections.abc import AsyncGenerator
 from typing import Any, cast
 
 from asgiref.sync import sync_to_async
@@ -341,72 +341,6 @@ class ChatbotService:
             context_parts.append(intake_ctx)
         return "\n".join(part for part in context_parts if part)
 
-    # TODO: Remove this method
-    def query(self, question: str) -> str:
-        """
-        Process a medical question and return response.
-
-        Args:
-            question: User's question
-
-        Returns:
-            AI response string
-        """
-        start_time = time.time()
-
-        try:
-            # Save user message
-            self._save_message(MessageRole.USER, question)
-
-            # Analyze once per turn and update intake
-            analysis = self._analyze_query(question)
-            self._apply_analysis_to_intake(question, analysis=analysis)
-
-            direct_response = self._get_non_retrieval_response(analysis)
-            if direct_response is not None:
-                response_text = direct_response
-                self._last_docs_cache = []
-                self._last_audit = {}
-            else:
-                chat_history = self._get_chat_history()
-                response = self._chain.invoke(
-                    {
-                        "question": question,
-                        "chat_history": chat_history,
-                        "analysis": analysis,
-                    }
-                )
-                response_text = str(response)
-            source_urls = self.get_last_source_urls()
-
-            response_time_ms = int((time.time() - start_time) * 1000)
-
-            # Save assistant message
-            assistant_metadata: dict[str, Any] = {
-                "audit_id": self._last_audit.get("audit_id"),
-                "mode": self._last_audit.get("mode"),
-                "intent": analysis.get("intent"),
-                "response_mode": analysis.get("response_mode"),
-                "should_retrieve": analysis.get("should_retrieve"),
-            }
-            if source_urls:
-                assistant_metadata["source_urls"] = source_urls
-            self._save_message(
-                MessageRole.ASSISTANT,
-                response_text,
-                response_time_ms=response_time_ms,
-                metadata=assistant_metadata,
-            )
-
-            logger.info(f"Query processed in {response_time_ms}ms")
-            return response_text
-
-        except Exception as e:
-            logger.error(f"Error processing query: {e}")
-            error_msg = MSG_PROCESSING_ERROR.format(error=str(e))
-            self._save_message(MessageRole.ASSISTANT, error_msg)
-            return error_msg
-
     async def aquery(self, question: str, xray_analysis_id: int | None = None) -> str:
         """
         Async process a medical question and return response.
@@ -480,71 +414,6 @@ class ChatbotService:
             error_msg = MSG_PROCESSING_ERROR.format(error=str(e))
             await sync_to_async(self._save_message)(MessageRole.ASSISTANT, error_msg)
             return error_msg
-
-    # TODO: Remove this method
-    def stream_response(self, question: str) -> Generator[str, None, None]:
-        """
-        Stream response tokens for a question.
-
-        Args:
-            question: User's question
-
-        Yields:
-            Response text chunks
-        """
-        # Save user message
-        self._save_message(MessageRole.USER, question)
-
-        # Analyze once per turn and update intake
-        analysis = self._analyze_query(question)
-        self._apply_analysis_to_intake(question, analysis=analysis)
-
-        start_time = time.time()
-        full_response = ""
-
-        try:
-            direct_response = self._get_non_retrieval_response(analysis)
-            if direct_response is not None:
-                full_response = direct_response
-                self._last_docs_cache = []
-                self._last_audit = {}
-                yield direct_response
-            else:
-                chat_history = self._get_chat_history()
-                for chunk in self._streaming_chain.stream(
-                    {
-                        "question": question,
-                        "chat_history": chat_history,
-                        "analysis": analysis,
-                    }
-                ):
-                    full_response += chunk
-                    yield chunk
-
-            response_with_sources = full_response
-            source_urls = self.get_last_source_urls()
-
-            # Save complete response
-            response_time_ms = int((time.time() - start_time) * 1000)
-            assistant_metadata: dict[str, Any] = {
-                "intent": analysis.get("intent"),
-                "response_mode": analysis.get("response_mode"),
-                "should_retrieve": analysis.get("should_retrieve"),
-            }
-            if source_urls:
-                assistant_metadata["source_urls"] = source_urls
-            self._save_message(
-                MessageRole.ASSISTANT,
-                response_with_sources,
-                response_time_ms=response_time_ms,
-                metadata=assistant_metadata,
-            )
-
-        except Exception as e:
-            logger.error(f"Streaming error: {e}")
-            error_msg = MSG_STREAMING_ERROR.format(error=str(e))
-            self._save_message(MessageRole.ASSISTANT, error_msg)
-            yield error_msg
 
     async def astream_response(
         self, question: str, xray_analysis_id: int | None = None

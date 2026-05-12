@@ -188,13 +188,10 @@ def custom_exception_handler(
             errors=extracted_errors,
         )
 
-    # For unhandled exceptions, return a generic 500 error
-    # Note: In production, you may want to log the exception here
-
     logger = logging.getLogger(__name__)
-    logger.exception(f"Unhandled exception: {exc}")
+    logger.exception("Unhandled exception: %s", exc)
     return _build_error_response(
-        message=f"Error: {exc!s}",  # TODO: Change back to generic message in production
+        message="Internal server error",
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         errors=None,
     )
