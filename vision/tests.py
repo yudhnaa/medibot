@@ -416,7 +416,14 @@ class EmbedViewTests(TestCase):
     """Tests for POST /api/v1/vision/embed/."""
 
     def setUp(self) -> None:
-        self.client = _get_authed_client()
+        staff = Customer.objects.create_user(
+            username="embedstaff",
+            email="embedstaff@example.com",
+            password="testpass123",
+            is_staff=True,
+        )
+        self.client = APIClient()
+        self.client.force_authenticate(user=staff)
         self.url = "/api/v1/vision/embed/"
 
     @patch("vision.views.ingest_embeddings")
