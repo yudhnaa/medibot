@@ -1746,9 +1746,9 @@ class ChatbotService:
             for field_name, label in INTAKE_LINE_SPECS
         ]
         if intake.age is not None:
-            info.append(f"Tuổi: {intake.age}")
+            info.append(f"- Tuổi: {intake.age}")
         if intake.sex and intake.sex != "unknown":
-            info.append(f"Giới tính: {intake.sex}")
+            info.append(f"- Giới tính: {intake.sex}")
         return [line for line in info if line]
 
     def _format_intake_line(self, value: Any, label: str) -> str:
@@ -1758,7 +1758,7 @@ class ChatbotService:
             rendered = str(value or "").strip()
         if not rendered:
             return ""
-        return f"{label}: {rendered}"
+        return f"- {label}: {rendered}"
 
     def _build_non_retrieval_context(self, analysis: dict[str, Any]) -> str:
         response_mode = str(analysis.get("response_mode", ""))
