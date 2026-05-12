@@ -163,7 +163,6 @@ class ReembeddingForm(forms.Form):
     """Form for re-embedding operations."""
 
     REEMBED_TYPE_CHOICES = [
-        ("selected", "Re-embed Selected Documents"),
         ("section", "Re-embed by Section Type"),
         ("missing", "Re-embed Missing Embeddings"),
     ]
@@ -198,4 +197,8 @@ class ReembeddingForm(forms.Form):
         cleaned_data = super().clean() or {}
         if not cleaned_data.get("confirm"):
             raise forms.ValidationError("You must confirm to start re-embedding.")
+        if cleaned_data.get("reembed_type") == "section" and not cleaned_data.get(
+            "section_type"
+        ):
+            self.add_error("section_type", "Section type is required.")
         return cleaned_data

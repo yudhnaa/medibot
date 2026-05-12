@@ -184,6 +184,42 @@ def _fail_embedding_job(job: Any, exc: Exception) -> None:
     job.save(update_fields=["status", "error_messages"])
 
 
+@shared_task(bind=True, max_retries=2, default_retry_delay=60)
+def process_reembedding_job(self, job_id: int):
+    from chatbot.models import EmbeddingJob
+    from vector_store.services.reembed_service import ReembeddingService
+
+    job = EmbeddingJob.objects.filter(id=job_id).first()
+    if job is None:
+        message = f"Embedding job {job_id} not found."
+        logger.error(message)
+        return {"status": "error", "message": message}
+
+    try:
+        if job.job_type == "reembed_section":
+            if not job.section_type:
+                raise ValueError("Section type is required for section re-embedding.")
+            return ReembeddingService.reembed_by_section(
+                section_type=job.section_type,
+                provider=job.provider,
+                job=job,
+            )
+        if job.job_type == "reembed_missing":
+            return ReembeddingService.reembed_missing(
+                provider=job.provider,
+                job=job,
+            )
+        raise ValueError(f"Unsupported re-embedding job type: {job.job_type}")
+    except Exception as exc:
+        logger.error(
+            "Error processing re-embedding job %s: %s", job_id, exc, exc_info=True
+        )
+        _fail_embedding_job(job, exc)
+        if self.request.retries < self.max_retries:
+            raise self.retry(exc=exc)
+        return {"status": "error", "message": str(exc)}
+
+
 def _cleanup_file(file_path: str, *, warn_on_error: bool = True) -> None:
     try:
         if os.path.exists(file_path):

@@ -89,6 +89,9 @@ class MedicalDocumentAdmin(admin.ModelAdmin):
     ]
     change_list_template = "admin/chatbot/medicaldocument/change_list.html"
 
+    def has_add_permission(self, request: HttpRequest) -> bool:
+        return False
+
     def get_urls(self):
         """Add custom admin URLs."""
         urls = super().get_urls()
@@ -423,46 +426,42 @@ class MedicalDocumentAdmin(admin.ModelAdmin):
                 configured_provider = EmbeddingService.resolve_provider()
 
                 try:
-                    # Determine job type and create job
                     job_type_map = {
-                        "selected": "reembed_selected",
                         "section": "reembed_section",
                         "missing": "reembed_missing",
                     }
-
                     job_type = job_type_map[reembed_type]
+                    job_section_type = (
+                        section_type if reembed_type == "section" else None
+                    )
 
                     job = ReembeddingService.create_job(
                         job_type=job_type,
                         provider=configured_provider,
-                        section_type=(
-                            section_type if isinstance(section_type, str) else None
-                        ),
+                        section_type=job_section_type,
                         created_by=request.user,
                     )
 
                     if run_async:
-                        # TODO: Trigger Celery task
-                        job.celery_task_id = "pending"
-                        job.save()
-                        job_id = job.pk
+                        from chatbot.tasks import process_reembedding_job
+
+                        task = process_reembedding_job.delay(job.pk)
+                        job.celery_task_id = task.id
+                        job.save(update_fields=["celery_task_id"])
                         messages.success(
                             request,
-                            (
-                                f"Re-embedding job {job_id} started in background."
-                                if job_id is not None
-                                else "Re-embedding job started in background."
-                            ),
+                            f"Re-embedding job {job.pk} started in background.",
                         )
                     else:
-                        # Synchronous processing
                         if reembed_type == "section" and isinstance(section_type, str):
                             ReembeddingService.reembed_by_section(
                                 section_type=section_type,
+                                provider=configured_provider,
                                 job=job,
                             )
                         elif reembed_type == "missing":
                             ReembeddingService.reembed_missing(
+                                provider=configured_provider,
                                 job=job,
                             )
 
