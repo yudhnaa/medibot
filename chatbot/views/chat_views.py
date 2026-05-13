@@ -209,6 +209,12 @@ class ChatView(APIView):
             return session_or_response
         session = session_or_response
 
+        xray_analysis_or_response = await self._authorized_xray_analysis(
+            session, xray_analysis_id
+        )
+        if isinstance(xray_analysis_or_response, Response):
+            return xray_analysis_or_response
+
         # Process with chatbot service
         start_time = time.time()
         # ChatbotService.__init__ touches DB (Config), so we must run it in a thread
@@ -217,7 +223,11 @@ class ChatView(APIView):
         if use_stream:
             # Return streaming response
             return self._streaming_response(
-                chatbot, message, session_id, xray_analysis_id
+                chatbot,
+                message,
+                session_id,
+                xray_analysis_id,
+                xray_analysis_or_response,
             )
 
         # Regular response (Async)
@@ -323,6 +333,24 @@ class ChatView(APIView):
             status=status.HTTP_403_FORBIDDEN,
         )
 
+    async def _authorized_xray_analysis(
+        self,
+        session: ChatSession,
+        xray_analysis_id: int | None,
+    ) -> XRayAnalysis | None | Response:
+        if not xray_analysis_id:
+            return None
+        try:
+            return await XRayAnalysis.objects.aget(
+                id=xray_analysis_id,
+                user_id=session.customer_id,
+            )
+        except XRayAnalysis.DoesNotExist:
+            return Response(
+                {"error": "X-ray analysis not found"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
     def _regular_chat_response(
         self,
         *,
@@ -353,13 +381,14 @@ class ChatView(APIView):
         message: str,
         session_id: UUID,
         xray_analysis_id: int | None = None,
+        xray_analysis: XRayAnalysis | None = None,
     ) -> StreamingHttpResponse:
         """Generate a streaming response."""
 
         async def event_stream():
             try:
-                if xray_analysis_id:
-                    metadata_event = await self._xray_metadata_event(xray_analysis_id)
+                if xray_analysis:
+                    metadata_event = await self._xray_metadata_event(xray_analysis)
                     if metadata_event:
                         yield metadata_event
 
@@ -401,23 +430,19 @@ class ChatView(APIView):
         response["X-Session-Id"] = str(session_id)
         return response
 
-    async def _xray_metadata_event(self, xray_analysis_id: int) -> str:
+    async def _xray_metadata_event(self, analysis_record: XRayAnalysis) -> str:
         import json
 
-        from vision.models import XRayAnalysis
         from vision.serializers import XRayAnalysisDisplaySerializer
 
         try:
-            analysis_record = await sync_to_async(XRayAnalysis.objects.get)(
-                id=xray_analysis_id
-            )
             data = await sync_to_async(
                 lambda: XRayAnalysisDisplaySerializer(analysis_record).data
             )()
             return f"event: metadata\ndata: {json.dumps(data)}\n\n"
         except Exception as exc:
             logger.warning(
-                f"Failed to fetch XRayAnalysis for streaming metadata: {exc}"
+                f"Failed to serialize XRayAnalysis streaming metadata: {exc}"
             )
             return ""
 

@@ -263,7 +263,7 @@ MSG_NON_MEDICAL_RESPONSE = (
     "Bạn có thể mô tả triệu chứng để mình hỗ trợ."
 )
 MSG_NO_INTAKE_CONTEXT = "Hiện chưa có thông tin intake đã lưu cho bạn."
-MSG_INTAKE_RESPONSE_PREFIX = "Thông tin intake hiện có của bạn:\n"
+MSG_INTAKE_RESPONSE_PREFIX = "## Thông tin intake hiện có của bạn\n\n"
 
 # Context headers
 HEADER_SINGLE_DISEASE = "THÔNG TIN CHI TIẾT VỀ BỆNH: {title}"
@@ -272,7 +272,7 @@ HEADER_FAQ_MATCH = "FAQ PHÙ HỢP NHẤT"
 HEADER_EVIDENCE_BLOCK = "BẰNG CHỨNG THAM CHIẾU"
 HEADER_MULTI_DISEASE_ANALYSIS = "PHÂN TÍCH TRUY VẤN (LLM JSON):"
 HEADER_MULTI_DISEASE_CANDIDATES = "\nCÁC BỆNH CÓ KHẢ NĂNG:"
-HEADER_PATIENT_INFO = "\nTHÔNG TIN BỆNH NHÂN:\n"
+HEADER_PATIENT_INFO = "### Thông tin bệnh nhân\n"
 
 # X-Ray context and messages
 HEADER_XRAY_ANALYSIS_START = (

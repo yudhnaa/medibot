@@ -10,8 +10,11 @@ from unittest.mock import MagicMock, patch
 
 from django.test import TestCase
 
+from rest_framework.test import APIClient
+
 import pandas as pd
 
+from authentication.models import Customer
 from chatbot.models import IndexType, MedicalDocument, SectionType
 from vector_store.services.embedding_docs_pipeline.article_schema import (
     parse_list_items,
@@ -24,6 +27,65 @@ from vector_store.services.embedding_docs_pipeline.load_covid_qa import (
 )
 from vector_store.services.quality_service import QualityService
 from vector_store.services.vector_store_manager import VectorStoreManager
+
+
+class VectorStoreEndpointPermissionTests(TestCase):
+    def setUp(self) -> None:
+        self.client = APIClient()
+        self.user = Customer.objects.create_user(
+            username="regular", email="regular@example.com", password="password"
+        )
+        self.staff = Customer.objects.create_user(
+            username="staff",
+            email="staff@example.com",
+            password="password",
+            is_staff=True,
+        )
+
+    @patch("vector_store.services.embedding_service.EmbeddingService")
+    def test_embed_text_allows_authenticated_user(
+        self, mock_service_cls: MagicMock
+    ) -> None:
+        mock_service = mock_service_cls.return_value
+        mock_service.embed_text.return_value = [0.1, 0.2]
+        mock_service.get_provider_name.return_value = "mock"
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.post(
+            "/api/v1/vector-store/text/",
+            {"text": "hello"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        mock_service.embed_text.assert_called_once_with("hello")
+
+    def test_embed_documents_denies_authenticated_non_staff(self) -> None:
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.post(
+            "/api/v1/vector-store/documents/",
+            {"texts": ["hello"]},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 403)
+
+    @patch("vector_store.services.embedding_service.EmbeddingService")
+    def test_embed_documents_allows_staff(self, mock_service_cls: MagicMock) -> None:
+        mock_service = mock_service_cls.return_value
+        mock_service.embed_documents.return_value = [[0.1, 0.2]]
+        mock_service.get_provider_name.return_value = "mock"
+        self.client.force_authenticate(user=self.staff)
+
+        response = self.client.post(
+            "/api/v1/vector-store/documents/",
+            {"texts": ["hello"]},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        mock_service.embed_documents.assert_called_once_with(["hello"])
 
 
 class VectorStoreManagerTestCase(TestCase):

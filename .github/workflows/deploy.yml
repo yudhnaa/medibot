@@ -111,7 +111,7 @@ jobs:
             sleep 10
 
             for i in {1..30}; do
-              if curl -fsS "${PRODUCTION_URL}/swagger.json" >/dev/null 2>&1; then
+              if curl -fsS "${PRODUCTION_URL}/health/" >/dev/null 2>&1; then
                 echo "Smoke test passed! App is ready."
                 exit 0
               fi

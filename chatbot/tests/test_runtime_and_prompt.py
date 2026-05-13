@@ -338,8 +338,10 @@ class IntakeRoutingTests(SimpleTestCase):
         self.assertEqual(analysis["intent"], "intake_query")
         self.assertFalse(analysis["should_retrieve"])
         assert response is not None
-        self.assertIn("cúm mùa", response)
-        self.assertIn("sốt, ho", response)
+        self.assertIn("## Thông tin intake hiện có của bạn", response)
+        self.assertIn("### Thông tin bệnh nhân", response)
+        self.assertIn("- Bệnh: cúm mùa", response)
+        self.assertIn("- Triệu chứng (+): sốt, ho", response)
         self.assertIn("Bệnh nền: hen suyễn", response)
         self.assertIn("Dị ứng: penicillin", response)
         self.assertIn("Số ngày khởi phát: 3", response)

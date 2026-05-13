@@ -1,12 +1,25 @@
 from django.conf import settings
 from django.conf.urls.static import static
 from django.contrib import admin
+from django.http import JsonResponse
 from django.urls import include, path, re_path
 
 from rest_framework import permissions
 
 from drf_yasg import openapi
 from drf_yasg.views import get_schema_view
+
+
+class ApiDocsPermission(permissions.BasePermission):
+    def has_permission(self, request, view):
+        if settings.DEBUG or settings.PUBLIC_API_DOCS:
+            return True
+        return bool(request.user and request.user.is_staff)
+
+
+def health_check(request):
+    return JsonResponse({"status": "ok"})
+
 
 SchemaView = get_schema_view(
     openapi.Info(
@@ -27,12 +40,13 @@ SchemaView = get_schema_view(
         license=openapi.License(name="MediBot Project License"),
     ),
     public=True,
-    permission_classes=[permissions.AllowAny],
+    permission_classes=[ApiDocsPermission],
 )
 
 # urls
 urlpatterns = (
     [
+        path("health/", health_check, name="health-check"),
         re_path(
             r"^swagger(?P<format>\.json|\.yaml)$",
             SchemaView.without_ui(cache_timeout=0),
