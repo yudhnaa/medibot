@@ -343,7 +343,7 @@ class ChatView(APIView):
         try:
             return await XRayAnalysis.objects.aget(
                 id=xray_analysis_id,
-                user=session.customer,
+                user_id=session.customer_id,
             )
         except XRayAnalysis.DoesNotExist:
             return Response(

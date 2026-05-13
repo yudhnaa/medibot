@@ -151,7 +151,7 @@ class AsyncStreamingTest(SimpleTestCase):
 
                     analysis_manager.aget.assert_awaited_once_with(
                         id=xray_id,
-                        user=self.session.customer,
+                        user_id=self.session.customer_id,
                     )
                     self.assertEqual(captured_kwargs.get("xray_analysis_id"), xray_id)
                     self.assertIn("data: X-ray analysis: COVID detected", full_text)
@@ -194,7 +194,7 @@ class AsyncStreamingTest(SimpleTestCase):
         MockServiceCls.assert_not_called()
         analysis_manager.aget.assert_awaited_once_with(
             id=xray_id,
-            user=self.session.customer,
+            user_id=self.session.customer_id,
         )
 
     async def test_streaming_metadata_uses_authorized_analysis(self):

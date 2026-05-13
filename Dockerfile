@@ -13,6 +13,7 @@ RUN apt-get update \
         libgl1 \
         libglib2.0-0 \
         netcat-openbsd \
+        curl \
     && rm -rf /var/lib/apt/lists/*
 
 # copy uv from official image
