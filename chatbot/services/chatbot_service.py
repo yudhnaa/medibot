@@ -118,6 +118,7 @@ class ChatbotService:
 
         # Document cache for UI
         self._last_docs_cache: list[Document] = []
+        self._last_source_urls_cache: list[str] = []
         self._last_query_text = ""
         self._last_audit: dict[str, Any] = {}
 
@@ -266,6 +267,7 @@ class ChatbotService:
             should_retrieve = bool(analysis.get("should_retrieve", True))
             if not should_retrieve:
                 self._last_docs_cache = []
+                self._last_source_urls_cache = []
                 self._last_audit = {}
                 context = self._build_non_retrieval_context(analysis)
             else:
@@ -292,6 +294,9 @@ class ChatbotService:
                     )
 
                     self._last_docs_cache = evidence_docs[:DEFAULT_DOCS_CACHE_SIZE]
+                    self._last_source_urls_cache = self._source_urls_for_docs(
+                        evidence_docs
+                    )
                     self._last_audit = {
                         "audit_id": audit_id,
                         "ts": time.time(),
@@ -310,6 +315,9 @@ class ChatbotService:
                     self._last_docs_cache = cast(
                         list[Document], tier_result.get("evidence_docs", [])
                     )[:DEFAULT_DOCS_CACHE_SIZE]
+                    self._last_source_urls_cache = cast(
+                        list[str], tier_result.get("source_urls", [])
+                    )
                     self._last_audit = {
                         "audit_id": audit_id,
                         "ts": time.time(),
@@ -370,6 +378,7 @@ class ChatbotService:
             if direct_response is not None:
                 response_text = direct_response
                 self._last_docs_cache = []
+                self._last_source_urls_cache = []
                 self._last_audit = {}
             else:
                 chat_history = await sync_to_async(self._get_chat_history)()
@@ -452,6 +461,7 @@ class ChatbotService:
             if direct_response is not None:
                 full_response = direct_response
                 self._last_docs_cache = []
+                self._last_source_urls_cache = []
                 self._last_audit = {}
                 yield direct_response
             else:
@@ -1174,12 +1184,14 @@ class ChatbotService:
             if not docs:
                 continue
             doc = docs[0]
+            metadata = getattr(doc, "metadata", {}) or {}
             summaries.append(
                 {
                     "title": normalized_title,
                     "summary": str(doc.content or "").strip(),
                     "score": self._score_from_distance(getattr(doc, "distance", 1.0)),
-                    "metadata": getattr(doc, "metadata", {}) or {},
+                    "metadata": metadata,
+                    "url": metadata.get("url") or metadata.get("source_url") or "",
                 }
             )
         return summaries
@@ -1564,12 +1576,43 @@ class ChatbotService:
             for item in summary_docs
             if str(item.get("title", "")).strip()
         }
+        evidence_docs_by_title: dict[str, list[Document]] = {}
+        for doc in evidence_docs:
+            title = str(doc.metadata.get("title", "")).strip()
+            if title:
+                evidence_docs_by_title.setdefault(title, []).append(doc)
+
+        summary_urls_by_title = {
+            str(item["title"]): str(item.get("url", "")).strip()
+            for item in summary_docs
+            if str(item.get("title", "")).strip()
+        }
         for candidate in candidates:
-            candidate["summary"] = summary_by_title.get(str(candidate["title"]), "")
+            title = str(candidate["title"])
+            candidate["summary"] = summary_by_title.get(title, "")
+            source_urls = self._source_urls_for_docs(
+                evidence_docs_by_title.get(title, [])
+            )
+            summary_url = summary_urls_by_title.get(title, "")
+            if summary_url and summary_url not in source_urls:
+                source_urls.append(summary_url)
+            candidate["source_urls"] = source_urls
+
+        prompt_evidence_docs = [
+            doc for title in top_titles for doc in evidence_docs_by_title.get(title, [])
+        ]
+
+        all_source_urls: list[str] = []
+        for candidate in candidates:
+            for url in candidate.get("source_urls", []) or []:
+                if url not in all_source_urls:
+                    all_source_urls.append(url)
+
         return {
             "candidates": candidates,
             "summaries": summary_by_title,
-            "evidence_docs": evidence_docs,
+            "evidence_docs": prompt_evidence_docs,
+            "source_urls": all_source_urls,
         }
 
     def _build_multi_disease_context(
@@ -1616,12 +1659,19 @@ class ChatbotService:
         lines: list[str],
         tier_result: dict[str, Any],
     ) -> None:
+        lines.append(
+            "BẮT BUỘC: Trả lời các bệnh theo đúng thứ tự 1→N bên dưới "
+            "(điểm cao hơn = khả năng phù hợp hơn)."
+        )
         for index, candidate in enumerate(tier_result.get("candidates", []), start=1):
+            source_urls = ", ".join(candidate.get("source_urls", []) or [])
             lines.append(
                 f"{index}. {candidate['title']} - điểm: {candidate['final_score']:.3f} "
                 f"(merge={candidate.get('merge_score', 0.0):.3f}, "
                 f"neg={candidate.get('neg_frac', 0.0):.2f})"
             )
+            if source_urls:
+                lines.append(f"   Nguồn: {source_urls}")
             summary = re.sub(r"\s+", " ", str(candidate.get("summary", "")).strip())
             if summary:
                 lines.append(f"   Tóm tắt: {summary[:320]}")
@@ -1834,20 +1884,28 @@ class ChatbotService:
                 return url
         return ""
 
-    def get_last_source_urls(
-        self, max_items: int = DEFAULT_DOCS_CACHE_SIZE
-    ) -> list[str]:
-        """Get unique source URLs from the last retrieved evidence docs."""
-        docs = cast(list[Document], getattr(self, "_last_docs_cache", []) or [])
+    def _source_urls_for_docs(self, docs: list[Document]) -> list[str]:
         urls: list[str] = []
         seen: set[str] = set()
-        for doc in docs[:max_items]:
+        for doc in docs:
             metadata = doc.metadata if isinstance(doc.metadata, dict) else {}
             url = self._extract_doc_source_url(metadata)
             if url and url not in seen:
                 urls.append(url)
                 seen.add(url)
         return urls
+
+    def get_last_source_urls(
+        self, max_items: int = DEFAULT_DOCS_CACHE_SIZE
+    ) -> list[str]:
+        """Get unique source URLs from last retrieval."""
+        cached_urls = cast(
+            list[str], getattr(self, "_last_source_urls_cache", []) or []
+        )
+        if cached_urls:
+            return cached_urls[:max_items]
+        docs = cast(list[Document], getattr(self, "_last_docs_cache", []) or [])
+        return self._source_urls_for_docs(docs[:max_items])
 
     def get_last_docs(
         self, max_items: int = DEFAULT_DOCS_CACHE_SIZE

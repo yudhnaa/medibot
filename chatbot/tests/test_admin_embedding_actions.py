@@ -8,7 +8,7 @@ from django.contrib.sessions.middleware import SessionMiddleware
 from django.test import RequestFactory, TestCase
 
 from chatbot.admin import ExtendedMedicalDocumentAdmin
-from chatbot.forms import ArticleUrlEmbedForm, ReembeddingForm
+from chatbot.forms import ArticlePasteEmbedForm, ArticleUrlEmbedForm, ReembeddingForm
 from chatbot.models import EmbeddingJob, MedicalDocument, SectionType
 from chatbot.tasks import process_reembedding_job
 
@@ -22,6 +22,36 @@ class ArticleUrlEmbedFormTests(TestCase):
         form = ArticleUrlEmbedForm(data={"url": "ftp://example.com/article"})
         self.assertFalse(form.is_valid())
         self.assertIn("url", form.errors)
+
+
+class ArticlePasteEmbedFormTests(TestCase):
+    def test_valid_pasted_content(self):
+        form = ArticlePasteEmbedForm(
+            data={
+                "title": "Scoliosis",
+                "source_url": "https://example.com/scoliosis",
+                "content": "Scoliosis is a sideways curvature of the spine.",
+            }
+        )
+        self.assertTrue(form.is_valid())
+
+    def test_empty_content(self):
+        form = ArticlePasteEmbedForm(
+            data={"title": "Scoliosis", "source_url": "", "content": "  "}
+        )
+        self.assertFalse(form.is_valid())
+        self.assertIn("content", form.errors)
+
+    def test_invalid_source_url_scheme(self):
+        form = ArticlePasteEmbedForm(
+            data={
+                "title": "Scoliosis",
+                "source_url": "ftp://example.com/scoliosis",
+                "content": "Scoliosis is a sideways curvature of the spine.",
+            }
+        )
+        self.assertFalse(form.is_valid())
+        self.assertIn("source_url", form.errors)
 
 
 class ExtendedMedicalDocumentAdminTests(TestCase):
@@ -73,6 +103,49 @@ class ExtendedMedicalDocumentAdminTests(TestCase):
         kwargs = mock_delay.call_args.kwargs
         self.assertEqual(kwargs["url"], "https://example.com/medical-article")
         self.assertEqual(kwargs["embedding_provider"], "transformers")
+
+    @patch("chatbot.tasks.process_article_paste_embed.delay")
+    @patch("vector_store.services.embedding_service.EmbeddingService.resolve_provider")
+    def test_paste_content_view_dispatches_task(
+        self,
+        mock_resolve_provider,
+        mock_delay,
+    ):
+        mock_resolve_provider.return_value = "transformers"
+        mock_delay.return_value = MagicMock(id="paste-celery-task-id")
+
+        request = self.factory.post(
+            "/admin/chatbot/medicaldocument/paste-content/",
+            data={
+                "title": "Scoliosis",
+                "source_url": "https://example.com/scoliosis",
+                "content": "Scoliosis is a sideways curvature of the spine.",
+            },
+        )
+        request.user = self.superuser
+        self._attach_messages(request)
+
+        response = self.admin.paste_content_view(request)
+        self.assertEqual(response.status_code, 302)
+
+        self.assertEqual(EmbeddingJob.objects.count(), 1)
+        job = EmbeddingJob.objects.first()
+        self.assertIsNotNone(job)
+        if job is not None:
+            self.assertEqual(job.job_type, "paste_ingest")
+            self.assertEqual(job.provider, "transformers")
+            self.assertEqual(job.celery_task_id, "paste-celery-task-id")
+
+        mock_delay.assert_called_once()
+        kwargs = mock_delay.call_args.kwargs
+        self.assertEqual(kwargs["title"], "Scoliosis")
+        self.assertEqual(
+            kwargs["content"],
+            "Scoliosis is a sideways curvature of the spine.",
+        )
+        self.assertEqual(kwargs["source_url"], "https://example.com/scoliosis")
+        self.assertEqual(kwargs["embedding_provider"], "transformers")
+        self.assertEqual(kwargs["source"], "admin_paste")
 
     @patch("chatbot.admin.document_admin.render")
     @patch("vector_store.services.vector_store_manager.VectorStoreManager")

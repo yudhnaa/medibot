@@ -285,6 +285,89 @@ class RouterAndRetrievalTests(SimpleTestCase):
         self.assertIn("summary", first)
         self.assertTrue(first["final_score"] > 0)
 
+    @patch("chatbot.services.chatbot_service.ChatbotConfig.get_config")
+    def test_multi_disease_retrieval_orders_evidence_by_final_candidates(
+        self,
+        mock_get_config: MagicMock,
+    ) -> None:
+        config = {
+            "RAG_B_TOPK": 4,
+            "RAG_MERGED_LIMIT": 4,
+            "RAG_TITLE_TOP_M": 1,
+            "RAG_FINAL_TITLES": 2,
+            "RAG_MERGE_WEIGHT_ENTITIES": 1.0,
+            "RAG_MERGE_WEIGHT_QUERY": 0.0,
+            "RAG_PENALTY_ALPHA": 0.0,
+            "RAG_NEG_SYM_SIM_THRESH": 0.7,
+        }
+        mock_get_config.side_effect = lambda key, default=None: config.get(key, default)
+
+        service = object.__new__(ChatbotService)
+        service.vector_manager = MagicMock()
+        service._user_intake_db = cast(
+            UserIntake,
+            SimpleNamespace(symptoms=[], age=None, sex="unknown"),
+        )
+        service.vector_manager.embedding_service = None
+
+        low_rank_doc = SimpleNamespace(
+            distance=0.8,
+            title="covid-19",
+            content="đau nhức cơ thể",
+            section_type="symptom",
+            source="admin_url",
+            metadata={
+                "canonical_title": "covid-19",
+                "section": "symptom",
+                "url": "https://example.test/covid",
+            },
+        )
+        top_rank_doc = SimpleNamespace(
+            distance=0.1,
+            title="vẹo cột sống",
+            content="đau lưng âm ỉ",
+            section_type="symptom",
+            source="admin_url",
+            metadata={
+                "canonical_title": "vẹo cột sống",
+                "section": "symptom",
+                "url": "https://example.test/scoliosis",
+            },
+        )
+        service.vector_manager.search_similar.side_effect = [
+            [low_rank_doc, top_rank_doc],
+            [],
+            [],
+            [],
+        ]
+
+        result = ChatbotService._multi_disease_retrieval(
+            service,
+            analysis={
+                "q_cleaned": "tôi bị đau lưng",
+                "q_symptom": "đau lưng",
+                "positives": {"SYMPTOM": ["đau lưng"], "ETIOLOGY": [], "RISK": []},
+                "negatives": {"SYMPTOM": []},
+            },
+        )
+
+        self.assertEqual(
+            [candidate["title"] for candidate in result["candidates"]],
+            ["vẹo cột sống", "covid-19"],
+        )
+        self.assertEqual(
+            [doc.metadata["title"] for doc in result["evidence_docs"]],
+            ["vẹo cột sống", "covid-19"],
+        )
+        self.assertEqual(
+            [candidate["source_urls"] for candidate in result["candidates"]],
+            [["https://example.test/scoliosis"], ["https://example.test/covid"]],
+        )
+        self.assertEqual(
+            result["source_urls"],
+            ["https://example.test/scoliosis", "https://example.test/covid"],
+        )
+
 
 class IntakeRoutingTests(SimpleTestCase):
     def _service_with_intake(self) -> ChatbotService:

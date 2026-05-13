@@ -334,6 +334,100 @@ def process_article_url_embed(
     bind=True,
     max_retries=2,
     default_retry_delay=60,
+    soft_time_limit=20 * 60,
+    time_limit=25 * 60,
+)
+def process_article_paste_embed(
+    self,
+    title: str,
+    content: str,
+    source_url: str = "",
+    embedding_provider: str | None = None,
+    source: str = "admin_paste",
+    user_id: int | None = None,
+    job_id: int | None = None,
+):
+    """Extract pasted disease article text via LLM and embed into A/B/C indexes."""
+    job = None
+    if job_id is not None:
+        from chatbot.models import EmbeddingJob
+
+        job = EmbeddingJob.objects.filter(id=job_id).first()
+        if job:
+            job.status = EmbeddingJobStatus.PROCESSING
+            job.save(update_fields=["status"])
+
+    try:
+        from vector_store.services.article_ingestion_service import (
+            ArticleIngestionService,
+        )
+
+        resolved_provider = EmbeddingService.resolve_provider(embedding_provider)
+        service = ArticleIngestionService(embedding_provider=resolved_provider)
+        result = service.ingest_from_text(
+            title=title,
+            text=content,
+            source_url=source_url,
+            source=source,
+            ingestion_job_id=job_id,
+        )
+
+        if job:
+            total = int(result.get("total", 0))
+            job.status = EmbeddingJobStatus.COMPLETED
+            job.total_documents = total
+            job.successful_documents = total
+            job.failed_documents = 0
+            job.completed_at = datetime.now(timezone.utc)
+            job.notes = (
+                f"title={title}, source_url={source_url}, "
+                f"index_c={result.get('index_c', 0)}, "
+                f"index_a={result.get('index_a', 0)}, "
+                f"index_b={result.get('index_b', 0)}"
+            )
+            job.save(
+                update_fields=[
+                    "status",
+                    "total_documents",
+                    "successful_documents",
+                    "failed_documents",
+                    "completed_at",
+                    "notes",
+                ]
+            )
+
+        return {
+            "status": "success",
+            "message": "Pasted content embedding completed",
+            **result,
+        }
+    except Exception as exc:
+        logger.error(
+            "Error processing pasted article embedding for %s: %s",
+            title,
+            exc,
+            exc_info=True,
+        )
+        if job:
+            job.status = EmbeddingJobStatus.FAILED
+            job.error_messages = [str(exc)]
+            job.completed_at = datetime.now(timezone.utc)
+            job.save(update_fields=["status", "error_messages", "completed_at"])
+
+        if self.request.retries < self.max_retries:
+            raise self.retry(exc=exc)
+
+        return {
+            "status": "error",
+            "message": f"Failed pasted content embedding: {str(exc)}",
+            "total": 0,
+        }
+
+
+@shared_task(
+    bind=True,
+    max_retries=2,
+    default_retry_delay=60,
     soft_time_limit=4 * 60 * 60 - 300,
     time_limit=4 * 60 * 60,
 )

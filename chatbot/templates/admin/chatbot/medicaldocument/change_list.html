@@ -34,5 +34,10 @@
             {% trans 'Crawl URL & Embed' %}
         </a>
     </li>
+    <li>
+        <a href="{% url 'admin:chatbot_medicaldocument_paste_content' %}" class="addlink">
+            {% trans 'Paste Content & Embed' %}
+        </a>
+    </li>
     {% endif %}
 {% endblock %}

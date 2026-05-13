@@ -75,6 +75,48 @@ class ArticleUrlEmbedForm(forms.Form):
         return raw_url
 
 
+class ArticlePasteEmbedForm(forms.Form):
+    """Form for pasted article text + LLM extraction + embedding."""
+
+    title = forms.CharField(
+        label="Article title",
+        max_length=255,
+        help_text="Paste the article or page title.",
+    )
+    source_url = forms.URLField(
+        label="Source URL",
+        max_length=2048,
+        required=False,
+        help_text="Optional original article URL for source metadata.",
+    )
+    content = forms.CharField(
+        label="Article content",
+        widget=forms.Textarea(attrs={"rows": 18}),
+        help_text="Paste the page text to extract and index into C/A/B collections.",
+    )
+
+    def clean_title(self):
+        title = str(self.cleaned_data.get("title", "")).strip()
+        if not title:
+            raise forms.ValidationError("Article title is required.")
+        return title
+
+    def clean_source_url(self):
+        raw_url = str(self.cleaned_data.get("source_url", "")).strip()
+        if not raw_url:
+            return ""
+        parsed = urlparse(raw_url)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise forms.ValidationError("Only valid http/https URLs are supported.")
+        return raw_url
+
+    def clean_content(self):
+        content = str(self.cleaned_data.get("content", "")).strip()
+        if not content:
+            raise forms.ValidationError("Article content is required.")
+        return content
+
+
 class DocumentEditForm(forms.ModelForm):
     """Form for editing document fields with preview."""
 

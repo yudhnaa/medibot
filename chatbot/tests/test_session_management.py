@@ -105,6 +105,42 @@ class SessionManagementTests(APITestCase):
         self.assertEqual(intake.onset_days, 3)
         self.assertEqual(intake.meds, ["paracetamol"])
 
+    def test_create_session_with_intake_clears_missing_session_fields(self):
+        UserIntake.objects.create(
+            customer=self.user,
+            disease_name="cúm mùa",
+            symptoms=["Fever", "Cough"],
+            symptoms_negated=["khó thở"],
+            age=20,
+            sex="female",
+            pregnancy_status="no",
+            onset_days=4,
+            meds=["paracetamol"],
+        )
+        payload = {
+            "title": "Consultation 5/14/2026",
+            "max_messages": 100,
+            "intake": {
+                "disease_name": "vấn đề sức khỏe khác",
+                "age": 15,
+                "sex": "male",
+                "pregnancy_status": "no",
+            },
+        }
+
+        response = self._post(self.sessions_url, payload, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        intake = UserIntake.objects.get(customer=self.user)
+        self.assertEqual(intake.disease_name, "vấn đề sức khỏe khác")
+        self.assertEqual(intake.symptoms, [])
+        self.assertEqual(intake.symptoms_negated, [])
+        self.assertEqual(intake.age, 15)
+        self.assertEqual(intake.sex, "male")
+        self.assertEqual(intake.pregnancy_status, "no")
+        self.assertIsNone(intake.onset_days)
+        self.assertEqual(intake.meds, [])
+
     def test_invalid_intake_does_not_create_or_deactivate_session(self):
         active_session = ChatSession.objects.create(
             customer=self.user,

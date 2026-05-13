@@ -19,7 +19,7 @@ from vector_store.services.vector_store_manager import VectorStoreManager
 
 logger = logging.getLogger(__name__)
 
-MAX_CRAWL_TEXT_LEN = 30000
+MAX_CRAWL_TEXT_LEN = 9999999999999
 
 PROMPT_EXTRACT_DISEASE_ARTICLE = """\
 You are a medical information extraction engine.
@@ -152,12 +152,15 @@ class ArticleIngestionService:
             "text": page_text,
         }
 
-    def _extract_record_from_crawl(
+    def _extract_record_from_text(
         self,
         *,
         source_url: str,
         page_title: str,
         page_text: str,
+        source_type: str,
+        source_name: str,
+        ingestion_trace: str,
         ingestion_job_id: int | None,
     ) -> dict[str, Any]:
         prompt = PROMPT_EXTRACT_DISEASE_ARTICLE.format(
@@ -173,11 +176,11 @@ class ArticleIngestionService:
         record, errors = normalize_article_record(
             payload,
             source_url=source_url,
-            source_type="url",
-            source_name="admin_url",
+            source_type=source_type,
+            source_name=source_name,
             row_index=None,
             ingestion_job_id=ingestion_job_id,
-            ingestion_trace="url_crawl_llm",
+            ingestion_trace=ingestion_trace,
         )
         if record is None:
             raise ValueError(f"Invalid extracted payload: {errors}")
@@ -192,20 +195,50 @@ class ArticleIngestionService:
     ) -> dict[str, Any]:
         """Run URL crawl -> LLM extraction -> index C/A/B embedding."""
         crawled = self._crawl_url(url)
-        normalized_payload = self._extract_record_from_crawl(
+        return self.ingest_from_text(
+            title=crawled["title"],
+            text=crawled["text"],
             source_url=url,
-            page_title=crawled["title"],
-            page_text=crawled["text"],
+            source=source,
+            source_type="url",
+            ingestion_trace="url_crawl_llm",
+            ingestion_job_id=ingestion_job_id,
+        )
+
+    def ingest_from_text(
+        self,
+        *,
+        title: str,
+        text: str,
+        source_url: str = "",
+        source: str = "admin_paste",
+        source_type: str = "paste",
+        ingestion_trace: str = "paste_llm",
+        ingestion_job_id: int | None = None,
+    ) -> dict[str, Any]:
+        """Run pasted text -> LLM extraction -> index C/A/B embedding."""
+        page_title = title.strip()
+        page_text = text.strip()[:MAX_CRAWL_TEXT_LEN]
+        if not page_text:
+            raise ValueError("No pasted text provided")
+
+        normalized_payload = self._extract_record_from_text(
+            source_url=source_url,
+            page_title=page_title,
+            page_text=page_text,
+            source_type=source_type,
+            source_name=source,
+            ingestion_trace=ingestion_trace,
             ingestion_job_id=ingestion_job_id,
         )
         record, errors = normalize_article_record(
             normalized_payload,
-            source_url=url,
-            source_type="url",
+            source_url=source_url,
+            source_type=source_type,
             source_name=source,
             row_index=None,
             ingestion_job_id=ingestion_job_id,
-            ingestion_trace="url_crawl_llm",
+            ingestion_trace=ingestion_trace,
         )
         if record is None:
             raise ValueError(f"Failed to normalize extracted record: {errors}")
@@ -221,5 +254,5 @@ class ArticleIngestionService:
             "index_a": len(docs_a),
             "index_b": len(docs_b),
             "total": len(created_docs),
-            "source_url": url,
+            "source_url": source_url,
         }

@@ -81,7 +81,20 @@ class ChatSessionViewSet(viewsets.ModelViewSet):
 
     def _save_session_intake(self, user: Any, intake_data: dict[str, Any]) -> None:
         intake, _ = UserIntake.objects.get_or_create(customer=user)
-        serializer = UserIntakeSerializer(intake, data=intake_data, partial=True)
+        session_intake_data = {
+            "disease_name": None,
+            "symptoms": [],
+            "symptoms_negated": [],
+            "onset_days": None,
+            "meds": [],
+            "pregnancy_status": None,
+            **intake_data,
+        }
+        serializer = UserIntakeSerializer(
+            intake,
+            data=session_intake_data,
+            partial=True,
+        )
         if not serializer.is_valid():
             raise serializers.ValidationError({"intake": serializer.errors})
         serializer.save()

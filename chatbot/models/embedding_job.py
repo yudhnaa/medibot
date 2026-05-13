@@ -22,6 +22,7 @@ class EmbeddingJob(models.Model):
         ("change_provider", "Change Embedding Provider"),
         ("csv_upload", "CSV Upload"),
         ("url_ingest", "URL Crawl & Embed"),
+        ("paste_ingest", "Paste Content & Embed"),
     ]
 
     # Tracking

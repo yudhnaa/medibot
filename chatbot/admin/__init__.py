@@ -16,7 +16,7 @@ from chatbot.admin.document_admin import (
     EmbeddingJobAdmin,
     MedicalDocumentAdmin,
 )
-from chatbot.forms import ArticleUrlEmbedForm, CsvUploadForm
+from chatbot.forms import ArticlePasteEmbedForm, ArticleUrlEmbedForm, CsvUploadForm
 from chatbot.models import (
     ChatbotConfig,
     ChatMessage,
@@ -59,6 +59,11 @@ class ExtendedMedicalDocumentAdmin(MedicalDocumentAdmin):
                 "embed-url/",
                 self.admin_site.admin_view(self.embed_url_view),
                 name="chatbot_medicaldocument_embed_url",
+            ),
+            path(
+                "paste-content/",
+                self.admin_site.admin_view(self.paste_content_view),
+                name="chatbot_medicaldocument_paste_content",
             ),
         ]
         return custom_urls + urls
@@ -249,6 +254,92 @@ class ExtendedMedicalDocumentAdmin(MedicalDocumentAdmin):
         return render(
             request,
             "admin/chatbot/medicaldocument/embed_url_form.html",
+            context,
+        )
+
+    def paste_content_view(self, request: HttpRequest):
+        """Trigger pasted content LLM extraction + embedding into C/A/B indexes."""
+        from chatbot.models import EmbeddingJobStatus
+
+        user_obj = cast(Any, request.user)
+        is_superuser = bool(getattr(user_obj, "is_superuser", False))
+        user_pk = getattr(user_obj, "pk", None)
+
+        if not is_superuser:
+            messages.error(
+                request,
+                (
+                    "You do not have permission to run pasted content embedding. "
+                    "Only superusers can perform this action."
+                ),
+            )
+            return redirect("admin:chatbot_medicaldocument_changelist")
+
+        if request.method == "POST":
+            form = ArticlePasteEmbedForm(request.POST)
+            if form.is_valid():
+                from vector_store.services.embedding_service import EmbeddingService
+
+                title = str(form.cleaned_data["title"]).strip()
+                content = str(form.cleaned_data["content"]).strip()
+                source_url = str(form.cleaned_data.get("source_url", "")).strip()
+                embedding_provider = EmbeddingService.resolve_provider()
+
+                job = EmbeddingJob.objects.create(
+                    job_type="paste_ingest",
+                    status=EmbeddingJobStatus.PENDING,
+                    provider=embedding_provider,
+                    created_by=user_obj,
+                    notes=f"Paste ingest request: {title}",
+                )
+
+                try:
+                    from chatbot.tasks import process_article_paste_embed
+
+                    task = process_article_paste_embed.delay(  # pyright: ignore[reportCallIssue]
+                        title=title,
+                        content=content,
+                        source_url=source_url,
+                        embedding_provider=embedding_provider,
+                        source="admin_paste",
+                        user_id=user_pk,
+                        job_id=job.pk,
+                    )
+                    job.celery_task_id = task.id
+                    job.save(update_fields=["celery_task_id"])
+
+                    messages.info(
+                        request,
+                        (
+                            f"Pasted content embedding started (Job #{job.pk}). "
+                            f"title={title}, embedding_provider={embedding_provider}. "
+                            "Check Embedding Jobs for progress."
+                        ),
+                    )
+                except Exception as exc:
+                    job.status = EmbeddingJobStatus.FAILED
+                    job.error_messages = [str(exc)]
+                    job.save(update_fields=["status", "error_messages"])
+                    messages.error(
+                        request,
+                        (
+                            f"Failed to start pasted content embedding: {exc}. "
+                            "Please ensure Celery worker is running."
+                        ),
+                    )
+                return redirect("admin:chatbot_medicaldocument_changelist")
+        else:
+            form = ArticlePasteEmbedForm()
+
+        context = {
+            **self.admin_site.each_context(request),
+            "form": form,
+            "title": "Paste Content & Embed",
+            "opts": self.model._meta,
+        }
+        return render(
+            request,
+            "admin/chatbot/medicaldocument/paste_content_form.html",
             context,
         )
 
