@@ -1,6 +1,7 @@
 from django.conf import settings
 from django.conf.urls.static import static
 from django.contrib import admin
+from django.http import JsonResponse
 from django.urls import include, path, re_path
 
 from rest_framework import permissions
@@ -14,6 +15,10 @@ class ApiDocsPermission(permissions.BasePermission):
         if settings.DEBUG or settings.PUBLIC_API_DOCS:
             return True
         return bool(request.user and request.user.is_staff)
+
+
+def health_check(request):
+    return JsonResponse({"status": "ok"})
 
 
 SchemaView = get_schema_view(
@@ -41,6 +46,7 @@ SchemaView = get_schema_view(
 # urls
 urlpatterns = (
     [
+        path("health/", health_check, name="health-check"),
         re_path(
             r"^swagger(?P<format>\.json|\.yaml)$",
             SchemaView.without_ui(cache_timeout=0),
