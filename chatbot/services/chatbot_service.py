@@ -20,6 +20,9 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.runnables import RunnableLambda, RunnablePassthrough
 
 from chatbot.models import (
+    MEDICAL_DOCUMENTS_CHUNKS_COLLECTION,
+    MEDICAL_DOCUMENTS_DISEASE_COLLECTION,
+    MEDICAL_DOCUMENTS_TITLES_COLLECTION,
     ChatbotConfig,
     ChatMessage,
     ChatSession,
@@ -28,18 +31,18 @@ from chatbot.models import (
 )
 from chatbot.prompts.system_vi import SYSTEM_PROMPT_VI
 from chatbot.services.constants import (
+    DEFAULT_CHUNKS_COLLECTION_K,
     DEFAULT_DOC_PREVIEW_LENGTH,
     DEFAULT_DOCS_CACHE_SIZE,
-    DEFAULT_INDEX_B_K,
-    DEFAULT_RAG_B_TOPK,
+    DEFAULT_RAG_CHUNKS_COLLECTION_TOPK,
     DEFAULT_RAG_FINAL_TITLES,
     DEFAULT_RAG_MERGE_WEIGHT_ENTITIES,
     DEFAULT_RAG_MERGE_WEIGHT_QUERY,
     DEFAULT_RAG_MERGED_LIMIT,
     DEFAULT_RAG_NEG_SYM_SIM_THRESH,
     DEFAULT_RAG_PENALTY_ALPHA,
-    DEFAULT_RAG_THRESH_C,
     DEFAULT_RAG_TITLE_TOP_M,
+    DEFAULT_RAG_TITLES_COLLECTION_THRESHOLD,
     DEFAULT_SECTION_ITEMS_LIMIT,
     DEFAULT_SINGLE_DISEASE_DOCS_K,
     FALLBACK_GREETING_TERMS,
@@ -272,7 +275,15 @@ class ChatbotService:
                 context = self._build_non_retrieval_context(analysis)
             else:
                 q_cleaned = cast(str, analysis.get("q_cleaned", question))
-                gate = await sync_to_async(self._gate_with_index_c)(q_cleaned)
+                disease_mentions = [
+                    str(item).strip().lower()
+                    for item in analysis.get("disease_mentions", [])
+                    if str(item).strip()
+                ]
+                gate = await sync_to_async(self._gate_with_titles_collection)(
+                    q_cleaned,
+                    disease_mentions=disease_mentions,
+                )
                 await sync_to_async(self._log_stage2_gate)(
                     question=question,
                     q_cleaned=q_cleaned,
@@ -282,7 +293,9 @@ class ChatbotService:
                 if gate.get("go_single") and gate.get("title"):
                     title = str(gate.get("title", ""))
                     evidence_docs = await sync_to_async(self._fetch_docs_for_title)(
-                        title, index="B", k=DEFAULT_SINGLE_DISEASE_DOCS_K
+                        title,
+                        collection_name=MEDICAL_DOCUMENTS_CHUNKS_COLLECTION,
+                        k=DEFAULT_SINGLE_DISEASE_DOCS_K,
                     )
                     summaries = await sync_to_async(
                         self._fetch_summary_docs_for_titles
@@ -1056,29 +1069,47 @@ class ChatbotService:
 
         return filtered
 
-    def _gate_with_index_c(
+    def _gate_with_titles_collection(
         self,
         q_cleaned: str,
         threshold: float | None = None,
+        disease_mentions: list[str] | None = None,
     ) -> dict[str, Any]:
-        """Stage 2 title gate using Index C and threshold RAG_THRESH_C."""
+        """Stage 2 title gate using titles collection and threshold RAG_TITLES_COLLECTION_THRESHOLD."""
         fallback_threshold = (
-            threshold if threshold is not None else DEFAULT_RAG_THRESH_C
+            threshold
+            if threshold is not None
+            else DEFAULT_RAG_TITLES_COLLECTION_THRESHOLD
         )
         score_threshold = self._get_config_float(
-            "RAG_THRESH_C",
+            "RAG_TITLES_COLLECTION_THRESHOLD",
             fallback_threshold,
         )
+        disease_query = next(
+            (
+                str(item).strip().lower()
+                for item in disease_mentions or []
+                if str(item).strip()
+            ),
+            "",
+        )
+        search_query = disease_query or q_cleaned
+        mention_threshold = max(0.0, score_threshold - 0.05)
         result: dict[str, Any] = {
             "go_single": False,
             "reason": "no_candidates",
             "top_score": 0.0,
             "title": "",
             "threshold": score_threshold,
+            "query": search_query,
         }
 
         try:
-            docs = self.vector_manager.search_similar(q_cleaned, k=1, index_type="C")
+            docs = self.vector_manager.search_collection(
+                collection_name=MEDICAL_DOCUMENTS_TITLES_COLLECTION,
+                query=search_query,
+                k=1,
+            )
             if not docs:
                 return result
 
@@ -1102,6 +1133,10 @@ class ChatbotService:
             if score >= score_threshold and title:
                 result["go_single"] = True
                 result["reason"] = f"above_{score_threshold}"
+            elif disease_query and score >= mention_threshold and title:
+                result["go_single"] = True
+                result["reason"] = f"disease_mention_above_{mention_threshold:g}"
+                result["threshold"] = mention_threshold
             else:
                 result["reason"] = f"below_{score_threshold}"
         except Exception as ex:
@@ -1117,19 +1152,26 @@ class ChatbotService:
             return 0.0
 
     def _fetch_docs_for_title(
-        self, title: str, index: str = "B", k: int = DEFAULT_INDEX_B_K
+        self,
+        title: str,
+        collection_name: str = MEDICAL_DOCUMENTS_CHUNKS_COLLECTION,
+        k: int = DEFAULT_CHUNKS_COLLECTION_K,
     ) -> list[Document]:
         """Fetch documents for a disease title."""
         try:
             normalized_title = title.strip().lower()
-            docs = self.vector_manager.search_similar(
-                title,
+            docs = self.vector_manager.search_collection(
+                collection_name=collection_name,
+                query=title,
                 k=k,
-                index_type=index,
                 metadata_filters={"canonical_title": normalized_title},
             )
             if not docs:
-                docs = self.vector_manager.search_similar(title, k=k, index_type=index)
+                docs = self.vector_manager.search_collection(
+                    collection_name=collection_name,
+                    query=title,
+                    k=k,
+                )
 
             filtered_docs = [
                 d
@@ -1175,10 +1217,10 @@ class ChatbotService:
             normalized_title = str(title).strip().lower()
             if not normalized_title:
                 continue
-            docs = self.vector_manager.search_similar(
-                q_cleaned or normalized_title,
+            docs = self.vector_manager.search_collection(
+                collection_name=MEDICAL_DOCUMENTS_DISEASE_COLLECTION,
+                query=q_cleaned or normalized_title,
                 k=1,
-                index_type="A",
                 metadata_filters={"canonical_title": normalized_title},
             )
             if not docs:
@@ -1300,7 +1342,7 @@ class ChatbotService:
             return lexical
 
     def _multi_disease_retrieval(self, analysis: dict[str, Any]) -> dict[str, Any]:
-        """Stage 3-6 retrieval: dual Index-B search -> merge -> negation penalty -> Index-A summary."""
+        """Stage 3-6 retrieval: dual chunks collection search -> merge -> negation penalty -> disease summary."""
         try:
             config = self._multi_disease_retrieval_config()
             q_symptom = str(analysis.get("q_symptom", "")).strip()
@@ -1331,7 +1373,9 @@ class ChatbotService:
 
     def _multi_disease_retrieval_config(self) -> dict[str, Any]:
         return {
-            "k": self._get_config_int("RAG_B_TOPK", DEFAULT_RAG_B_TOPK),
+            "k": self._get_config_int(
+                "RAG_CHUNKS_COLLECTION_TOPK", DEFAULT_RAG_CHUNKS_COLLECTION_TOPK
+            ),
             "merged_limit": self._get_config_int(
                 "RAG_MERGED_LIMIT",
                 DEFAULT_RAG_MERGED_LIMIT,
@@ -1367,11 +1411,15 @@ class ChatbotService:
         k: int,
     ) -> tuple[list[Any], list[Any]]:
         composed_state_query = self._compose_query_with_state(q_cleaned)
-        docs_2a = self.vector_manager.search_similar(q_symptom, k=k, index_type="B")
-        docs_2b = self.vector_manager.search_similar(
-            composed_state_query,
+        docs_2a = self.vector_manager.search_collection(
+            collection_name=MEDICAL_DOCUMENTS_CHUNKS_COLLECTION,
+            query=q_symptom,
             k=k,
-            index_type="B",
+        )
+        docs_2b = self.vector_manager.search_collection(
+            collection_name=MEDICAL_DOCUMENTS_CHUNKS_COLLECTION,
+            query=composed_state_query,
+            k=k,
         )
         return docs_2a, docs_2b
 

@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+from typing import Any, cast
 from unittest.mock import patch
 
 from django.test import SimpleTestCase
@@ -32,9 +33,9 @@ class ProcessCsvUploadTaskTests(SimpleTestCase):
             patch("chatbot.tasks.os.path.exists", return_value=True),
             patch("chatbot.tasks.os.remove") as mock_remove,
         ):
-            result = process_csv_upload.run(
+            result = cast(Any, process_csv_upload).run(
                 file_path="/tmp/upload.csv",
-                index_types=["A", "B"],
+                collections=["medical_documents_disease", "medical_documents_chunks"],
                 embedding_provider=None,
                 source="admin_upload",
                 user_id=7,
@@ -43,6 +44,10 @@ class ProcessCsvUploadTaskTests(SimpleTestCase):
 
         self.assertEqual(result["status"], "success")
         self.assertEqual(result["count"], 1)
-        self.assertEqual(result["reports"]["A"]["success_rows"], 1)
-        self.assertEqual(result["reports"]["B"]["failed_rows"], 1)
+        self.assertEqual(
+            result["reports"]["medical_documents_disease"]["success_rows"], 1
+        )
+        self.assertEqual(
+            result["reports"]["medical_documents_chunks"]["failed_rows"], 1
+        )
         mock_remove.assert_called_once_with("/tmp/upload.csv")

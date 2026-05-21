@@ -83,7 +83,7 @@
 {% block breadcrumbs %}
 <div class="breadcrumbs">
     <a href="{% url 'admin:index' %}">{% trans 'Home' %}</a>
-    &rsaquo; <a href="{% url 'admin:chatbot_medicaldocument_changelist' %}">{% trans 'Medical Documents' %}</a>
+    &rsaquo; <a href="{% url 'admin:chatbot_medicaldocumentchunk_changelist' %}">{% trans 'Medical Documents' %}</a>
     &rsaquo; {% trans 'Upload CSV' %}
 </div>
 {% endblock %}
@@ -136,7 +136,7 @@
 
         <div class="submit-row">
             <input type="submit" value="{% trans 'Upload and Process' %}" />
-            <a href="{% url 'admin:chatbot_medicaldocument_changelist' %}">{% trans 'Cancel' %}</a>
+            <a href="{% url 'admin:chatbot_medicaldocumentchunk_changelist' %}">{% trans 'Cancel' %}</a>
         </div>
     </form>
 </div>

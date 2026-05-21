@@ -8,7 +8,7 @@ from typing import Any, cast
 from langchain_core.documents import Document
 from langchain_core.prompts import ChatPromptTemplate
 
-from chatbot.models import ChatbotConfig
+from chatbot.models import MEDICAL_DOCUMENTS_CHUNKS_COLLECTION, ChatbotConfig
 from chatbot.prompts.system_benchmark import SYSTEM_PROMPT_BENCHMARK
 from chatbot.services.chatbot_service import ChatbotService
 from chatbot.services.constants import (
@@ -70,7 +70,7 @@ class ChatbotBenchmarkService(ChatbotService):
 
             q_cleaned = str(analysis.get("q_cleaned", question)).strip() or question
             stage_started_at = time.perf_counter()
-            gate = self._gate_with_index_c(q_cleaned)
+            gate = self._gate_with_titles_collection(q_cleaned)
             timings_ms["gate_latency"] = int(
                 (time.perf_counter() - stage_started_at) * 1000
             )
@@ -85,7 +85,7 @@ class ChatbotBenchmarkService(ChatbotService):
                 )
                 evidence_docs = self._fetch_docs_for_title(
                     title,
-                    index="B",
+                    collection_name=MEDICAL_DOCUMENTS_CHUNKS_COLLECTION,
                     k=benchmark_single_docs_k,
                 )
                 context_docs, rerank_meta = self._rerank_benchmark_evidence(

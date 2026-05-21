@@ -145,7 +145,7 @@ EXTRACTION_DATASET_OUTPUT_PATH = os.path.join(
     "covid_qa_extraction_dataset.json",
 )
 
-# Source tag used to mark documents in MedicalDocument table
+# Source tag used to mark documents in medical document collections
 DOCUMENT_SOURCE_TAG: str = "covid_qa_deepset"
 
 # =============================================================================

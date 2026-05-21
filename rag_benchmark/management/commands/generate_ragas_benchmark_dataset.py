@@ -66,9 +66,9 @@ class Command(BaseCommand):
             help="Optional generation context prompt for ragas",
         )
         parser.add_argument(
-            "--index-types",
-            default="A,B,C",
-            help="Comma-separated medical_document index types to use (A,B,C)",
+            "--collections",
+            default="medical_documents_chunks",
+            help="Comma-separated physical collection names to use",
         )
         parser.add_argument(
             "--min-document-words",
@@ -94,9 +94,9 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args, **options):
-        index_types = [
-            item.strip().upper()
-            for item in str(options["index_types"]).split(",")
+        collections = [
+            item.strip()
+            for item in str(options["collections"]).split(",")
             if item.strip()
         ]
         generator = RagasBenchmarkDatasetGenerator()
@@ -112,7 +112,7 @@ class Command(BaseCommand):
                 llm_model=str(options["llm_model"]).strip() or None,
                 embedding_model=str(options["embedding_model"]).strip() or None,
                 llm_context=str(options["llm_context"]),
-                index_types=index_types,
+                collections=collections,
                 min_document_words=int(options["min_document_words"]),
             )
         except Exception as exc:

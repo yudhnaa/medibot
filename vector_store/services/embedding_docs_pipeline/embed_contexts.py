@@ -40,7 +40,7 @@ def embed_contexts(
 def build_csv_documents(
     csv_path: str,
     source: str,
-    index_type: str = "B",
+    collection_name: str,
     provider: str | None = None,
 ) -> list[dict[str, object]]:
     """Build document dictionaries from a CSV file."""
@@ -48,7 +48,7 @@ def build_csv_documents(
     return pipeline.build_documents_from_csv(
         csv_path=csv_path,
         source=source,
-        index_type=index_type,
+        collection_name=collection_name,
     )
 
 

@@ -85,7 +85,7 @@
 {% block breadcrumbs %}
 <div class="breadcrumbs">
     <a href="{% url 'admin:index' %}">{% trans 'Home' %}</a>
-    &rsaquo; <a href="{% url 'admin:chatbot_medicaldocument_changelist' %}">{% trans 'Medical Documents' %}</a>
+    &rsaquo; <a href="{% url 'admin:chatbot_medicaldocumentchunk_changelist' %}">{% trans 'Medical Documents' %}</a>
     &rsaquo; {% trans 'Paste Content & Embed' %}
 </div>
 {% endblock %}
@@ -99,7 +99,7 @@
         <ul>
             <li>{% trans "Paste a disease article title and page content." %}</li>
             <li>{% trans "Optionally provide the original URL for source metadata." %}</li>
-            <li>{% trans "System will ask LLM to extract structured fields, then embed into C/A/B collections." %}</li>
+            <li>{% trans "System will ask LLM to extract structured fields, then embed into medical document collections." %}</li>
             <li>{% trans "The job runs in background via Celery." %}</li>
             <li>{% trans "Ensure Celery worker is running." %}</li>
         </ul>
@@ -133,7 +133,7 @@
 
         <div class="submit-row">
             <input type="submit" value="{% trans 'Start Paste & Embed' %}" />
-            <a href="{% url 'admin:chatbot_medicaldocument_changelist' %}">{% trans 'Cancel' %}</a>
+            <a href="{% url 'admin:chatbot_medicaldocumentchunk_changelist' %}">{% trans 'Cancel' %}</a>
         </div>
     </form>
 </div>

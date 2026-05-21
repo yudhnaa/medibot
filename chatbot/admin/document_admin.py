@@ -21,20 +21,22 @@ from chatbot.forms import (
     VectorSearchForm,
 )
 from chatbot.models import (
+    MEDICAL_DOCUMENTS_CHUNKS_COLLECTION,
     EmbeddingAuditLog,
     EmbeddingJob,
     EmbeddingJobStatus,
-    MedicalDocument,
+    MedicalVectorDocument,
+    get_collection_model,
+    iter_collection_models,
 )
 
 
-class MedicalDocumentAdmin(admin.ModelAdmin):
-    """Enhanced admin for MedicalDocument with CRUD, bulk actions, and vector search."""
+class MedicalVectorDocumentAdmin(admin.ModelAdmin):
+    """Enhanced admin for collection-backed medical documents."""
 
     list_display = [
         "title_short",
         "section_type",
-        "index_type",
         "embedding_status",
         "embedding_provider",
         "last_reembedded_at",
@@ -43,7 +45,6 @@ class MedicalDocumentAdmin(admin.ModelAdmin):
     ]
     list_filter = [
         "section_type",
-        "index_type",
         "embedding_provider",
         "created_at",
     ]
@@ -60,7 +61,7 @@ class MedicalDocumentAdmin(admin.ModelAdmin):
     ]
     fieldsets = (
         ("Document", {"fields": ("title", "content", "source")}),
-        ("Classification", {"fields": ("section_type", "index_type")}),
+        ("Classification", {"fields": ("section_type",)}),
         ("Metadata", {"fields": ("metadata",)}),
         (
             "Embedding",
@@ -99,27 +100,27 @@ class MedicalDocumentAdmin(admin.ModelAdmin):
             path(
                 "vector-search/",
                 self.admin_site.admin_view(self.vector_search_view),
-                name="chatbot_medicaldocument_vector_search",
+                name="chatbot_medicaldocumentchunk_vector_search",
             ),
             path(
                 "quality-check/",
                 self.admin_site.admin_view(self.quality_check_view),
-                name="chatbot_medicaldocument_quality_check",
+                name="chatbot_medicaldocumentchunk_quality_check",
             ),
             path(
                 "reembed-manager/",
                 self.admin_site.admin_view(self.reembed_manager_view),
-                name="chatbot_medicaldocument_reembed_manager",
+                name="chatbot_medicaldocumentchunk_reembed_manager",
             ),
             path(
                 "api/search-similar/",
                 self.admin_site.admin_view(self.api_search_similar),
-                name="chatbot_medicaldocument_api_search_similar",
+                name="chatbot_medicaldocumentchunk_api_search_similar",
             ),
             path(
                 "dashboard/",
                 self.admin_site.admin_view(self.dashboard_view),
-                name="chatbot_medicaldocument_dashboard",
+                name="chatbot_medicaldocumentchunk_dashboard",
             ),
         ]
         return custom_urls + urls
@@ -127,12 +128,12 @@ class MedicalDocumentAdmin(admin.ModelAdmin):
     # ========== List Display Methods ==========
 
     @admin.display(description="Title")
-    def title_short(self, obj: MedicalDocument) -> str:
+    def title_short(self, obj: MedicalVectorDocument) -> str:
         """Display shortened title."""
         return obj.title[:50] + "..." if len(obj.title) > 50 else obj.title
 
     @admin.display(description="Embedding")
-    def embedding_status(self, obj: MedicalDocument) -> str:
+    def embedding_status(self, obj: MedicalVectorDocument) -> str:
         """Display embedding status as colored badge."""
         if not obj.has_embedding:
             return "Missing"
@@ -141,24 +142,24 @@ class MedicalDocumentAdmin(admin.ModelAdmin):
     # ========== Readonly Fields Methods ==========
 
     @admin.display(description="Embedding Dimension")
-    def embedding_dimension(self, obj: MedicalDocument) -> str:
+    def embedding_dimension(self, obj: MedicalVectorDocument) -> str:
         """Show embedding dimension."""
         return f"{obj.embedding_dimension} dims" if obj.has_embedding else "N/A"
 
     @admin.display(description="Embedding Norm")
-    def embedding_norm(self, obj: MedicalDocument) -> str:
+    def embedding_norm(self, obj: MedicalVectorDocument) -> str:
         """Show embedding norm."""
         if obj.embedding_norm is None:
             return "N/A"
         return f"{obj.embedding_norm:.4f}"
 
     @admin.display(description="Has Embedding")
-    def has_embedding(self, obj: MedicalDocument) -> str:
+    def has_embedding(self, obj: MedicalVectorDocument) -> str:
         """Show if document has embedding."""
         return "Yes" if obj.has_embedding else "No"
 
     @admin.display(description="Embedding Preview (first 10 values)")
-    def embedding_preview(self, obj: MedicalDocument) -> str:
+    def embedding_preview(self, obj: MedicalVectorDocument) -> str:
         """Show first 10 embedding values."""
         if not obj.has_embedding:
             return "No embedding available"
@@ -186,7 +187,8 @@ class MedicalDocumentAdmin(admin.ModelAdmin):
             EmbeddingAuditLog.objects.create(
                 user=request.user,
                 action="delete",
-                document=doc,
+                collection_name=doc.collection_name,
+                document_id=doc.pk,
                 notes="Bulk deleted via admin",
             )
 
@@ -205,7 +207,7 @@ class MedicalDocumentAdmin(admin.ModelAdmin):
                     "title": doc.title,
                     "content": doc.content,
                     "section_type": doc.section_type,
-                    "index_type": doc.index_type,
+                    "collection_name": doc.collection_name,
                     "source": doc.source,
                     "embedding_provider": doc.embedding_provider,
                     "metadata": doc.metadata,
@@ -232,7 +234,7 @@ class MedicalDocumentAdmin(admin.ModelAdmin):
                 "ID",
                 "Title",
                 "Section Type",
-                "Index Type",
+                "Collection",
                 "Source",
                 "Provider",
                 "Has Embedding",
@@ -248,7 +250,7 @@ class MedicalDocumentAdmin(admin.ModelAdmin):
                     doc_id,
                     doc.title,
                     doc.section_type,
-                    doc.index_type,
+                    doc.collection_name,
                     doc.source,
                     doc.embedding_provider,
                     "Yes" if doc.has_embedding else "No",
@@ -319,13 +321,12 @@ class MedicalDocumentAdmin(admin.ModelAdmin):
         k: int,
         section_types: list[str] | None,
     ) -> list[Any]:
-        if not section_types:
-            return list(manager.search_similar(query=query_text, k=k))
-
         raw_results = []
-        for section in section_types:
+        target_sections = section_types or [None]
+        for section in target_sections:
             raw_results.extend(
-                manager.search_similar(
+                manager.search_collection(
+                    collection_name=MEDICAL_DOCUMENTS_CHUNKS_COLLECTION,
                     query=query_text,
                     k=k,
                     section_type=section,
@@ -367,7 +368,7 @@ class MedicalDocumentAdmin(admin.ModelAdmin):
             "title": doc.title,
             "content": doc.content,
             "section_type": doc.section_type,
-            "index_type": doc.index_type,
+            "collection_name": doc.collection_name,
             "embedding_provider": doc.embedding_provider,
             "similarity": similarity,
         }
@@ -382,10 +383,13 @@ class MedicalDocumentAdmin(admin.ModelAdmin):
         report = QualityService.get_quality_report(page=page)
 
         stats = {
-            "total_documents": MedicalDocument.objects.count(),
-            "with_embeddings": MedicalDocument.objects.filter(
-                embedding__isnull=False
-            ).count(),
+            "total_documents": sum(
+                model.objects.count() for _, model in iter_collection_models()
+            ),
+            "with_embeddings": sum(
+                model.objects.filter(embedding__isnull=False).count()
+                for _, model in iter_collection_models()
+            ),
             "missing_embeddings": report["missing_embeddings"]["total"],
             "duplicate_groups": report["duplicate_embeddings"]["count"],
         }
@@ -445,7 +449,9 @@ class MedicalDocumentAdmin(admin.ModelAdmin):
                     if run_async:
                         from chatbot.tasks import process_reembedding_job
 
-                        task = process_reembedding_job.delay(job.pk)
+                        task = process_reembedding_job.delay(  # pyright: ignore[reportCallIssue]
+                            job.pk
+                        )
                         job.celery_task_id = task.id
                         job.save(update_fields=["celery_task_id"])
                         messages.success(
@@ -490,28 +496,34 @@ class MedicalDocumentAdmin(admin.ModelAdmin):
             },
         )
 
+    def _aggregate_counts(self, field_name: str) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        for _, model in iter_collection_models():
+            rows = (
+                model.objects.values(field_name)
+                .annotate(count=Count("id"))
+                .values_list(field_name, "count")
+            )
+            for value, count in rows:
+                key = str(value or "")
+                counts[key] = counts.get(key, 0) + int(count)
+        return counts
+
     def dashboard_view(self, request: HttpRequest) -> HttpResponse:
         """Main embedding dashboard."""
         stats = {
-            "total_documents": MedicalDocument.objects.count(),
-            "with_embeddings": MedicalDocument.objects.filter(
-                embedding__isnull=False
-            ).count(),
-            "by_section": dict(
-                MedicalDocument.objects.values("section_type")
-                .annotate(count=Count("id"))
-                .values_list("section_type", "count")
+            "total_documents": sum(
+                model.objects.count() for _, model in iter_collection_models()
             ),
-            "by_index": dict(
-                MedicalDocument.objects.values("index_type")
-                .annotate(count=Count("id"))
-                .values_list("index_type", "count")
+            "with_embeddings": sum(
+                model.objects.filter(embedding__isnull=False).count()
+                for _, model in iter_collection_models()
             ),
-            "by_provider": dict(
-                MedicalDocument.objects.values("embedding_provider")
-                .annotate(count=Count("id"))
-                .values_list("embedding_provider", "count")
-            ),
+            "by_collection": {
+                collection_name: model.objects.count()
+                for collection_name, model in iter_collection_models()
+            },
+            "by_provider": self._aggregate_counts("embedding_provider"),
         }
 
         if stats["total_documents"] > 0:
@@ -548,7 +560,8 @@ class MedicalDocumentAdmin(admin.ModelAdmin):
             from vector_store.services.vector_store_manager import VectorStoreManager
 
             manager = VectorStoreManager()
-            docs = manager.search_similar(
+            docs = manager.search_collection(
+                collection_name=MEDICAL_DOCUMENTS_CHUNKS_COLLECTION,
                 query=query_text,
                 k=k,
                 section_type=section_type,
@@ -564,7 +577,7 @@ class MedicalDocumentAdmin(admin.ModelAdmin):
                         "id": doc_id,
                         "title": doc.title,
                         "section_type": doc.section_type,
-                        "index_type": doc.index_type,
+                        "collection_name": doc.collection_name,
                         "similarity": max(0.0, 1.0 - distance),
                     }
                 )
@@ -685,7 +698,7 @@ class EmbeddingAuditLogAdmin(admin.ModelAdmin):
 
     list_display = ["timestamp", "user", "action_display", "document_title", "job_link"]
     list_filter = ["action", "timestamp", "user"]
-    search_fields = ["document__title", "user__username", "notes"]
+    search_fields = ["collection_name", "document_id", "user__username", "notes"]
     readonly_fields = ["timestamp", "changes_json"]
 
     @admin.display(description="Action")
@@ -696,9 +709,18 @@ class EmbeddingAuditLogAdmin(admin.ModelAdmin):
 
     @admin.display(description="Document")
     def document_title(self, obj: EmbeddingAuditLog) -> str:
-        if obj.document:
-            return obj.document.title[:50]
-        return "-"
+        if obj.document_id is None or not obj.collection_name:
+            return "-"
+
+        try:
+            model = get_collection_model(obj.collection_name)
+        except ValueError:
+            return f"Document #{obj.document_id}"
+
+        document = model.objects.filter(pk=obj.document_id).only("title").first()
+        if document is None:
+            return f"Missing document #{obj.document_id}"
+        return document.title[:50]
 
     @admin.display(description="Job")
     def job_link(self, obj: EmbeddingAuditLog) -> str:

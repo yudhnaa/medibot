@@ -8,13 +8,13 @@ from django.http import HttpRequest
 from django.shortcuts import redirect, render
 from django.urls import path
 
-from chatbot.admin.document_admin import MedicalDocumentAdmin
+from chatbot.admin.document_admin import MedicalVectorDocumentAdmin
 from chatbot.forms import CsvUploadForm
 from chatbot.models import (
     ChatbotConfig,
     ChatMessage,
     ChatSession,
-    MedicalDocument,
+    MedicalDocumentChunk,
     UserPreference,
 )
 
@@ -33,10 +33,8 @@ class ChatMessageAdmin(admin.ModelAdmin):
     list_filter = ["role", "created_at"]
 
 
-# MedicalDocumentAdmin, EmbeddingJobAdmin, EmbeddingAuditLogAdmin imported from document_admin module
-# BUT we need to extend MedicalDocumentAdmin here to add CSV upload functionality
-class ExtendedMedicalDocumentAdmin(MedicalDocumentAdmin):
-    """MedicalDocumentAdmin extended with CSV upload."""
+class ExtendedMedicalDocumentAdmin(MedicalVectorDocumentAdmin):
+    """Medical document chunk admin extended with CSV upload."""
 
     @override
     def get_urls(self):
@@ -46,7 +44,7 @@ class ExtendedMedicalDocumentAdmin(MedicalDocumentAdmin):
             path(
                 "upload-csv/",
                 self.admin_site.admin_view(self.upload_csv_view),
-                name="chatbot_medicaldocument_upload_csv",
+                name="chatbot_medicaldocumentchunk_upload_csv",
             ),
         ]
         return custom_urls + urls
@@ -69,7 +67,7 @@ class ExtendedMedicalDocumentAdmin(MedicalDocumentAdmin):
                     "Only superusers can perform this action."
                 ),
             )
-            return redirect("admin:chatbot_medicaldocument_changelist")
+            return redirect("admin:chatbot_medicaldocumentchunk_changelist")
 
         if request.method == "POST":
             form = CsvUploadForm(request.POST, request.FILES)
@@ -78,7 +76,7 @@ class ExtendedMedicalDocumentAdmin(MedicalDocumentAdmin):
 
                 # Get form data
                 csv_file = form.cleaned_data["csv_file"]
-                index_types = form.cleaned_data["index_types"]  # Now returns a list
+                collections = form.cleaned_data["collections"]
                 embedding_provider = EmbeddingService.resolve_provider()
 
                 # Save file to temporary location using absolute path
@@ -110,7 +108,7 @@ class ExtendedMedicalDocumentAdmin(MedicalDocumentAdmin):
 
                     task = process_csv_upload.delay(  # pyright: ignore[reportCallIssue]
                         file_path=file_path,
-                        index_types=list(index_types),
+                        collections=list(collections),
                         source="admin_upload",
                         user_id=user.pk,
                         job_id=job_obj.pk,
@@ -119,13 +117,13 @@ class ExtendedMedicalDocumentAdmin(MedicalDocumentAdmin):
                     job.celery_task_id = task.id
                     job.save()
 
-                    index_types_str = ", ".join(index_types)
+                    collections_str = ", ".join(collections)
                     messages.info(
                         request,
                         (
                             f"CSV upload started in background (Job #{job_obj.pk}). "
                             f"Processing {csv_file.name} with {embedding_provider} provider "
-                            f"for index types: {index_types_str}. "
+                            f"for collections: {collections_str}. "
                             f"This may take several minutes. Check Embedding Jobs for progress."
                         ),
                     )
@@ -141,7 +139,7 @@ class ExtendedMedicalDocumentAdmin(MedicalDocumentAdmin):
                         ),
                     )
 
-                return redirect("admin:chatbot_medicaldocument_changelist")
+                return redirect("admin:chatbot_medicaldocumentchunk_changelist")
         else:
             form = CsvUploadForm()
 
@@ -160,8 +158,8 @@ class ExtendedMedicalDocumentAdmin(MedicalDocumentAdmin):
 
 
 # Unregister the base MedicalDocumentAdmin and register extended version
-admin.site.unregister(MedicalDocument)
-admin.site.register(MedicalDocument, ExtendedMedicalDocumentAdmin)
+admin.site.unregister(MedicalDocumentChunk)
+admin.site.register(MedicalDocumentChunk, ExtendedMedicalDocumentAdmin)
 
 
 @admin.register(ChatbotConfig)

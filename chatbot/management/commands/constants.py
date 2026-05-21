@@ -7,8 +7,8 @@ These are used by the seed_config management command.
 # RAG Pipeline Configuration
 # =============================================================================
 DEFAULT_RAG_CONFIG: dict[str, float | int] = {
-    "RAG_THRESH_C": 0.65,
-    "RAG_B_TOPK": 20,
+    "RAG_TITLES_COLLECTION_THRESHOLD": 0.65,
+    "RAG_CHUNKS_COLLECTION_TOPK": 20,
     "RAG_MERGED_LIMIT": 40,
     "RAG_TITLE_TOP_M": 5,
     "RAG_NEG_SYM_SIM_THRESH": 0.75,

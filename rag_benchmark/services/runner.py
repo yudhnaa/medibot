@@ -7,10 +7,10 @@ from typing import Any, cast
 
 from django.contrib.auth import get_user_model
 from django.db import transaction
-from django.db.models import Count, Max
+from django.db.models import Max
 from django.utils import timezone
 
-from chatbot.models import ChatbotConfig, ChatSession, MedicalDocument
+from chatbot.models import ChatbotConfig, ChatSession, iter_collection_models
 from chatbot.services.chatbot_benchmark_service import ChatbotBenchmarkService
 from rag_benchmark.models import (
     BenchmarkCase,
@@ -595,8 +595,8 @@ class OfflineBenchmarkRunner:
     def _build_config_snapshot(self) -> dict[str, Any]:
         snapshot: dict[str, Any] = {}
         keys = (
-            "RAG_THRESH_C",
-            "RAG_B_TOPK",
+            "RAG_TITLES_COLLECTION_THRESHOLD",
+            "RAG_CHUNKS_COLLECTION_TOPK",
             "RAG_TITLE_TOP_M",
             "RAG_FINAL_TITLES",
             "RAG_PENALTY_ALPHA",
@@ -611,28 +611,30 @@ class OfflineBenchmarkRunner:
         return snapshot
 
     def _build_corpus_signature(self) -> tuple[str, dict[str, Any]]:
-        index_counts = {
-            row["index_type"]: int(row["total"])
-            for row in MedicalDocument.objects.values("index_type").annotate(
-                total=Count("id")
+        collection_counts = {}
+        latest_updated = None
+        latest_reembedded = None
+        for collection_name, model in iter_collection_models():
+            collection_counts[collection_name] = model.objects.count()
+            latest = model.objects.aggregate(
+                latest_updated=Max("updated_at"),
+                latest_reembedded=Max("last_reembedded_at"),
             )
-        }
-        latest = MedicalDocument.objects.aggregate(
-            latest_updated=Max("updated_at"),
-            latest_reembedded=Max("last_reembedded_at"),
-        )
+            if latest.get("latest_updated") is not None and (
+                latest_updated is None or latest["latest_updated"] > latest_updated
+            ):
+                latest_updated = latest["latest_updated"]
+            if latest.get("latest_reembedded") is not None and (
+                latest_reembedded is None
+                or latest["latest_reembedded"] > latest_reembedded
+            ):
+                latest_reembedded = latest["latest_reembedded"]
         payload = {
-            "index_counts": index_counts,
+            "collection_counts": collection_counts,
             "embedding_provider": str(EmbeddingService.resolve_provider()),
-            "latest_updated": (
-                latest["latest_updated"].isoformat()
-                if latest.get("latest_updated") is not None
-                else ""
-            ),
+            "latest_updated": latest_updated.isoformat() if latest_updated else "",
             "latest_reembedded": (
-                latest["latest_reembedded"].isoformat()
-                if latest.get("latest_reembedded") is not None
-                else ""
+                latest_reembedded.isoformat() if latest_reembedded else ""
             ),
         }
         digest = hashlib.sha256(

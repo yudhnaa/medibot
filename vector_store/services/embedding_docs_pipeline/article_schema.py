@@ -1,4 +1,4 @@
-"""Schema helpers for disease article ingestion and index document building."""
+"""Schema helpers for disease article ingestion and collection document building."""
 
 from __future__ import annotations
 
@@ -8,7 +8,12 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
-from chatbot.models import IndexType, SectionType
+from chatbot.models import (
+    MEDICAL_DOCUMENTS_CHUNKS_COLLECTION,
+    MEDICAL_DOCUMENTS_DISEASE_COLLECTION,
+    MEDICAL_DOCUMENTS_TITLES_COLLECTION,
+    SectionType,
+)
 
 SECTION_KEYS: tuple[str, ...] = (
     "general",
@@ -38,11 +43,11 @@ SECTION_TYPE_MAP: dict[str, str] = {
     "living_and_preventive": SectionType.LIVING_AND_PREVENTIVE,
 }
 
-COLLECTION_NAME_BY_INDEX: dict[str, str] = {
-    IndexType.C: "medical_documents_titles",
-    IndexType.A: "medical_documents_disease",
-    IndexType.B: "medical_documents_chunks",
-}
+COLLECTIONS_BY_BUILD_ORDER: tuple[str, ...] = (
+    MEDICAL_DOCUMENTS_TITLES_COLLECTION,
+    MEDICAL_DOCUMENTS_DISEASE_COLLECTION,
+    MEDICAL_DOCUMENTS_CHUNKS_COLLECTION,
+)
 
 
 def _clean_text(value: Any) -> str:
@@ -112,6 +117,7 @@ class DiseaseArticleRecord:
 
     title: str
     general: str
+    aliases: list[str] = field(default_factory=list)
     symptom: list[str] = field(default_factory=list)
     aetiologies: list[str] = field(default_factory=list)
     risk: list[str] = field(default_factory=list)
@@ -129,10 +135,23 @@ class DiseaseArticleRecord:
     def canonical_title(self) -> str:
         return _clean_text(self.title).lower()
 
+    @property
+    def title_aliases(self) -> list[str]:
+        aliases = [self.title, self.canonical_title]
+        aliases.extend(parse_list_items(getattr(self, "aliases", [])))
+        return _dedupe_keep_order(
+            [alias.lower() for alias in aliases if _clean_text(alias)]
+        )
+
+    @property
+    def title_search_text(self) -> str:
+        return " | ".join(self.title_aliases)
+
     def to_payload(self) -> dict[str, Any]:
         return {
             "title": self.title,
             "general": self.general,
+            "aliases": list(self.aliases),
             "symptom": list(self.symptom),
             "aetiologies": list(self.aetiologies),
             "risk": list(self.risk),
@@ -183,51 +202,46 @@ class DiseaseArticleRecord:
 
         return "\n".join(line for line in lines if _clean_text(line))
 
-    def build_index_documents(self, index_type: str) -> list[dict[str, Any]]:
-        """Build index-ready document dicts for A/B/C from one article record."""
+    def build_collection_documents(self, collection_name: str) -> list[dict[str, Any]]:
+        """Build collection-ready document dicts from one article record."""
         base_metadata = self._base_metadata()
-        collection_name = COLLECTION_NAME_BY_INDEX.get(index_type, "")
 
-        if index_type == IndexType.C:
+        if collection_name == MEDICAL_DOCUMENTS_TITLES_COLLECTION:
             metadata = dict(base_metadata)
             metadata.update(
                 {
                     "collection": collection_name,
                     "section": "title",
+                    "title_aliases": self.title_aliases,
                 }
             )
             return [
                 {
                     "title": self.canonical_title,
-                    "content": self.canonical_title,
+                    "content": self.title_search_text,
                     "section_type": SectionType.GENERAL,
-                    "index_type": IndexType.C,
+                    "collection_name": collection_name,
                     "source": self.source_name or self.source_type,
                     "metadata": metadata,
                 }
             ]
 
-        if index_type == IndexType.A:
+        if collection_name == MEDICAL_DOCUMENTS_DISEASE_COLLECTION:
             summary_content = self._build_summary_text().lower()
             metadata = dict(base_metadata)
-            metadata.update(
-                {
-                    "collection": collection_name,
-                    "section": "summary",
-                }
-            )
+            metadata.update({"collection": collection_name, "section": "summary"})
             return [
                 {
                     "title": self.canonical_title,
                     "content": summary_content,
                     "section_type": SectionType.GENERAL,
-                    "index_type": IndexType.A,
+                    "collection_name": collection_name,
                     "source": self.source_name or self.source_type,
                     "metadata": metadata,
                 }
             ]
 
-        if index_type == IndexType.B:
+        if collection_name == MEDICAL_DOCUMENTS_CHUNKS_COLLECTION:
             documents: list[dict[str, Any]] = []
             section_payloads: dict[str, str] = {
                 "general": self.general,
@@ -243,18 +257,13 @@ class DiseaseArticleRecord:
                 if not content:
                     continue
                 metadata = dict(base_metadata)
-                metadata.update(
-                    {
-                        "collection": collection_name,
-                        "section": section,
-                    }
-                )
+                metadata.update({"collection": collection_name, "section": section})
                 documents.append(
                     {
                         "title": self.canonical_title,
                         "content": content.lower(),
                         "section_type": SECTION_TYPE_MAP[section],
-                        "index_type": IndexType.B,
+                        "collection_name": collection_name,
                         "source": self.source_name or self.source_type,
                         "metadata": metadata,
                     }
@@ -262,6 +271,12 @@ class DiseaseArticleRecord:
             return documents
 
         return []
+
+    def build_all_collection_documents(self) -> list[dict[str, Any]]:
+        documents: list[dict[str, Any]] = []
+        for collection_name in COLLECTIONS_BY_BUILD_ORDER:
+            documents.extend(self.build_collection_documents(collection_name))
+        return documents
 
 
 def normalize_article_record(
@@ -291,6 +306,7 @@ def normalize_article_record(
     record = DiseaseArticleRecord(
         title=title,
         general=general,
+        aliases=parse_list_items(raw.get("aliases")),
         symptom=parse_list_items(raw.get("symptom")),
         aetiologies=parse_list_items(raw.get("aetiologies")),
         risk=parse_list_items(raw.get("risk")),

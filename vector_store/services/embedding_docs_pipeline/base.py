@@ -27,12 +27,21 @@ from tenacity import (
 )
 from tqdm import tqdm
 
-from chatbot.models import MedicalDocument
+from chatbot.models import (
+    MEDICAL_DOCUMENTS_CHUNKS_COLLECTION,
+    MEDICAL_DOCUMENTS_DISEASE_COLLECTION,
+    MEDICAL_DOCUMENTS_TITLES_COLLECTION,
+    get_collection_model,
+    iter_collection_models,
+)
 from chatbot.models.chatbot_config import ChatbotConfig
-from chatbot.models.medical_document import IndexType, SectionType
+from chatbot.models.medical_document import SectionType
 from vector_store.services.constants import (
     OPENROUTER_API_KEY_ENV_NAME,
     OPENROUTER_BASE_URL_ENV_NAME,
+)
+from vector_store.services.embedding_docs_pipeline.article_schema import (
+    parse_list_items,
 )
 from vector_store.services.embedding_docs_pipeline.constants import (
     CHUNK_OVERLAP,
@@ -98,7 +107,7 @@ class BaseEmbeddingPipeline(ABC):
         self.extraction_dataset_output_path = EXTRACTION_DATASET_OUTPUT_PATH
         self.extraction_records: dict[str, dict[str, Any]] = {}
         self._qa_pairs_by_context: dict[str, list[dict[str, Any]]] = {}
-        self._index_c_count: int = 0
+        self._titles_collection_count: int = 0
 
     def get_runtime_config(self, key: str, default: Any) -> Any:
         """Read config from DB at runtime with safe fallback for async startup."""
@@ -415,7 +424,7 @@ class BaseEmbeddingPipeline(ABC):
         return score
 
     def _select_canonical_title(self, aliases: list[str]) -> str:
-        """Select a canonical title from alias list for Index A/B storage."""
+        """Select a canonical title from alias list for disease and chunk collection storage."""
         cleaned = sorted({str(alias).strip().lower() for alias in aliases if alias})
         if not cleaned:
             return ""
@@ -431,7 +440,7 @@ class BaseEmbeddingPipeline(ABC):
         intent: str,
         sample_questions: list[str],
     ) -> str:
-        """Compose route unit text for Index C embedding."""
+        """Compose route unit text for titles collection embedding."""
         deduped_aliases = sorted(
             {
                 self._normalize_text(alias)
@@ -639,8 +648,8 @@ class BaseEmbeddingPipeline(ABC):
 
         return parts
 
-    def build_index_a_summary(self, row) -> str | None:
-        """Construct disease-level summary for Index A."""
+    def build_disease_collection_summary(self, row) -> str | None:
+        """Construct disease-level summary for disease collection."""
         title = str(row.get("title", "")).strip()
         general = str(row.get("general", "")).strip()
 
@@ -655,22 +664,22 @@ class BaseEmbeddingPipeline(ABC):
         self,
         csv_path: str,
         source: str,
-        index_type: str = IndexType.B,
+        collection_name: str = MEDICAL_DOCUMENTS_CHUNKS_COLLECTION,
     ) -> list[dict[str, object]]:
         """Build document dictionaries from a CSV file."""
         documents: list[dict[str, object]] = []
         df = self.load_csv(csv_path)
 
-        if index_type == IndexType.A:
+        if collection_name == MEDICAL_DOCUMENTS_DISEASE_COLLECTION:
             for idx, row in df.iterrows():
-                content = self.build_index_a_summary(row)
+                content = self.build_disease_collection_summary(row)
                 if content:
                     documents.append(
                         {
                             "content": content.lower(),
                             "title": str(row.get("title", "")).strip().lower(),
                             "section_type": SectionType.GENERAL,
-                            "index_type": IndexType.A,
+                            "collection_name": collection_name,
                             "source": source.lower(),
                             "metadata": {
                                 "row_index": idx,
@@ -680,20 +689,27 @@ class BaseEmbeddingPipeline(ABC):
                     )
             return documents
 
-        if index_type == IndexType.C:
+        if collection_name == MEDICAL_DOCUMENTS_TITLES_COLLECTION:
             for idx, row in df.iterrows():
                 title = str(row.get("title", "")).strip()
+                aliases = parse_list_items(row.get("aliases"))
+                title_aliases = [title.lower()]
+                title_aliases.extend(alias.lower() for alias in aliases)
+                title_aliases = list(
+                    dict.fromkeys(alias for alias in title_aliases if alias)
+                )
                 if title:
                     documents.append(
                         {
-                            "content": title.lower(),
+                            "content": " | ".join(title_aliases),
                             "title": title.lower(),
                             "section_type": SectionType.GENERAL,
-                            "index_type": IndexType.C,
+                            "collection_name": collection_name,
                             "source": source.lower(),
                             "metadata": {
                                 "row_index": idx,
                                 "url": str(row.get("url", "")).lower(),
+                                "title_aliases": title_aliases,
                             },
                         }
                     )
@@ -710,7 +726,7 @@ class BaseEmbeddingPipeline(ABC):
                             "section_type": SECTION_TYPE_MAP.get(
                                 section, SectionType.GENERAL
                             ),
-                            "index_type": IndexType.B,
+                            "collection_name": MEDICAL_DOCUMENTS_CHUNKS_COLLECTION,
                             "source": source.lower(),
                             "metadata": {
                                 "row_index": idx,
@@ -739,7 +755,11 @@ class BaseEmbeddingPipeline(ABC):
         contexts = self.load_contexts(num_docs=num_docs, start_article=start_article)
         if not contexts:
             logger.warning("No contexts loaded. Pipeline cannot continue.")
-            return {"index_c": 0, "index_a": 0, "index_b": 0}
+            return {
+                "titles_collection": 0,
+                "disease_collection": 0,
+                "chunks_collection": 0,
+            }
 
         self._initialize_extraction_records(contexts)
         qa_pairs = self.load_qa_pairs(contexts)
@@ -747,43 +767,49 @@ class BaseEmbeddingPipeline(ABC):
         if clear_existing:
             clear_covid_qa_documents()
 
-        disease_to_contexts = self.stage_1_index_c(contexts)
+        disease_to_contexts = self.stage_1_titles_collection(contexts)
         if not disease_to_contexts:
             logger.error("Stage 1 failed — no diseases extracted. Aborting.")
             extraction_path = self._persist_extraction_dataset()
             return {
                 "articles": len(contexts),
-                "index_c": 0,
-                "index_a": 0,
-                "index_b": 0,
+                "titles_collection": 0,
+                "disease_collection": 0,
+                "chunks_collection": 0,
                 "extraction_dataset_path": extraction_path,
             }
-        if self._index_c_count == 0:
-            self._index_c_count = len(disease_to_contexts)
+        if self._titles_collection_count == 0:
+            self._titles_collection_count = len(disease_to_contexts)
 
-        index_a_count = self.stage_2_index_a(contexts, disease_to_contexts)
-        index_b_count = self.stage_3_index_b(contexts, disease_to_contexts)
+        disease_collection_count = self.stage_2_disease_collection(
+            contexts, disease_to_contexts
+        )
+        chunks_collection_count = self.stage_3_chunks_collection(
+            contexts, disease_to_contexts
+        )
         extraction_path = self._persist_extraction_dataset()
 
         return {
             "articles": len(contexts),
-            "index_c": self._index_c_count,
-            "index_a": index_a_count,
-            "index_b": index_b_count,
-            "total": self._index_c_count + index_a_count + index_b_count,
+            "titles_collection": self._titles_collection_count,
+            "disease_collection": disease_collection_count,
+            "chunks_collection": chunks_collection_count,
+            "total": self._titles_collection_count
+            + disease_collection_count
+            + chunks_collection_count,
             "extraction_dataset_path": extraction_path,
         }
 
-    def stage_1_index_c(self, contexts: list[dict]) -> dict[str, set[str]]:
-        """Stage 1: Extract diseases, build route units, and populate Index C."""
+    def stage_1_titles_collection(self, contexts: list[dict]) -> dict[str, set[str]]:
+        """Stage 1: Extract diseases, build route units, and populate titles collection."""
         logger.info("%s", "=" * 60)
-        logger.info("STAGE 1: Index C — Router Units (Disease + Intent)")
+        logger.info("STAGE 1: Titles collection — Router Units (Disease + Intent)")
         logger.info("%s", "=" * 60)
 
         disease_to_contexts = self._stage_1_collect_disease_contexts(contexts)
         if not disease_to_contexts:
             logger.warning("No diseases extracted. Pipeline cannot continue.")
-            self._index_c_count = 0
+            self._titles_collection_count = 0
             return {}
 
         logger.info(
@@ -798,10 +824,12 @@ class BaseEmbeddingPipeline(ABC):
             context_to_article=context_to_article,
         )
         route_payloads = self._stage_1_route_payloads(route_units)
-        self._store_index_c_route_payloads(route_payloads)
+        self._store_titles_collection_route_payloads(route_payloads)
 
-        self._index_c_count = len(route_payloads)
-        logger.info("Index C: %s route entries stored", self._index_c_count)
+        self._titles_collection_count = len(route_payloads)
+        logger.info(
+            "Titles collection: %s route entries stored", self._titles_collection_count
+        )
         return disease_to_contexts
 
     def _stage_1_collect_disease_contexts(
@@ -937,7 +965,7 @@ class BaseEmbeddingPipeline(ABC):
             )
         return route_payloads
 
-    def _store_index_c_route_payloads(
+    def _store_titles_collection_route_payloads(
         self,
         route_payloads: list[dict[str, Any]],
     ) -> None:
@@ -945,24 +973,23 @@ class BaseEmbeddingPipeline(ABC):
             [str(payload["content"]).lower() for payload in route_payloads]
         )
         for payload, embedding in zip(route_payloads, embeddings):
-            MedicalDocument.objects.create(
+            get_collection_model(MEDICAL_DOCUMENTS_TITLES_COLLECTION).objects.create(
                 title=str(payload["title"]),
                 content=str(payload["content"]).lower(),
                 embedding=embedding,
                 section_type=SectionType.GENERAL,
-                index_type=IndexType.C,
                 source=DOCUMENT_SOURCE_TAG,
                 metadata=payload["metadata"],
             )
 
-    def stage_2_index_a(
+    def stage_2_disease_collection(
         self,
         contexts: list[dict],
         disease_to_contexts: dict[str, set[str]],
     ) -> int:
-        """Stage 2: Build FAQ question vectors and answer payloads in Index A."""
+        """Stage 2: Build FAQ question vectors and answer payloads in disease collection."""
         logger.info("%s", "=" * 60)
-        logger.info("STAGE 2: Index A — FAQ Question Embedding")
+        logger.info("STAGE 2: Disease collection — FAQ Question Embedding")
         logger.info("%s", "=" * 60)
 
         ctx_lookup = {
@@ -1007,10 +1034,10 @@ class BaseEmbeddingPipeline(ABC):
             if not docs_to_create:
                 continue
 
-            count += self._store_index_a_docs(docs_to_create)
+            count += self._store_disease_collection_docs(docs_to_create)
             time.sleep(EMBEDDING_SLEEP_SECONDS)
 
-        logger.info("Index A: %s FAQ entries stored", count)
+        logger.info("Disease collection: %s FAQ entries stored", count)
         return count
 
     def _stage_2_create_summary_fallback(
@@ -1032,7 +1059,7 @@ class BaseEmbeddingPipeline(ABC):
             )
             if not summary_text.strip():
                 return 0
-            self._store_index_a_summary_doc(
+            self._store_disease_collection_summary_doc(
                 context_id=context_id,
                 article_id=article_id,
                 canonical_title=canonical_title,
@@ -1067,7 +1094,7 @@ class BaseEmbeddingPipeline(ABC):
         summary_data["disease_name"] = canonical_title
         return self.build_summary_text(summary_data)
 
-    def _store_index_a_summary_doc(
+    def _store_disease_collection_summary_doc(
         self,
         *,
         context_id: str,
@@ -1078,12 +1105,11 @@ class BaseEmbeddingPipeline(ABC):
     ) -> None:
         qa_id = self._build_qa_id(context_id, canonical_title, summary_text)
         embedding = self.embed_documents([summary_text.lower()])[0]
-        MedicalDocument.objects.create(
+        get_collection_model(MEDICAL_DOCUMENTS_DISEASE_COLLECTION).objects.create(
             title=canonical_title,
             content=summary_text.lower(),
             embedding=embedding,
             section_type=SectionType.GENERAL,
-            index_type=IndexType.A,
             source=DOCUMENT_SOURCE_TAG,
             metadata={
                 "context_id": context_id,
@@ -1199,28 +1225,29 @@ class BaseEmbeddingPipeline(ABC):
             }
         )
 
-    def _store_index_a_docs(self, docs_to_create: list[dict[str, Any]]) -> int:
+    def _store_disease_collection_docs(
+        self, docs_to_create: list[dict[str, Any]]
+    ) -> int:
         embeddings = self.embed_documents([d["content"] for d in docs_to_create])
         for payload, embedding in zip(docs_to_create, embeddings):
-            MedicalDocument.objects.create(
+            get_collection_model(MEDICAL_DOCUMENTS_DISEASE_COLLECTION).objects.create(
                 title=payload["title"],
                 content=payload["content"],
                 embedding=embedding,
                 section_type=SectionType.GENERAL,
-                index_type=IndexType.A,
                 source=DOCUMENT_SOURCE_TAG,
                 metadata=payload["metadata"],
             )
         return len(docs_to_create)
 
-    def stage_3_index_b(
+    def stage_3_chunks_collection(
         self,
         contexts: list[dict],
         disease_to_contexts: dict[str, set[str]],
     ) -> int:
-        """Stage 3: Classify text into sections, chunk, and populate Index B."""
+        """Stage 3: Classify text into sections, chunk, and populate chunks collection."""
         logger.info("%s", "=" * 60)
-        logger.info("STAGE 3: Index B — Section-Aware Chunking")
+        logger.info("STAGE 3: Chunks collection — Section-Aware Chunking")
         logger.info("%s", "=" * 60)
 
         splitter = RecursiveCharacterTextSplitter(
@@ -1268,7 +1295,7 @@ class BaseEmbeddingPipeline(ABC):
                 sections=sections,
             )
 
-        logger.info(f"Index B: {count} chunk entries stored")
+        logger.info(f"Chunks collection: {count} chunk entries stored")
         return count
 
     def _stage_3_context(
@@ -1380,12 +1407,11 @@ class BaseEmbeddingPipeline(ABC):
             return 0
 
         for index, (chunk_text, embedding) in enumerate(zip(chunks_lower, embeddings)):
-            MedicalDocument.objects.create(
+            get_collection_model(MEDICAL_DOCUMENTS_CHUNKS_COLLECTION).objects.create(
                 title=canonical_title,
                 content=chunk_text,
                 embedding=embedding,
                 section_type=section_type,
-                index_type=IndexType.B,
                 source=DOCUMENT_SOURCE_TAG,
                 metadata=self._stage_3_chunk_metadata(
                     context_id=context_id,
@@ -1473,8 +1499,10 @@ class BaseEmbeddingPipeline(ABC):
 
 
 def clear_covid_qa_documents() -> int:
-    """Remove all COVID-QA documents from MedicalDocument table."""
-    result = MedicalDocument.objects.filter(source=DOCUMENT_SOURCE_TAG).delete()
-    deleted_count = result[0] if isinstance(result, tuple) else result
-    logger.info(f"🗑️  Deleted {deleted_count} COVID-QA documents")
+    """Remove all COVID-QA documents from physical collections."""
+    deleted_count = 0
+    for _, model in iter_collection_models():
+        result = model.objects.filter(source=DOCUMENT_SOURCE_TAG).delete()
+        deleted_count += result[0] if isinstance(result, tuple) else int(result)
+    logger.info(f"Deleted {deleted_count} COVID-QA documents")
     return deleted_count

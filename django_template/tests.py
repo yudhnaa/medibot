@@ -1,13 +1,28 @@
+from typing import Protocol, cast
+
+from django.conf import settings
 from django.test import TestCase, override_settings
 
 from rest_framework.test import APIClient
 
 from authentication.models import Customer
 
+DOCS_TEST_MIDDLEWARE = [
+    middleware
+    for middleware in settings.MIDDLEWARE
+    if middleware != "debug_toolbar.middleware.DebugToolbarMiddleware"
+]
+
+
+class ResponseWithStatus(Protocol):
+    status_code: int
+
 
 class ApiDocsPermissionTests(TestCase):
+    api_client: APIClient
+
     def setUp(self) -> None:
-        self.client = APIClient()
+        self.api_client = APIClient()
         self.user = Customer.objects.create_user(
             username="regular", email="regular@example.com", password="password"
         )
@@ -22,10 +37,14 @@ class ApiDocsPermissionTests(TestCase):
     def assert_docs_available(self) -> None:
         for url in self.urls:
             with self.subTest(url=url):
-                response = self.client.get(url)
+                response = cast(ResponseWithStatus, self.api_client.get(url))
                 self.assertEqual(response.status_code, 200)
 
-    @override_settings(DEBUG=True, PUBLIC_API_DOCS=False)
+    @override_settings(
+        DEBUG=True,
+        PUBLIC_API_DOCS=False,
+        MIDDLEWARE=DOCS_TEST_MIDDLEWARE,
+    )
     def test_docs_are_public_in_debug_mode(self) -> None:
         self.assert_docs_available()
 
@@ -33,21 +52,21 @@ class ApiDocsPermissionTests(TestCase):
     def test_docs_require_staff_when_not_public(self) -> None:
         for url in self.urls:
             with self.subTest(url=url):
-                response = self.client.get(url)
+                response = cast(ResponseWithStatus, self.api_client.get(url))
                 self.assertEqual(response.status_code, 401)
 
     @override_settings(DEBUG=False, PUBLIC_API_DOCS=False)
     def test_docs_deny_non_staff_when_not_public(self) -> None:
-        self.client.force_authenticate(user=self.user)
+        self.api_client.force_authenticate(user=self.user)
 
         for url in self.urls:
             with self.subTest(url=url):
-                response = self.client.get(url)
+                response = cast(ResponseWithStatus, self.api_client.get(url))
                 self.assertEqual(response.status_code, 403)
 
     @override_settings(DEBUG=False, PUBLIC_API_DOCS=False)
     def test_docs_allow_staff_when_not_public(self) -> None:
-        self.client.force_authenticate(user=self.staff)
+        self.api_client.force_authenticate(user=self.staff)
         self.assert_docs_available()
 
     @override_settings(DEBUG=False, PUBLIC_API_DOCS=True)

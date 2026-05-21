@@ -6,7 +6,7 @@ from typing import Any, override
 from django.core.management.base import BaseCommand, CommandError
 from django.utils import timezone
 
-from chatbot.models import IndexType, MedicalDocument, SectionType
+from chatbot.models import MedicalDocumentChunk, SectionType
 
 FIELDS = [
     "title",
@@ -36,7 +36,7 @@ class Command(BaseCommand):
     def add_arguments(self, parser):
         parser.add_argument(
             "--source",
-            help="Filter by MedicalDocument.source",
+            help="Filter by medical_documents_chunks.source",
         )
 
     @override
@@ -44,7 +44,7 @@ class Command(BaseCommand):
         output_path = self._default_output_path()
         source = options.get("source")
 
-        queryset = MedicalDocument.objects.filter(index_type=IndexType.B).order_by(
+        queryset = MedicalDocumentChunk.objects.order_by(
             "title",
             "section_type",
             "id",

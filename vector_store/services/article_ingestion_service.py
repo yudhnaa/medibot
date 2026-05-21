@@ -10,7 +10,6 @@ from typing import Any
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
-from chatbot.models import IndexType
 from chatbot.services.gemini_manager import get_gemini_manager
 from vector_store.services.embedding_docs_pipeline.article_schema import (
     normalize_article_record,
@@ -27,7 +26,8 @@ Extract structured disease content from the article text below.
 
 Return ONLY valid JSON with exactly these keys:
 {{
-  "title": "disease name",
+  "title": "primary disease name",
+  "aliases": ["synonym1", "translated name", "abbreviation"],
   "general": "concise overview",
   "symptom": ["item1", "item2"],
   "aetiologies": ["item1", "item2"],
@@ -39,6 +39,7 @@ Return ONLY valid JSON with exactly these keys:
 Rules:
 - Do not include markdown.
 - Keep lists concise, atomic, medically meaningful.
+- Include title aliases from the article, including bilingual names, abbreviations, and common synonyms.
 - If missing, return empty list for list fields.
 - Ensure "title" and "general" are not empty.
 
@@ -92,7 +93,7 @@ class _ArticleHTMLParser(HTMLParser):
 
 
 class ArticleIngestionService:
-    """Crawl source URL, extract structured record with LLM, and embed into A/B/C."""
+    """Crawl source URL, extract structured record with LLM, and embed into medical document collections."""
 
     def __init__(self, embedding_provider: str | None = None) -> None:
         self.embedding_provider = embedding_provider
@@ -193,7 +194,7 @@ class ArticleIngestionService:
         source: str = "admin_url",
         ingestion_job_id: int | None = None,
     ) -> dict[str, Any]:
-        """Run URL crawl -> LLM extraction -> index C/A/B embedding."""
+        """Run URL crawl -> LLM extraction -> collection embedding."""
         crawled = self._crawl_url(url)
         return self.ingest_from_text(
             title=crawled["title"],
@@ -216,7 +217,7 @@ class ArticleIngestionService:
         ingestion_trace: str = "paste_llm",
         ingestion_job_id: int | None = None,
     ) -> dict[str, Any]:
-        """Run pasted text -> LLM extraction -> index C/A/B embedding."""
+        """Run pasted text -> LLM extraction -> collection embedding."""
         page_title = title.strip()
         page_text = text.strip()[:MAX_CRAWL_TEXT_LEN]
         if not page_text:
@@ -243,16 +244,18 @@ class ArticleIngestionService:
         if record is None:
             raise ValueError(f"Failed to normalize extracted record: {errors}")
 
-        docs_c = record.build_index_documents(IndexType.C)
-        docs_a = record.build_index_documents(IndexType.A)
-        docs_b = record.build_index_documents(IndexType.B)
-        created_docs = self.vector_manager.add_documents(docs_c + docs_a + docs_b)
+        docs = record.build_all_collection_documents()
+        created_docs = self.vector_manager.add_documents(docs)
+        collection_counts: dict[str, int] = {}
+        for doc in docs:
+            collection_name = str(doc.get("collection_name", ""))
+            collection_counts[collection_name] = (
+                collection_counts.get(collection_name, 0) + 1
+            )
 
         return {
             "title": record.canonical_title,
-            "index_c": len(docs_c),
-            "index_a": len(docs_a),
-            "index_b": len(docs_b),
+            "collections": collection_counts,
             "total": len(created_docs),
             "source_url": source_url,
         }

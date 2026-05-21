@@ -21,13 +21,8 @@ class EmbeddingAuditLog(models.Model):
         User, on_delete=models.SET_NULL, null=True, related_name="embedding_audit_logs"
     )
     action = models.CharField(max_length=50, choices=ACTION_CHOICES)
-    document = models.ForeignKey(
-        "MedicalDocument",
-        on_delete=models.CASCADE,
-        null=True,
-        blank=True,
-        related_name="audit_logs",
-    )
+    collection_name = models.CharField(max_length=128, blank=True, default="")
+    document_id = models.PositiveIntegerField(null=True, blank=True)
 
     # What changed
     changes = models.JSONField(
@@ -51,7 +46,7 @@ class EmbeddingAuditLog(models.Model):
         indexes = [
             models.Index(fields=["action", "-timestamp"]),
             models.Index(fields=["user", "-timestamp"]),
-            models.Index(fields=["document"]),
+            models.Index(fields=["collection_name", "document_id"]),
         ]
 
     def __str__(self):

@@ -139,7 +139,7 @@ class XRayContextTests(SimpleTestCase):
 
 
 class RouterAndRetrievalTests(SimpleTestCase):
-    """Tests for C/A/B routing and multi-stage retrieval behavior."""
+    """Tests for collection routing and multi-stage retrieval behavior."""
 
     def test_get_last_source_urls_dedupes_and_extracts_nested_metadata(self) -> None:
         service = object.__new__(ChatbotService)
@@ -174,10 +174,10 @@ class RouterAndRetrievalTests(SimpleTestCase):
         self.assertEqual(filtered, ["sốt", "ho"])
 
     @patch("chatbot.services.chatbot_service.ChatbotConfig.get_config")
-    def test_gate_with_index_c_uses_q_cleaned_threshold(
+    def test_gate_with_titles_collection_uses_q_cleaned_threshold(
         self, mock_get_config: MagicMock
     ) -> None:
-        config = {"RAG_THRESH_C": 0.8}
+        config = {"RAG_TITLES_COLLECTION_THRESHOLD": 0.8}
         mock_get_config.side_effect = lambda key, default=None: config.get(key, default)
 
         service = object.__new__(ChatbotService)
@@ -187,7 +187,7 @@ class RouterAndRetrievalTests(SimpleTestCase):
             SimpleNamespace(symptoms=[], age=None, sex="unknown"),
         )
         service.vector_manager.embedding_service = None
-        service.vector_manager.search_similar.return_value = [
+        service.vector_manager.search_collection.return_value = [
             SimpleNamespace(
                 distance=0.3,  # score = 0.85
                 title="covid-19",
@@ -196,7 +196,9 @@ class RouterAndRetrievalTests(SimpleTestCase):
             ),
         ]
 
-        gate = ChatbotService._gate_with_index_c(service, "triệu chứng covid-19")
+        gate = ChatbotService._gate_with_titles_collection(
+            service, "triệu chứng covid-19"
+        )
 
         self.assertTrue(gate["go_single"])
         self.assertEqual(gate["reason"], "above_0.8")
@@ -204,11 +206,44 @@ class RouterAndRetrievalTests(SimpleTestCase):
         self.assertGreaterEqual(gate["top_score"], 0.8)
 
     @patch("chatbot.services.chatbot_service.ChatbotConfig.get_config")
+    def test_gate_with_disease_mention_uses_mentions_and_soft_threshold(
+        self, mock_get_config: MagicMock
+    ) -> None:
+        config = {"RAG_TITLES_COLLECTION_THRESHOLD": 0.65}
+        mock_get_config.side_effect = lambda key, default=None: config.get(key, default)
+
+        service = object.__new__(ChatbotService)
+        service.vector_manager = MagicMock()
+        service.vector_manager.search_collection.return_value = [
+            SimpleNamespace(
+                distance=0.76,  # score = 0.62
+                title="pleural effusion",
+                content="pleural effusion | tràn dịch màng phổi",
+                metadata={"canonical_title": "pleural effusion"},
+            ),
+        ]
+
+        gate = ChatbotService._gate_with_titles_collection(
+            service,
+            "bạn có biết bệnh tràn dịch màng phổi không?",
+            disease_mentions=["tràn dịch màng phổi"],
+        )
+
+        service.vector_manager.search_collection.assert_called_once()
+        self.assertEqual(
+            service.vector_manager.search_collection.call_args.kwargs["query"],
+            "tràn dịch màng phổi",
+        )
+        self.assertTrue(gate["go_single"])
+        self.assertEqual(gate["reason"], "disease_mention_above_0.6")
+        self.assertEqual(gate["title"], "pleural effusion")
+
+    @patch("chatbot.services.chatbot_service.ChatbotConfig.get_config")
     def test_multi_disease_retrieval_builds_candidates_and_summary(
         self, mock_get_config: MagicMock
     ) -> None:
         config = {
-            "RAG_B_TOPK": 5,
+            "RAG_CHUNKS_COLLECTION_TOPK": 5,
             "RAG_MERGED_LIMIT": 10,
             "RAG_TITLE_TOP_M": 3,
             "RAG_FINAL_TITLES": 2,
@@ -259,7 +294,7 @@ class RouterAndRetrievalTests(SimpleTestCase):
                 metadata={"canonical_title": "bệnh sởi"},
             )
         ]
-        service.vector_manager.search_similar.side_effect = [
+        service.vector_manager.search_collection.side_effect = [
             b_docs_query_a,  # Stage 3 query 2a
             b_docs_query_b,  # Stage 3 query 2b
             a_summary_docs,  # Stage 6 summary fetch
@@ -291,7 +326,7 @@ class RouterAndRetrievalTests(SimpleTestCase):
         mock_get_config: MagicMock,
     ) -> None:
         config = {
-            "RAG_B_TOPK": 4,
+            "RAG_CHUNKS_COLLECTION_TOPK": 4,
             "RAG_MERGED_LIMIT": 4,
             "RAG_TITLE_TOP_M": 1,
             "RAG_FINAL_TITLES": 2,
@@ -334,7 +369,7 @@ class RouterAndRetrievalTests(SimpleTestCase):
                 "url": "https://example.test/scoliosis",
             },
         )
-        service.vector_manager.search_similar.side_effect = [
+        service.vector_manager.search_collection.side_effect = [
             [low_rank_doc, top_rank_doc],
             [],
             [],
@@ -389,7 +424,9 @@ class IntakeRoutingTests(SimpleTestCase):
                 refresh_from_db=MagicMock(),
             ),
         )
-        setattr(service, "vector_manager", SimpleNamespace(search_similar=MagicMock()))
+        setattr(
+            service, "vector_manager", SimpleNamespace(search_collection=MagicMock())
+        )
         service._last_docs_cache = []
         service._last_audit = {}
         return service
@@ -407,7 +444,7 @@ class IntakeRoutingTests(SimpleTestCase):
         self.assertNotIn("COVID", response or "")
         self.assertEqual(ChatbotService.get_last_source_urls(service), [])
         vector_manager = cast(Any, service.vector_manager)
-        vector_manager.search_similar.assert_not_called()
+        vector_manager.search_collection.assert_not_called()
 
     def test_intake_query_uses_saved_user_intake_fields(self) -> None:
         service = self._service_with_intake()
@@ -430,7 +467,7 @@ class IntakeRoutingTests(SimpleTestCase):
         self.assertIn("Số ngày khởi phát: 3", response)
         self.assertNotIn("không có quyền truy cập", response.lower())
         vector_manager = cast(Any, service.vector_manager)
-        vector_manager.search_similar.assert_not_called()
+        vector_manager.search_collection.assert_not_called()
 
     def test_analyzer_intake_route_overrides_saved_symptom_medical_signal(self) -> None:
         service = self._service_with_intake()

@@ -7,6 +7,8 @@ import os
 from typing import Any, cast
 
 from django.contrib import admin, messages
+from django.db import transaction
+from django.db.models import Q, QuerySet
 from django.http import HttpRequest
 from django.shortcuts import redirect, render
 from django.urls import path
@@ -14,7 +16,7 @@ from django.urls import path
 from chatbot.admin.document_admin import (
     EmbeddingAuditLogAdmin,
     EmbeddingJobAdmin,
-    MedicalDocumentAdmin,
+    MedicalVectorDocumentAdmin,
 )
 from chatbot.forms import ArticlePasteEmbedForm, ArticleUrlEmbedForm, CsvUploadForm
 from chatbot.models import (
@@ -23,7 +25,9 @@ from chatbot.models import (
     ChatSession,
     EmbeddingAuditLog,
     EmbeddingJob,
-    MedicalDocument,
+    MedicalDiseaseDocument,
+    MedicalDocumentChunk,
+    MedicalDocumentTitle,
     UserPreference,
 )
 
@@ -43,8 +47,8 @@ class ChatMessageAdmin(admin.ModelAdmin):
 
 
 # MedicalDocumentAdmin with CSV upload support
-class ExtendedMedicalDocumentAdmin(MedicalDocumentAdmin):
-    """MedicalDocumentAdmin extended with CSV upload."""
+class ExtendedMedicalDocumentAdmin(MedicalVectorDocumentAdmin):
+    """Medical document chunk admin extended with ingestion actions."""
 
     def get_urls(self):
         """Add custom URL for CSV upload."""
@@ -53,17 +57,17 @@ class ExtendedMedicalDocumentAdmin(MedicalDocumentAdmin):
             path(
                 "upload-csv/",
                 self.admin_site.admin_view(self.upload_csv_view),
-                name="chatbot_medicaldocument_upload_csv",
+                name="chatbot_medicaldocumentchunk_upload_csv",
             ),
             path(
                 "embed-url/",
                 self.admin_site.admin_view(self.embed_url_view),
-                name="chatbot_medicaldocument_embed_url",
+                name="chatbot_medicaldocumentchunk_embed_url",
             ),
             path(
                 "paste-content/",
                 self.admin_site.admin_view(self.paste_content_view),
-                name="chatbot_medicaldocument_paste_content",
+                name="chatbot_medicaldocumentchunk_paste_content",
             ),
         ]
         return custom_urls + urls
@@ -88,7 +92,7 @@ class ExtendedMedicalDocumentAdmin(MedicalDocumentAdmin):
                     "Only superusers can perform this action."
                 ),
             )
-            return redirect("admin:chatbot_medicaldocument_changelist")
+            return redirect("admin:chatbot_medicaldocumentchunk_changelist")
 
         if request.method == "POST":
             form = CsvUploadForm(request.POST, request.FILES)
@@ -97,7 +101,7 @@ class ExtendedMedicalDocumentAdmin(MedicalDocumentAdmin):
 
                 # Get form data
                 csv_file = form.cleaned_data["csv_file"]
-                index_types = form.cleaned_data["index_types"]  # Now returns a list
+                collections = form.cleaned_data["collections"]
                 embedding_provider = EmbeddingService.resolve_provider()
 
                 # Save file to temporary location using absolute path
@@ -127,7 +131,7 @@ class ExtendedMedicalDocumentAdmin(MedicalDocumentAdmin):
 
                     task = process_csv_upload.delay(  # pyright: ignore[reportCallIssue]
                         file_path=file_path,
-                        index_types=list(index_types),
+                        collections=list(collections),
                         source="admin_upload",
                         user_id=user_pk,
                         job_id=job.pk,
@@ -136,13 +140,13 @@ class ExtendedMedicalDocumentAdmin(MedicalDocumentAdmin):
                     job.celery_task_id = task.id
                     job.save()
 
-                    index_types_str = ", ".join(index_types)
+                    collections_str = ", ".join(collections)
                     messages.info(
                         request,
                         (
                             f"CSV upload started in background (Job #{job.pk}). "
                             f"Processing {csv_file.name} with {embedding_provider} provider "
-                            f"for index types: {index_types_str}. "
+                            f"for collections: {collections_str}. "
                             f"This may take several minutes. Check Embedding Jobs for progress."
                         ),
                     )
@@ -158,7 +162,7 @@ class ExtendedMedicalDocumentAdmin(MedicalDocumentAdmin):
                         ),
                     )
 
-                return redirect("admin:chatbot_medicaldocument_changelist")
+                return redirect("admin:chatbot_medicaldocumentchunk_changelist")
         else:
             form = CsvUploadForm()
 
@@ -176,7 +180,7 @@ class ExtendedMedicalDocumentAdmin(MedicalDocumentAdmin):
         )
 
     def embed_url_view(self, request: HttpRequest):
-        """Trigger URL crawl + LLM extraction + embedding into C/A/B indexes."""
+        """Trigger URL crawl + LLM extraction + embedding into collections."""
         from chatbot.models import EmbeddingJobStatus
 
         user_obj = cast(Any, request.user)
@@ -191,7 +195,7 @@ class ExtendedMedicalDocumentAdmin(MedicalDocumentAdmin):
                     "Only superusers can perform this action."
                 ),
             )
-            return redirect("admin:chatbot_medicaldocument_changelist")
+            return redirect("admin:chatbot_medicaldocumentchunk_changelist")
 
         if request.method == "POST":
             form = ArticleUrlEmbedForm(request.POST)
@@ -241,7 +245,7 @@ class ExtendedMedicalDocumentAdmin(MedicalDocumentAdmin):
                             "Please ensure Celery worker is running."
                         ),
                     )
-                return redirect("admin:chatbot_medicaldocument_changelist")
+                return redirect("admin:chatbot_medicaldocumentchunk_changelist")
         else:
             form = ArticleUrlEmbedForm()
 
@@ -258,7 +262,7 @@ class ExtendedMedicalDocumentAdmin(MedicalDocumentAdmin):
         )
 
     def paste_content_view(self, request: HttpRequest):
-        """Trigger pasted content LLM extraction + embedding into C/A/B indexes."""
+        """Trigger pasted content LLM extraction and embedding into medical document collections."""
         from chatbot.models import EmbeddingJobStatus
 
         user_obj = cast(Any, request.user)
@@ -273,7 +277,7 @@ class ExtendedMedicalDocumentAdmin(MedicalDocumentAdmin):
                     "Only superusers can perform this action."
                 ),
             )
-            return redirect("admin:chatbot_medicaldocument_changelist")
+            return redirect("admin:chatbot_medicaldocumentchunk_changelist")
 
         if request.method == "POST":
             form = ArticlePasteEmbedForm(request.POST)
@@ -327,7 +331,7 @@ class ExtendedMedicalDocumentAdmin(MedicalDocumentAdmin):
                             "Please ensure Celery worker is running."
                         ),
                     )
-                return redirect("admin:chatbot_medicaldocument_changelist")
+                return redirect("admin:chatbot_medicaldocumentchunk_changelist")
         else:
             form = ArticlePasteEmbedForm()
 
@@ -344,8 +348,138 @@ class ExtendedMedicalDocumentAdmin(MedicalDocumentAdmin):
         )
 
 
-# Register MedicalDocument with extended admin
-admin.site.register(MedicalDocument, ExtendedMedicalDocumentAdmin)
+class CollectionOnlyMedicalDocumentAdmin(MedicalVectorDocumentAdmin):
+    """Collection admin without chunk ingestion tools."""
+
+    change_list_template = None
+
+    def get_urls(self):
+        return admin.ModelAdmin.get_urls(self)
+
+
+class MedicalDocumentTitleAdmin(CollectionOnlyMedicalDocumentAdmin):
+    actions = [
+        "delete_all_about_this_disease",
+        "mark_for_reembedding",
+        "bulk_delete_documents",
+        "bulk_export_json",
+        "bulk_export_csv",
+    ]
+
+    def _selected_disease_titles(
+        self, queryset: QuerySet[MedicalDocumentTitle]
+    ) -> list[str]:
+        return sorted(
+            {
+                str(doc.metadata.get("canonical_title") or doc.title).strip().lower()
+                for doc in queryset
+                if str(doc.metadata.get("canonical_title") or doc.title).strip()
+            }
+        )
+
+    def _disease_title_query(self, titles: list[str]) -> Q:
+        query = Q()
+        for title in titles:
+            query |= Q(metadata__canonical_title=title) | Q(title__iexact=title)
+        return query
+
+    @admin.action(description="Re-embed All About This Disease")
+    def mark_for_reembedding(
+        self,
+        request: HttpRequest,
+        queryset: QuerySet[MedicalDocumentTitle],
+    ) -> None:
+        titles = self._selected_disease_titles(queryset)
+        if not titles:
+            messages.warning(request, "No disease titles selected.")
+            return
+
+        from chatbot.tasks import process_reembedding_job
+        from vector_store.services.embedding_service import EmbeddingService
+        from vector_store.services.reembed_service import ReembeddingService
+
+        disease_query = self._disease_title_query(titles)
+        document_refs = []
+        counts_by_collection: dict[str, int] = {}
+        for model in (
+            MedicalDiseaseDocument,
+            MedicalDocumentChunk,
+            MedicalDocumentTitle,
+        ):
+            collection_name = model._meta.db_table
+            ids = list(model.objects.filter(disease_query).values_list("id", flat=True))
+            counts_by_collection[collection_name] = len(ids)
+            document_refs.extend(
+                ReembeddingService.document_ref(collection_name, doc_id)
+                for doc_id in ids
+            )
+
+        if not document_refs:
+            messages.warning(request, "No documents found for selected disease titles.")
+            return
+
+        provider = EmbeddingService.resolve_provider()
+        job = ReembeddingService.create_job(
+            job_type="reembed_selected",
+            provider=provider,
+            document_ids=document_refs,
+            created_by=request.user,
+            notes="disease_titles=" + ",".join(titles),
+        )
+        task = process_reembedding_job.delay(job.pk)  # pyright: ignore[reportCallIssue]
+        job.celery_task_id = task.id
+        job.save(update_fields=["celery_task_id"])
+
+        messages.success(
+            request,
+            (
+                f"Re-embedding job {job.pk} started for {len(titles)} disease(s): "
+                + ", ".join(
+                    f"{collection}={count}"
+                    for collection, count in counts_by_collection.items()
+                )
+            ),
+        )
+
+    @admin.action(description="Delete All About This Disease")
+    def delete_all_about_this_disease(
+        self,
+        request: HttpRequest,
+        queryset: QuerySet[MedicalDocumentTitle],
+    ) -> None:
+        titles = self._selected_disease_titles(queryset)
+        if not titles:
+            messages.warning(request, "No disease titles selected.")
+            return
+
+        disease_query = self._disease_title_query(titles)
+        deleted_by_collection: dict[str, int] = {}
+        with transaction.atomic():
+            for model in (
+                MedicalDiseaseDocument,
+                MedicalDocumentChunk,
+                MedicalDocumentTitle,
+            ):
+                deleted, _ = model.objects.filter(disease_query).delete()
+                deleted_by_collection[model._meta.db_table] = deleted
+
+        total_deleted = sum(deleted_by_collection.values())
+        messages.success(
+            request,
+            (
+                f"Deleted {total_deleted} documents for {len(titles)} disease(s): "
+                + ", ".join(
+                    f"{collection}={count}"
+                    for collection, count in deleted_by_collection.items()
+                )
+            ),
+        )
+
+
+# Register physical medical document collections.
+admin.site.register(MedicalDiseaseDocument, CollectionOnlyMedicalDocumentAdmin)
+admin.site.register(MedicalDocumentTitle, MedicalDocumentTitleAdmin)
+admin.site.register(MedicalDocumentChunk, ExtendedMedicalDocumentAdmin)
 admin.site.register(EmbeddingJob, EmbeddingJobAdmin)
 admin.site.register(EmbeddingAuditLog, EmbeddingAuditLogAdmin)
 

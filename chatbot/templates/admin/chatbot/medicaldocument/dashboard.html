@@ -184,31 +184,31 @@
     <!-- Quick Navigation -->
     <div class="section-title">Quick Actions</div>
     <div class="nav-links">
-        <a href="{% url 'admin:chatbot_medicaldocument_vector_search' %}" class="nav-link">
+        <a href="{% url 'admin:chatbot_medicaldocumentchunk_vector_search' %}" class="nav-link">
             <strong>Vector Search</strong>
             <span>Test similarity search</span>
         </a>
-        <a href="{% url 'admin:chatbot_medicaldocument_quality_check' %}" class="nav-link">
+        <a href="{% url 'admin:chatbot_medicaldocumentchunk_quality_check' %}" class="nav-link">
             <strong>Quality Check</strong>
             <span>Detect embedding issues</span>
         </a>
-        <a href="{% url 'admin:chatbot_medicaldocument_reembed_manager' %}" class="nav-link">
+        <a href="{% url 'admin:chatbot_medicaldocumentchunk_reembed_manager' %}" class="nav-link">
             <strong>Re-embedding Manager</strong>
             <span>Manage re-embedding jobs</span>
         </a>
-        <a href="{% url 'admin:chatbot_medicaldocument_upload_csv' %}" class="nav-link">
+        <a href="{% url 'admin:chatbot_medicaldocumentchunk_upload_csv' %}" class="nav-link">
             <strong>Upload & Embed Articles</strong>
             <span>Upload article files for embedding</span>
         </a>
-        <a href="{% url 'admin:chatbot_medicaldocument_embed_url' %}" class="nav-link">
+        <a href="{% url 'admin:chatbot_medicaldocumentchunk_embed_url' %}" class="nav-link">
             <strong>Crawl URL & Embed</strong>
-            <span>Crawl one article URL and auto-index</span>
+            <span>Crawl one article URL and auto-embed</span>
         </a>
-        <a href="{% url 'admin:chatbot_medicaldocument_paste_content' %}" class="nav-link">
+        <a href="{% url 'admin:chatbot_medicaldocumentchunk_paste_content' %}" class="nav-link">
             <strong>Paste Content & Embed</strong>
-            <span>Paste article text and auto-index</span>
+            <span>Paste article text and auto-embed</span>
         </a>
-        <a href="{% url 'admin:chatbot_medicaldocument_changelist' %}" class="nav-link">
+        <a href="{% url 'admin:chatbot_medicaldocumentchunk_changelist' %}" class="nav-link">
             <strong>Manage Documents</strong>
             <span>View all documents</span>
         </a>
@@ -247,7 +247,7 @@
             <canvas id="section-chart"></canvas>
         </div>
         <div class="chart-container">
-            <canvas id="index-chart"></canvas>
+            <canvas id="collection-chart"></canvas>
         </div>
         <div class="chart-container">
             <canvas id="provider-chart"></canvas>
@@ -279,7 +279,7 @@
             {% endfor %}
         {% else %}
             <p style="color: #999; text-align: center; padding: 20px;">
-                No re-embedding jobs yet. Start one from the <a href="{% url 'admin:chatbot_medicaldocument_reembed_manager' %}">Re-embedding Manager</a>.
+                No re-embedding jobs yet. Start one from the <a href="{% url 'admin:chatbot_medicaldocumentchunk_reembed_manager' %}">Re-embedding Manager</a>.
             </p>
         {% endif %}
     </div>
@@ -325,21 +325,21 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
     
-    // Index Type Chart
-    const indexCtx = document.getElementById('index-chart')?.getContext('2d');
-    if (indexCtx) {
-        new Chart(indexCtx, {
+    // Collection Chart
+    const collectionCtx = document.getElementById('collection-chart')?.getContext('2d');
+    if (collectionCtx) {
+        new Chart(collectionCtx, {
             type: 'bar',
             data: {
                 labels: [
-                    {% for index, count in stats.by_index.items %}
-                        'Index {{ index }}',
+                    {% for collection, count in stats.by_collection.items %}
+                        '{{ collection }}',
                     {% endfor %}
                 ],
                 datasets: [{
                     label: 'Document Count',
                     data: [
-                        {% for index, count in stats.by_index.items %}
+                        {% for collection, count in stats.by_collection.items %}
                             {{ count }},
                         {% endfor %}
                     ],
@@ -352,7 +352,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 plugins: {
                     title: {
                         display: true,
-                        text: 'Documents by Index Type'
+                        text: 'Documents by Collection'
                     },
                     legend: {
                         display: false

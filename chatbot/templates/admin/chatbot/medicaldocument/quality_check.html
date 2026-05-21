@@ -144,14 +144,14 @@
         {% if report.missing_embeddings.documents %}
             <p>{{ report.missing_embeddings.total }} document(s) without embeddings</p>
             <div style="margin-bottom: 10px;">
-                <a href="/admin/chatbot/medicaldocument/" class="button">Fix Missing Embeddings</a>
+                <a href="/admin/chatbot/medicaldocumentchunk/" class="button">Fix Missing Embeddings</a>
             </div>
             <details>
                 <summary>Show {{ report.missing_embeddings.documents|length }} document(s)</summary>
                 <ul class="sample-list">
                     {% for doc in report.missing_embeddings.documents %}
                     <li>
-                        <a href="/admin/chatbot/medicaldocument/{{ doc.id }}/change/">
+                        <a href="/admin/chatbot/medicaldocumentchunk/{{ doc.id }}/change/">
                             {{ doc.title|truncatewords:10 }}
                         </a>
                         ({{ doc.section_type }})
@@ -178,7 +178,7 @@
                     <ul class="sample-list">
                         {% for doc in group.documents %}
                         <li>
-                            <a href="/admin/chatbot/medicaldocument/{{ doc.id }}/change/">
+                            <a href="/admin/chatbot/medicaldocumentchunk/{{ doc.id }}/change/">
                                 {{ doc.title|truncatewords:10 }}
                             </a>
                         </li>
@@ -263,7 +263,7 @@
                 <ul class="sample-list">
                     {% for doc in report.stale_embeddings.sample_documents %}
                     <li>
-                        <a href="/admin/chatbot/medicaldocument/{{ doc.id }}/change/">
+                        <a href="/admin/chatbot/medicaldocumentchunk/{{ doc.id }}/change/">
                             {{ doc.title|truncatewords:15 }}
                         </a>
                         ({{ doc.provider }}, last: 

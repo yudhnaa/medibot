@@ -7,7 +7,7 @@ import re
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from langchain_core.documents import Document
 from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
@@ -16,7 +16,7 @@ from pydantic import SecretStr
 from ragas.run_config import RunConfig
 from ragas.testset import TestsetGenerator
 
-from chatbot.models import ChatbotConfig, MedicalDocument
+from chatbot.models import ChatbotConfig, get_collection_model
 from chatbot.services.gemini_manager import get_gemini_manager
 from rag_benchmark.services.constants import (
     NEGATION_TOKENS,
@@ -65,7 +65,7 @@ class RagasBenchmarkDatasetGenerator:
             "Generate realistic Vietnamese end-user medical questions that match "
             "the provided disease context. Keep questions concise and practical."
         ),
-        index_types: list[str] | None = None,
+        collections: list[str] | None = None,
         min_document_words: int = 100,
     ) -> GeneratedBenchmarkDatasetReport:
         if testset_size < 2:
@@ -73,18 +73,16 @@ class RagasBenchmarkDatasetGenerator:
                 "testset_size must be >= 2 to include both dev and test split"
             )
 
-        supported_indexes = {"A", "B", "C"}
-        selected_indexes = [
-            item.strip().upper() for item in (index_types or ["A", "B", "C"])
+        selected_collections = [
+            item.strip() for item in (collections or ["medical_documents_chunks"])
         ]
-        selected_indexes = [
-            item for item in selected_indexes if item in supported_indexes
-        ]
-        if not selected_indexes:
-            raise ValueError("index_types must include at least one of: A,B,C")
+        for collection_name in selected_collections:
+            get_collection_model(collection_name)
+        if not selected_collections:
+            raise ValueError("collections must include at least one collection name")
 
         source_docs, source_titles = self._build_source_documents(
-            index_types=selected_indexes,
+            collections=selected_collections,
             min_document_words=min_document_words,
         )
         if not source_docs:
@@ -140,20 +138,20 @@ class RagasBenchmarkDatasetGenerator:
     def _build_source_documents(
         self,
         *,
-        index_types: list[str],
+        collections: list[str],
         min_document_words: int,
     ) -> tuple[list[Document], int]:
-        docs_by_title: dict[str, list[MedicalDocument]] = defaultdict(list)
-        queryset = (
-            MedicalDocument.objects.filter(index_type__in=index_types)
-            .exclude(content="")
-            .order_by("title", "index_type", "section_type", "id")
-        )
-        for record in queryset:
-            title = str(record.title or "").strip()
-            if not title:
-                continue
-            docs_by_title[title].append(record)
+        docs_by_title: dict[str, list[Any]] = defaultdict(list)
+        for collection_name in collections:
+            model = get_collection_model(collection_name)
+            queryset = model.objects.exclude(content="").order_by(
+                "title", "section_type", "id"
+            )
+            for record in queryset:
+                title = str(record.title or "").strip()
+                if not title:
+                    continue
+                docs_by_title[title].append(record)
 
         source_documents: list[Document] = []
         for title, records in docs_by_title.items():
@@ -216,8 +214,8 @@ class RagasBenchmarkDatasetGenerator:
             ),
             raise_exceptions=False,
         )
-        dataframe = testset.to_pandas()
-        return list(dataframe.to_dict(orient="records"))
+        dataframe = cast(Any, testset).to_pandas()
+        return cast(list[dict[str, Any]], dataframe.to_dict(orient="records"))
 
     def _resolve_provider(self, provider: str) -> str:
         normalized = str(provider or "").strip().lower()
@@ -237,7 +235,7 @@ class RagasBenchmarkDatasetGenerator:
         provider: str,
         llm_model: str | None,
         embedding_model: str | None,
-    ):
+    ) -> tuple[Any, Any]:
         if provider == "openrouter":
             return self._create_openrouter_models(
                 llm_model=llm_model,
@@ -253,19 +251,19 @@ class RagasBenchmarkDatasetGenerator:
         *,
         llm_model: str | None,
         embedding_model: str | None,
-    ):
+    ) -> tuple[ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings]:
         manager = get_gemini_manager()
         api_key = manager.get_current_key()
         llm = ChatGoogleGenerativeAI(
             model=llm_model or "gemini-2.5-flash",
-            google_api_key=api_key,
+            api_key=SecretStr(api_key),
             temperature=0.2,
-            max_output_tokens=2048,
+            max_tokens=2048,
             streaming=False,
         )
         embeddings = GoogleGenerativeAIEmbeddings(
             model=embedding_model or "models/gemini-embedding-001",
-            google_api_key=api_key,
+            api_key=SecretStr(api_key),
         )
         return llm, embeddings
 
@@ -274,7 +272,7 @@ class RagasBenchmarkDatasetGenerator:
         *,
         llm_model: str | None,
         embedding_model: str | None,
-    ):
+    ) -> tuple[ChatOpenAI, OpenAIEmbeddings]:
         api_key_raw = ChatbotConfig.get_config(OPENROUTER_API_KEY_ENV_NAME, None)
         api_key = (
             api_key_raw.strip()
@@ -305,7 +303,7 @@ class RagasBenchmarkDatasetGenerator:
             api_key=SecretStr(api_key),
             base_url=base_url,
             temperature=0.2,
-            max_tokens=2048,
+            max_completion_tokens=2048,
         )
         embeddings = OpenAIEmbeddings(
             model=(embedding_model or default_embedding_model),

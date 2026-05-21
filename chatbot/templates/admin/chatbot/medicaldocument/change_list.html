@@ -3,39 +3,39 @@
 
 {% block object-tools-items %}
     {{ block.super }}
-    {% if perms.chatbot.change_medicaldocument and user.is_superuser %}
+    {% if perms.chatbot.change_medicaldocumentchunk and user.is_superuser %}
     <li>
-        <a href="{% url 'admin:chatbot_medicaldocument_dashboard' %}" class="historylink">
+        <a href="{% url 'admin:chatbot_medicaldocumentchunk_dashboard' %}" class="historylink">
             {% trans 'Embedding Dashboard' %}
         </a>
     </li>
     <li>
-        <a href="{% url 'admin:chatbot_medicaldocument_vector_search' %}" class="historylink">
+        <a href="{% url 'admin:chatbot_medicaldocumentchunk_vector_search' %}" class="historylink">
             {% trans 'Vector Search' %}
         </a>
     </li>
     <li>
-        <a href="{% url 'admin:chatbot_medicaldocument_quality_check' %}" class="historylink">
+        <a href="{% url 'admin:chatbot_medicaldocumentchunk_quality_check' %}" class="historylink">
             {% trans 'Quality Check' %}
         </a>
     </li>
     <li>
-        <a href="{% url 'admin:chatbot_medicaldocument_reembed_manager' %}" class="historylink">
+        <a href="{% url 'admin:chatbot_medicaldocumentchunk_reembed_manager' %}" class="historylink">
             {% trans 'Re-embedding Manager' %}
         </a>
     </li>
     <li>
-        <a href="{% url 'admin:chatbot_medicaldocument_upload_csv' %}" class="addlink">
+        <a href="{% url 'admin:chatbot_medicaldocumentchunk_upload_csv' %}" class="addlink">
             {% trans 'Upload & Embed Articles' %}
         </a>
     </li>
     <li>
-        <a href="{% url 'admin:chatbot_medicaldocument_embed_url' %}" class="addlink">
+        <a href="{% url 'admin:chatbot_medicaldocumentchunk_embed_url' %}" class="addlink">
             {% trans 'Crawl URL & Embed' %}
         </a>
     </li>
     <li>
-        <a href="{% url 'admin:chatbot_medicaldocument_paste_content' %}" class="addlink">
+        <a href="{% url 'admin:chatbot_medicaldocumentchunk_paste_content' %}" class="addlink">
             {% trans 'Paste Content & Embed' %}
         </a>
     </li>

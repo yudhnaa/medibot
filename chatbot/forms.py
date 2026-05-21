@@ -5,7 +5,13 @@ from urllib.parse import urlparse
 from django import forms
 from django.contrib.admin.widgets import FilteredSelectMultiple
 
-from chatbot.models import IndexType, MedicalDocument, SectionType
+from chatbot.models import (
+    COLLECTION_NAMES,
+    MEDICAL_DOCUMENTS_CHUNKS_COLLECTION,
+    MEDICAL_DOCUMENTS_DISEASE_COLLECTION,
+    MEDICAL_DOCUMENTS_TITLES_COLLECTION,
+    SectionType,
+)
 
 
 class CsvUploadForm(forms.Form):
@@ -20,17 +26,16 @@ class CsvUploadForm(forms.Form):
         widget=forms.FileInput(attrs={"accept": ".csv"}),
     )
 
-    index_types = forms.MultipleChoiceField(
-        label="Index Types",
-        choices=IndexType.choices,
-        initial=[IndexType.C, IndexType.A, IndexType.B],
+    collections = forms.MultipleChoiceField(
+        label="Collections",
+        choices=[(name, name) for name in COLLECTION_NAMES],
+        initial=[
+            MEDICAL_DOCUMENTS_TITLES_COLLECTION,
+            MEDICAL_DOCUMENTS_DISEASE_COLLECTION,
+            MEDICAL_DOCUMENTS_CHUNKS_COLLECTION,
+        ],
         widget=forms.CheckboxSelectMultiple,
-        help_text=(
-            "Select one or more index types to create. "
-            "A=medical_documents_disease (summary per disease), "
-            "B=medical_documents_chunks (section-level detail), "
-            "C=medical_documents_titles (disease title gate)"
-        ),
+        help_text="Select one or more physical collections to create.",
     )
 
     def clean_csv_file(self):
@@ -64,7 +69,7 @@ class ArticleUrlEmbedForm(forms.Form):
     url = forms.URLField(
         label="Article URL",
         max_length=2048,
-        help_text="Paste an article URL to crawl and index into C/A/B collections.",
+        help_text="Paste an article URL to crawl and embed into medical document collections.",
     )
 
     def clean_url(self):
@@ -92,7 +97,7 @@ class ArticlePasteEmbedForm(forms.Form):
     content = forms.CharField(
         label="Article content",
         widget=forms.Textarea(attrs={"rows": 18}),
-        help_text="Paste the page text to extract and index into C/A/B collections.",
+        help_text="Paste the page text to extract and embed into medical document collections.",
     )
 
     def clean_title(self):
@@ -117,20 +122,6 @@ class ArticlePasteEmbedForm(forms.Form):
         return content
 
 
-class DocumentEditForm(forms.ModelForm):
-    """Form for editing document fields with preview."""
-
-    class Meta:
-        model = MedicalDocument
-        fields = ["title", "content", "section_type", "metadata"]
-        widgets = {
-            "title": forms.TextInput(attrs={"size": 80}),
-            "content": forms.Textarea(attrs={"rows": 10, "cols": 80}),
-            "section_type": forms.Select(),
-            "metadata": forms.Textarea(attrs={"rows": 5, "cols": 80}),
-        }
-
-
 class DocumentBulkActionForm(forms.Form):
     """Form for selecting documents and choosing bulk action."""
 
@@ -139,7 +130,6 @@ class DocumentBulkActionForm(forms.Form):
         ("delete", "Delete Selected Documents"),
         ("export", "Export as JSON"),
         ("change_section", "Change Section Type"),
-        ("change_index", "Change Index Type"),
     ]
 
     action = forms.ChoiceField(choices=ACTION_CHOICES, label="Action")
@@ -148,12 +138,6 @@ class DocumentBulkActionForm(forms.Form):
         label="New Section Type",
         required=False,
         help_text="Only applies to change section action",
-    )
-    new_index_type = forms.ChoiceField(
-        choices=IndexType.choices,
-        label="New Index Type",
-        required=False,
-        help_text="Only applies to change index action",
     )
     confirm = forms.BooleanField(
         required=False,

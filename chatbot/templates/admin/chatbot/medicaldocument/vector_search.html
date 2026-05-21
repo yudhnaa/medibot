@@ -136,13 +136,13 @@
                 {{ result.content|truncatewords:30 }}
             </div>
             <div class="result-metadata">
-                <strong>Section:</strong> {{ result.section_type }} | 
-                <strong>Index:</strong> {{ result.index_type }} | 
+                <strong>Section:</strong> {{ result.section_type }} |
+                <strong>Collection:</strong> {{ result.collection_name }} |
                 <strong>Provider:</strong> {{ result.embedding_provider }}
             </div>
             <div class="result-actions">
-                <a href="/admin/chatbot/medicaldocument/{{ result.id }}/change/">View in Admin</a>
-                <a href="/admin/chatbot/medicaldocument/{{ result.id }}/delete/">Delete</a>
+                <a href="/admin/chatbot/medicaldocumentchunk/{{ result.id }}/change/">View in Admin</a>
+                <a href="/admin/chatbot/medicaldocumentchunk/{{ result.id }}/delete/">Delete</a>
             </div>
         </div>
         {% endfor %}

@@ -6,6 +6,7 @@ Tests document storage, search, and CSV processing with mocked embeddings.
 import json
 import tempfile
 from pathlib import Path
+from typing import cast
 from unittest.mock import MagicMock, patch
 
 from django.test import TestCase
@@ -15,7 +16,14 @@ from rest_framework.test import APIClient
 import pandas as pd
 
 from authentication.models import Customer
-from chatbot.models import IndexType, MedicalDocument, SectionType
+from chatbot.models import (
+    MEDICAL_DOCUMENTS_CHUNKS_COLLECTION,
+    MEDICAL_DOCUMENTS_DISEASE_COLLECTION,
+    MedicalDiseaseDocument,
+    MedicalDocumentChunk,
+    MedicalDocumentTitle,
+    SectionType,
+)
 from vector_store.services.embedding_docs_pipeline.article_schema import (
     parse_list_items,
 )
@@ -49,7 +57,7 @@ class VectorStoreEndpointPermissionTests(TestCase):
         mock_service = mock_service_cls.return_value
         mock_service.embed_text.return_value = [0.1, 0.2]
         mock_service.get_provider_name.return_value = "mock"
-        self.client.force_authenticate(user=self.user)
+        cast(APIClient, self.client).force_authenticate(user=self.user)
 
         response = self.client.post(
             "/api/v1/vector-store/text/",
@@ -61,7 +69,7 @@ class VectorStoreEndpointPermissionTests(TestCase):
         mock_service.embed_text.assert_called_once_with("hello")
 
     def test_embed_documents_denies_authenticated_non_staff(self) -> None:
-        self.client.force_authenticate(user=self.user)
+        cast(APIClient, self.client).force_authenticate(user=self.user)
 
         response = self.client.post(
             "/api/v1/vector-store/documents/",
@@ -76,7 +84,7 @@ class VectorStoreEndpointPermissionTests(TestCase):
         mock_service = mock_service_cls.return_value
         mock_service.embed_documents.return_value = [[0.1, 0.2]]
         mock_service.get_provider_name.return_value = "mock"
-        self.client.force_authenticate(user=self.staff)
+        cast(APIClient, self.client).force_authenticate(user=self.staff)
 
         response = self.client.post(
             "/api/v1/vector-store/documents/",
@@ -119,11 +127,11 @@ class VectorStoreManagerTestCase(TestCase):
 
     def test_add_document_creates_medical_document(self) -> None:
         """Test that add_document creates a MedicalDocument with embedding."""
-        doc = self.manager.add_document(
+        doc = self.manager.add_document_to_collection(
+            collection_name=MEDICAL_DOCUMENTS_CHUNKS_COLLECTION,
             content="Test symptom content",
             title="Test Disease",
-            section_type=SectionType.SYMPTOM,
-            index_type=IndexType.B,
+            section_type="symptom",
             source="test_source",
             metadata={"key": "value"},
         )
@@ -131,8 +139,8 @@ class VectorStoreManagerTestCase(TestCase):
         self.assertIsNotNone(doc.pk)
         self.assertEqual(doc.title, "Test Disease")
         self.assertEqual(doc.content, "Test symptom content")
-        self.assertEqual(doc.section_type, SectionType.SYMPTOM)
-        self.assertEqual(doc.index_type, IndexType.B)
+        self.assertEqual(doc.section_type, "symptom")
+        self.assertEqual(doc.collection_name, MEDICAL_DOCUMENTS_CHUNKS_COLLECTION)
         self.assertEqual(doc.source, "test_source")
         self.assertEqual(doc.metadata, {"key": "value"})
         self.assertIsNotNone(doc.embedding)
@@ -145,27 +153,24 @@ class VectorStoreManagerTestCase(TestCase):
 
     def test_detect_duplicate_embeddings_groups_similar_documents(self) -> None:
         """Duplicate detection should group near-identical embedded documents."""
-        first = MedicalDocument.objects.create(
+        first = MedicalDiseaseDocument.objects.create(
             title="Disease A",
             content="content a",
             section_type=SectionType.GENERAL,
-            index_type=IndexType.A,
             source="test",
             embedding=[1.0] * 768,
         )
-        second = MedicalDocument.objects.create(
+        second = MedicalDiseaseDocument.objects.create(
             title="Disease A copy",
             content="content b",
             section_type=SectionType.GENERAL,
-            index_type=IndexType.A,
             source="test",
             embedding=[1.0] * 768,
         )
-        MedicalDocument.objects.create(
+        MedicalDiseaseDocument.objects.create(
             title="Disease B",
             content="content c",
             section_type=SectionType.GENERAL,
-            index_type=IndexType.A,
             source="test",
             embedding=[0.0] * 768,
         )
@@ -197,14 +202,14 @@ class VectorStoreManagerTestCase(TestCase):
                 "content": "Content 1",
                 "title": "Title 1",
                 "section_type": SectionType.GENERAL,
-                "index_type": IndexType.A,
+                "collection_name": MEDICAL_DOCUMENTS_DISEASE_COLLECTION,
                 "source": "test",
             },
             {
                 "content": "Content 2",
                 "title": "Title 2",
                 "section_type": SectionType.SYMPTOM,
-                "index_type": IndexType.B,
+                "collection_name": MEDICAL_DOCUMENTS_CHUNKS_COLLECTION,
                 "source": "test",
             },
         ]
@@ -215,10 +220,7 @@ class VectorStoreManagerTestCase(TestCase):
         self.assertEqual(created_docs[0].title, "Title 1")
         self.assertEqual(created_docs[1].title, "Title 2")
 
-        # Verify batch embedding was called
-        self.mock_embedding_service.embed_documents.assert_called_once_with(
-            ["Content 1", "Content 2"]
-        )
+        self.assertEqual(self.mock_embedding_service.embed_documents.call_count, 2)
 
     # -------------------------
     # Statistics Tests
@@ -226,46 +228,40 @@ class VectorStoreManagerTestCase(TestCase):
 
     def test_get_stats_returns_counts(self) -> None:
         """Test that get_stats returns correct document counts."""
-        # Create some documents
-        MedicalDocument.objects.create(
-            title="A1", content="c", index_type=IndexType.A, embedding=[0.1] * 768
+        MedicalDiseaseDocument.objects.create(
+            title="A1", content="c", embedding=[0.1] * 768
         )
-        MedicalDocument.objects.create(
-            title="B1", content="c", index_type=IndexType.B, embedding=[0.1] * 768
+        MedicalDocumentChunk.objects.create(
+            title="B1", content="c", embedding=[0.1] * 768
         )
-        MedicalDocument.objects.create(
-            title="B2", content="c", index_type=IndexType.B, embedding=[0.1] * 768
+        MedicalDocumentChunk.objects.create(
+            title="B2", content="c", embedding=[0.1] * 768
         )
 
         stats = self.manager.get_stats()
 
-        self.assertEqual(stats["index_a_count"], 1)
-        self.assertEqual(stats["index_b_count"], 2)
-        self.assertEqual(stats["index_c_count"], 0)
+        self.assertEqual(stats["disease_count"], 1)
+        self.assertEqual(stats["chunks_count"], 2)
+        self.assertEqual(stats["titles_count"], 0)
         self.assertEqual(stats["total_documents"], 3)
         self.assertEqual(stats["embedding_provider"], "mock")
 
-    def test_clear_index_deletes_documents(self) -> None:
-        """Test that clear_index deletes documents of specific index type."""
-        MedicalDocument.objects.create(
-            title="A1", content="c", index_type=IndexType.A, embedding=[0.1] * 768
+    def test_clear_collection_deletes_documents(self) -> None:
+        MedicalDiseaseDocument.objects.create(
+            title="A1", content="c", embedding=[0.1] * 768
         )
-        MedicalDocument.objects.create(
-            title="B1", content="c", index_type=IndexType.B, embedding=[0.1] * 768
+        MedicalDocumentChunk.objects.create(
+            title="B1", content="c", embedding=[0.1] * 768
         )
-        MedicalDocument.objects.create(
-            title="B2", content="c", index_type=IndexType.B, embedding=[0.1] * 768
+        MedicalDocumentChunk.objects.create(
+            title="B2", content="c", embedding=[0.1] * 768
         )
 
-        deleted = self.manager.clear_index(IndexType.B)
+        deleted = self.manager.clear_collection(MEDICAL_DOCUMENTS_CHUNKS_COLLECTION)
 
         self.assertEqual(deleted, 2)
-        self.assertEqual(
-            MedicalDocument.objects.filter(index_type=IndexType.B).count(), 0
-        )
-        self.assertEqual(
-            MedicalDocument.objects.filter(index_type=IndexType.A).count(), 1
-        )
+        self.assertEqual(MedicalDocumentChunk.objects.count(), 0)
+        self.assertEqual(MedicalDiseaseDocument.objects.count(), 1)
 
     # -------------------------
     # CSV Processing Tests
@@ -323,8 +319,8 @@ class VectorStoreManagerTestCase(TestCase):
             )
         )
 
-    def test_process_csv_to_documents_index_b(self) -> None:
-        """Test CSV processing for Index B (per-section documents)."""
+    def test_process_csv_to_documents_chunks_collection(self) -> None:
+        """Test CSV processing for chunks collection."""
         # Create a temporary CSV file
         csv_data = {
             "title": ["Test Disease"],
@@ -340,7 +336,9 @@ class VectorStoreManagerTestCase(TestCase):
 
         try:
             documents = self.manager.process_csv_to_documents(
-                csv_path=csv_path, source="test", index_type="B"
+                csv_path=csv_path,
+                source="test",
+                collection_name=MEDICAL_DOCUMENTS_CHUNKS_COLLECTION,
             )
 
             # Should have documents for symptom and general sections
@@ -351,13 +349,13 @@ class VectorStoreManagerTestCase(TestCase):
             self.assertIn("content", doc)
             self.assertIn("title", doc)
             self.assertIn("section_type", doc)
-            self.assertIn("index_type", doc)
+            self.assertIn("collection_name", doc)
             self.assertEqual(doc["source"], "test")
         finally:
             Path(csv_path).unlink()
 
-    def test_process_csv_to_documents_index_a(self) -> None:
-        """Test CSV processing for Index A (disease-level summary)."""
+    def test_process_csv_to_documents_disease_collection(self) -> None:
+        """Test CSV processing for disease collection."""
         csv_data = {
             "title": ["Test Disease"],
             "url": ["http://example.com"],
@@ -372,19 +370,24 @@ class VectorStoreManagerTestCase(TestCase):
 
         try:
             documents = self.manager.process_csv_to_documents(
-                csv_path=csv_path, source="test", index_type="A"
+                csv_path=csv_path,
+                source="test",
+                collection_name=MEDICAL_DOCUMENTS_DISEASE_COLLECTION,
             )
 
             self.assertEqual(len(documents), 1)
-            self.assertEqual(documents[0]["index_type"], IndexType.A)
+            self.assertEqual(
+                documents[0]["collection_name"], MEDICAL_DOCUMENTS_DISEASE_COLLECTION
+            )
             self.assertIn("test disease", documents[0]["content"])
         finally:
             Path(csv_path).unlink()
 
-    def test_process_csv_to_documents_index_c(self) -> None:
-        """Test CSV processing for Index C (title-only)."""
+    def test_process_csv_to_documents_titles_collection(self) -> None:
+        """Test CSV processing for titles collection."""
         csv_data = {
             "title": ["Disease One", "Disease Two"],
+            "aliases": ["Bệnh Một", "Bệnh Hai"],
             "url": ["http://a.com", "http://b.com"],
         }
         df = pd.DataFrame(csv_data)
@@ -395,12 +398,17 @@ class VectorStoreManagerTestCase(TestCase):
 
         try:
             documents = self.manager.process_csv_to_documents(
-                csv_path=csv_path, source="test", index_type="C"
+                csv_path=csv_path,
+                source="test",
+                collection_name="medical_documents_titles",
             )
 
             self.assertEqual(len(documents), 2)
-            self.assertEqual(documents[0]["content"], "disease one")
-            self.assertEqual(documents[1]["content"], "disease two")
+            self.assertEqual(documents[0]["content"], "disease one | bệnh một")
+            self.assertEqual(
+                documents[0]["metadata"]["title_aliases"], ["disease one", "bệnh một"]
+            )
+            self.assertEqual(documents[1]["content"], "disease two | bệnh hai")
         finally:
             Path(csv_path).unlink()
 
@@ -450,19 +458,16 @@ class VectorStoreManagerSearchTestCase(TestCase):
 
         self.manager = VectorStoreManager()
 
-        # Create test documents with embeddings
-        self.doc1 = MedicalDocument.objects.create(
+        self.doc1 = MedicalDocumentChunk.objects.create(
             title="Fever Disease",
             content="symptoms include high fever",
             section_type=SectionType.SYMPTOM,
-            index_type=IndexType.B,
             embedding=[0.1] * 768,
         )
-        self.doc2 = MedicalDocument.objects.create(
+        self.doc2 = MedicalDocumentChunk.objects.create(
             title="Cold Disease",
             content="symptoms include runny nose",
             section_type=SectionType.SYMPTOM,
-            index_type=IndexType.B,
             embedding=[0.2] * 768,
         )
 
@@ -470,36 +475,36 @@ class VectorStoreManagerSearchTestCase(TestCase):
         """Clean up mocks."""
         self.embedding_patcher.stop()
 
-    def test_search_similar_returns_results(self) -> None:
-        """Test that search_similar returns matching documents."""
-        # Note: This test may be skipped if pgvector extension is not available
+    def test_search_collection_returns_results(self) -> None:
         try:
-            results = self.manager.search_similar("fever symptoms", k=5)
-            # Should return results (may vary based on similarity)
+            results = self.manager.search_collection(
+                collection_name=MEDICAL_DOCUMENTS_CHUNKS_COLLECTION,
+                query="fever symptoms",
+                k=5,
+            )
             self.assertIsInstance(results, list)
         except Exception as e:
-            # Skip if pgvector is not available
             if "vector" in str(e).lower():
                 self.skipTest("pgvector extension not available")
             raise
 
-    def test_search_similar_with_index_filter(self) -> None:
-        """Test search with index_type filter."""
-        # Create a document with different index type
-        MedicalDocument.objects.create(
+    def test_search_collection_uses_physical_collection(self) -> None:
+        MedicalDiseaseDocument.objects.create(
             title="Summary",
             content="disease summary",
-            index_type=IndexType.A,
             embedding=[0.15] * 768,
         )
 
         try:
-            results = self.manager.search_similar(
-                "disease", k=5, index_type=IndexType.B
+            results = self.manager.search_collection(
+                collection_name=MEDICAL_DOCUMENTS_CHUNKS_COLLECTION,
+                query="disease",
+                k=5,
             )
-            # All results should be Index B
             for doc in results:
-                self.assertEqual(doc.index_type, IndexType.B)
+                self.assertEqual(
+                    doc.collection_name, MEDICAL_DOCUMENTS_CHUNKS_COLLECTION
+                )
         except Exception as e:
             if "vector" in str(e).lower():
                 self.skipTest("pgvector extension not available")
@@ -565,7 +570,7 @@ class COVIDQAEmbeddingPipelineTestCase(TestCase):
             kwargs = mock_chat_openai.call_args.kwargs
             self.assertEqual(kwargs["model"], "openai/gpt-4.1-mini")
 
-    def test_stage_1_index_c_stores_article_ids_in_metadata(self) -> None:
+    def test_stage_1_titles_collection_stores_article_ids_in_metadata(self) -> None:
         with (
             patch(
                 "vector_store.services.embedding_docs_pipeline.base.EmbeddingService"
@@ -598,7 +603,7 @@ class COVIDQAEmbeddingPipelineTestCase(TestCase):
                 "extract_diseases_from_context",
                 return_value=["COVID-19"],
             ):
-                disease_to_contexts = pipeline.stage_1_index_c(
+                disease_to_contexts = pipeline.stage_1_titles_collection(
                     [
                         {
                             "article_id": "covidqa-001",
@@ -609,7 +614,7 @@ class COVIDQAEmbeddingPipelineTestCase(TestCase):
                 )
 
             self.assertIn("covid-19", disease_to_contexts)
-            doc = MedicalDocument.objects.get(index_type=IndexType.C)
+            doc = MedicalDocumentTitle.objects.get()
             self.assertEqual(doc.metadata["source_article_ids"], ["covidqa-001"])
 
     def test_run_persists_extraction_dataset_file(self) -> None:
@@ -641,11 +646,13 @@ class COVIDQAEmbeddingPipelineTestCase(TestCase):
                     patch.object(pipeline, "load_contexts", return_value=contexts),
                     patch.object(
                         pipeline,
-                        "stage_1_index_c",
+                        "stage_1_titles_collection",
                         return_value={"covid-19": {"ctx-001"}},
                     ),
-                    patch.object(pipeline, "stage_2_index_a", return_value=1),
-                    patch.object(pipeline, "stage_3_index_b", return_value=2),
+                    patch.object(
+                        pipeline, "stage_2_disease_collection", return_value=1
+                    ),
+                    patch.object(pipeline, "stage_3_chunks_collection", return_value=2),
                 ):
                     stats = pipeline.run(num_docs=1)
 
@@ -690,7 +697,7 @@ class COVIDQAEmbeddingPipelineTestCase(TestCase):
                 "_llm_invoke",
                 return_value=json.dumps(llm_payload, ensure_ascii=False),
             ):
-                count = pipeline.stage_2_index_a(
+                count = pipeline.stage_2_disease_collection(
                     [
                         {
                             "article_id": "covidqa-001",
@@ -705,7 +712,7 @@ class COVIDQAEmbeddingPipelineTestCase(TestCase):
                 )
 
             self.assertEqual(count, 1)
-            docs = MedicalDocument.objects.filter(index_type=IndexType.A)
+            docs = MedicalDiseaseDocument.objects.all()
             self.assertEqual(docs.count(), 1)
             doc = docs.first()
             self.assertIsNotNone(doc)
@@ -750,7 +757,7 @@ class COVIDQAEmbeddingPipelineTestCase(TestCase):
                     "living_and_preventive": "",
                 },
             ):
-                count = pipeline.stage_3_index_b(
+                count = pipeline.stage_3_chunks_collection(
                     [
                         {
                             "article_id": "covidqa-001",
@@ -765,7 +772,7 @@ class COVIDQAEmbeddingPipelineTestCase(TestCase):
                 )
 
             self.assertEqual(count, 2)
-            docs = MedicalDocument.objects.filter(index_type=IndexType.B).order_by("id")
+            docs = MedicalDocumentChunk.objects.order_by("id")
             self.assertEqual(docs.count(), 2)
             self.assertEqual(
                 set(docs.values_list("title", flat=True)),

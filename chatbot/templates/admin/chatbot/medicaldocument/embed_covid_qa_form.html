@@ -82,7 +82,7 @@
 {% block breadcrumbs %}
 <div class="breadcrumbs">
     <a href="{% url 'admin:index' %}">{% trans 'Home' %}</a>
-    &rsaquo; <a href="{% url 'admin:chatbot_medicaldocument_changelist' %}">{% trans 'Medical Documents' %}</a>
+    &rsaquo; <a href="{% url 'admin:chatbot_medicaldocumentchunk_changelist' %}">{% trans 'Medical Documents' %}</a>
     &rsaquo; {% trans 'Embed covid_qa_deepset' %}
 </div>
 {% endblock %}
@@ -129,7 +129,7 @@
 
         <div class="submit-row">
             <input type="submit" value="{% trans 'Start Embedding' %}" />
-            <a href="{% url 'admin:chatbot_medicaldocument_changelist' %}">{% trans 'Cancel' %}</a>
+            <a href="{% url 'admin:chatbot_medicaldocumentchunk_changelist' %}">{% trans 'Cancel' %}</a>
         </div>
     </form>
 </div>
