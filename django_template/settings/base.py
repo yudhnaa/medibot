@@ -49,6 +49,7 @@ REST_FRAMEWORK = {
 # Application definition
 
 INSTALLED_APPS = [
+    "jazzmin",
     "django.contrib.admin",
     "django.contrib.auth",
     "django.contrib.contenttypes",
@@ -60,17 +61,21 @@ INSTALLED_APPS = [
     "rest_framework",
     "rest_framework_simplejwt",
     "rest_framework_simplejwt.token_blacklist",
-    "django_core",
     "drf_yasg",
     "django_filters",
     "django_celery_results",
     "django_celery_beat",
     "authentication",
+    "django_core",
     "chatbot",
     "rag_benchmark",
     "vector_store",
     "vision",
 ]
+
+JAZZMIN_SETTINGS = {
+
+}
 
 # Vision module configuration
 VISION_CONFIG_PATH = os.path.join(
@@ -151,7 +156,7 @@ ROOT_URLCONF = "django_template.urls"
 TEMPLATES = [
     {
         "BACKEND": "django.template.backends.django.DjangoTemplates",
-        "DIRS": [],
+        "DIRS": [os.path.join(BASE_DIR, "templates")],
         "APP_DIRS": True,
         "OPTIONS": {
             "context_processors": [

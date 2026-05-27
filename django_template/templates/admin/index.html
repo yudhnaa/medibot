@@ -1,0 +1,30 @@
+{% extends "admin/index.html" %}
+{% load i18n static jazzmin %}
+
+{% block extrahead %}
+    {{ block.super }}
+    <style>
+        #recent-actions-module {
+            display: none !important;
+        }
+
+        .dashboard .col-lg-9 {
+            flex: 0 0 100%;
+            max-width: 100%;
+        }
+
+        .dashboard .col-lg-3 {
+            display: none !important;
+        }
+    </style>
+{% endblock %}
+
+{% block content %}
+
+<div class="container-fluid">
+    <div class="row mb-3">
+       
+    </div>
+</div>
+
+{% endblock %}
