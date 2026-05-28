@@ -16,14 +16,239 @@
         .dashboard .col-lg-3 {
             display: none !important;
         }
+
+        .medibot-dashboard .small-box {
+            color: #1f2933;
+        }
+
+        .medibot-dashboard .small-box small {
+            color: rgba(31, 41, 51, 0.78);
+            font-weight: 600;
+        }
+
+        .medibot-dashboard .small-box .icon {
+            color: rgba(31, 41, 51, 0.2);
+        }
+
+        .medibot-dashboard .card-title {
+            margin-bottom: 0;
+        }
+
+        .medibot-stat-slate { background: #dbeafe; }
+        .medibot-stat-sage { background: #dcfce7; }
+        .medibot-stat-sky { background: #e0f2fe; }
+        .medibot-stat-sand { background: #fef3c7; }
+        .medibot-stat-lavender { background: #ede9fe; }
+
+        @media print {
+            body * {
+                visibility: hidden !important;
+            }
+
+            .medibot-dashboard,
+            .medibot-dashboard * {
+                visibility: visible !important;
+            }
+
+            .no-print,
+            .main-header,
+            .main-sidebar,
+            .content-header,
+            .breadcrumb,
+            .sidebar,
+            #jazzy-sidebar {
+                display: none !important;
+            }
+
+            .medibot-dashboard {
+                position: absolute !important;
+                left: 0 !important;
+                top: 0 !important;
+                width: 100% !important;
+                padding: 0 !important;
+                margin: 0 !important;
+            }
+
+            .content-wrapper,
+            .main-footer,
+            .content,
+            .container-fluid {
+                margin: 0 !important;
+                padding: 0 !important;
+            }
+
+            .card,
+            .small-box {
+                break-inside: avoid;
+                box-shadow: none !important;
+                border: 1px solid #dee2e6 !important;
+            }
+        }
     </style>
 {% endblock %}
 
 {% block content %}
 
-<div class="container-fluid">
-    <div class="row mb-3">
-       
+<div class="container-fluid medibot-dashboard">
+    <div class="d-flex flex-wrap align-items-center justify-content-between mb-3">
+        <div>
+            <h1 class="h3 mb-1">MediBot Operations Dashboard</h1>
+            <p class="text-muted mb-0">Production overview for users, chat, knowledge base, vision, and benchmark operations.</p>
+        </div>
+        <button type="button" class="btn btn-outline-primary mt-2 mt-sm-0 no-print" onclick="window.print()">
+            <i class="fas fa-print mr-1"></i> Print report
+        </button>
+    </div>
+
+    <div class="row">
+        {% for card in summary_cards %}
+            <div class="col-12 col-sm-6 col-xl-3 mb-3">
+                <div class="small-box medibot-stat-{{ card.accent }}">
+                    <div class="inner">
+                        <h3>{{ card.value }}</h3>
+                        <p>{{ card.label }}</p>
+                        <small>{{ card.detail }}</small>
+                    </div>
+                    <div class="icon">
+                        <i class="{{ card.icon }}"></i>
+                    </div>
+                </div>
+            </div>
+        {% empty %}
+            <div class="col-12">
+                <div class="alert alert-info">No dashboard metrics available.</div>
+            </div>
+        {% endfor %}
+    </div>
+
+    <div class="row">
+        <div class="col-lg-6 mb-3">
+            <div class="card card-outline card-primary h-100">
+                <div class="card-header">
+                    <h3 class="card-title">Knowledge base report</h3>
+                </div>
+                <div class="card-body">
+                    <dl class="row mb-3">
+                        <dt class="col-sm-6">Documents with embeddings</dt>
+                        <dd class="col-sm-6 text-sm-right">{{ knowledge_report.documents_with_embeddings }}</dd>
+                        <dt class="col-sm-6">Embedding coverage</dt>
+                        <dd class="col-sm-6 text-sm-right">{{ knowledge_report.embedding_coverage }}%</dd>
+                        <dt class="col-sm-6">Audit events</dt>
+                        <dd class="col-sm-6 text-sm-right">{{ knowledge_report.audit_events }}</dd>
+                    </dl>
+
+                    <h4 class="h6 text-muted text-uppercase">Collections</h4>
+                    <div class="table-responsive">
+                        <table class="table table-sm table-striped mb-3">
+                            <thead><tr><th>Collection</th><th class="text-right">Documents</th></tr></thead>
+                            <tbody>
+                            {% for collection, count in knowledge_report.collection_counts.items %}
+                                <tr><td>{{ collection }}</td><td class="text-right">{{ count }}</td></tr>
+                            {% empty %}
+                                <tr><td colspan="2" class="text-muted">No collections found.</td></tr>
+                            {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <h4 class="h6 text-muted text-uppercase">Embedding jobs</h4>
+                    <div class="table-responsive">
+                        <table class="table table-sm table-striped mb-0">
+                            <thead><tr><th>Status</th><th class="text-right">Jobs</th></tr></thead>
+                            <tbody>
+                            {% for status, count in knowledge_report.embedding_jobs_by_status.items %}
+                                <tr><td>{{ status|title }}</td><td class="text-right">{{ count }}</td></tr>
+                            {% empty %}
+                                <tr><td colspan="2" class="text-muted">No embedding jobs yet.</td></tr>
+                            {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-lg-6 mb-3">
+            <div class="card card-outline card-success h-100">
+                <div class="card-header">
+                    <h3 class="card-title">Operations report</h3>
+                </div>
+                <div class="card-body">
+                    <dl class="row mb-3">
+                        <dt class="col-sm-6">X-ray analyses</dt>
+                        <dd class="col-sm-6 text-sm-right">{{ operations_report.xray_analyses }}</dd>
+                        <dt class="col-sm-6">Benchmark runs</dt>
+                        <dd class="col-sm-6 text-sm-right">{{ operations_report.benchmark_runs }}</dd>
+                        <dt class="col-sm-6">Completed benchmark runs</dt>
+                        <dd class="col-sm-6 text-sm-right">{{ operations_report.completed_benchmark_runs }}</dd>
+                        <dt class="col-sm-6">Failed embedding jobs</dt>
+                        <dd class="col-sm-6 text-sm-right">{{ operations_report.failed_embedding_jobs }}</dd>
+                    </dl>
+
+                    <h4 class="h6 text-muted text-uppercase">Benchmark runs by status</h4>
+                    <div class="table-responsive">
+                        <table class="table table-sm table-striped mb-0">
+                            <thead><tr><th>Status</th><th class="text-right">Runs</th></tr></thead>
+                            <tbody>
+                            {% for status, count in operations_report.benchmark_runs_by_status.items %}
+                                <tr><td>{{ status|title }}</td><td class="text-right">{{ count }}</td></tr>
+                            {% empty %}
+                                <tr><td colspan="2" class="text-muted">No benchmark runs yet.</td></tr>
+                            {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row report-section">
+        <div class="col-lg-6 mb-3">
+            <div class="card h-100">
+                <div class="card-header"><h3 class="card-title">Recent embedding jobs</h3></div>
+                <div class="card-body table-responsive p-0">
+                    <table class="table table-sm table-hover mb-0">
+                        <thead><tr><th>ID</th><th>Type</th><th>Status</th><th class="text-right">Documents</th></tr></thead>
+                        <tbody>
+                        {% for job in knowledge_report.recent_embedding_jobs %}
+                            <tr>
+                                <td>#{{ job.id }}</td>
+                                <td>{{ job.job_type }}</td>
+                                <td>{{ job.status|title }}</td>
+                                <td class="text-right">{{ job.total_documents }}</td>
+                            </tr>
+                        {% empty %}
+                            <tr><td colspan="4" class="text-muted">No recent embedding jobs.</td></tr>
+                        {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-lg-6 mb-3">
+            <div class="card h-100">
+                <div class="card-header"><h3 class="card-title">Latest benchmark runs</h3></div>
+                <div class="card-body table-responsive p-0">
+                    <table class="table table-sm table-hover mb-0">
+                        <thead><tr><th>ID</th><th>Dataset</th><th>Status</th><th>Created</th></tr></thead>
+                        <tbody>
+                        {% for run in operations_report.latest_benchmark_runs %}
+                            <tr>
+                                <td>#{{ run.id }}</td>
+                                <td>{{ run.dataset.name }}:{{ run.dataset.version }}</td>
+                                <td>{{ run.status|title }}</td>
+                                <td>{{ run.created_at|date:"Y-m-d H:i" }}</td>
+                            </tr>
+                        {% empty %}
+                            <tr><td colspan="4" class="text-muted">No benchmark runs yet.</td></tr>
+                        {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
     </div>
 </div>
 

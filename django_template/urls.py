@@ -9,9 +9,11 @@ from rest_framework import permissions
 from drf_yasg import openapi
 from drf_yasg.views import get_schema_view
 
+from django_template.admin_dashboard import get_admin_dashboard_context
+
 
 class ApiDocsPermission(permissions.BasePermission):
-    def has_permission(self, request, view):
+    def has_permission(self, request, view):  # type: ignore
         if settings.DEBUG or settings.PUBLIC_API_DOCS:
             return True
         return bool(request.user and request.user.is_staff)
@@ -19,6 +21,20 @@ class ApiDocsPermission(permissions.BasePermission):
 
 def health_check(request):
     return JsonResponse({"status": "ok"})
+
+
+_admin_index = admin.site.index
+
+
+def admin_dashboard_index(request, extra_context=None):
+    request.user.get_all_permissions()
+    dashboard_context = get_admin_dashboard_context()
+    if extra_context:
+        dashboard_context.update(extra_context)
+    return _admin_index(request, dashboard_context)
+
+
+admin.site.index = admin_dashboard_index
 
 
 SchemaView = get_schema_view(
