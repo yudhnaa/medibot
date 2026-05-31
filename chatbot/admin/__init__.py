@@ -485,11 +485,10 @@ class ChatbotConfigAdmin(admin.ModelAdmin):
 
 @admin.register(UserIntake)
 class UserIntakeAdmin(admin.ModelAdmin):
-    list_display = ["customer__id", "customer", "updated_at"]
-    search_fields = ["customer__username"]
+    list_display = ["customer_id_display", "customer_username_display", "updated_at"]
     fields = (
-        "customer__id",
-        "customer__username",
+        "customer_id_display",
+        "customer_username_display",
         "age",
         "sex",
         "pregnancy_status",
@@ -498,8 +497,8 @@ class UserIntakeAdmin(admin.ModelAdmin):
         "symptoms",
     )
     readonly_fields = (
-        "customer__id",
-        "customer__username",
+        "customer_id_display",
+        "customer_username_display",
         "age",
         "sex",
         "pregnancy_status",
@@ -507,3 +506,11 @@ class UserIntakeAdmin(admin.ModelAdmin):
         "disease_name",
         "symptoms",
     )
+
+    @admin.display(description="Customer ID")
+    def customer_id_display(self, obj):
+        return obj.customer_id
+
+    @admin.display(description="Customer Username")
+    def customer_username_display(self, obj):
+        return obj.customer.username
