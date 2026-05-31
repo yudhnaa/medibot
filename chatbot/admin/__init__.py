@@ -1,8 +1,3 @@
-"""
-Django admin configuration for chatbot app.
-Registers models and configures admin interfaces.
-"""
-
 import os
 from typing import Any, cast
 
@@ -14,7 +9,6 @@ from django.shortcuts import redirect, render
 from django.urls import path
 
 from chatbot.admin.document_admin import (
-    EmbeddingAuditLogAdmin,
     EmbeddingJobAdmin,
     MedicalVectorDocumentAdmin,
 )
@@ -23,12 +17,11 @@ from chatbot.models import (
     ChatbotConfig,
     ChatMessage,
     ChatSession,
-    EmbeddingAuditLog,
     EmbeddingJob,
     MedicalDiseaseDocument,
     MedicalDocumentChunk,
     MedicalDocumentTitle,
-    UserPreference,
+    UserIntake,
 )
 
 
@@ -481,7 +474,6 @@ admin.site.register(MedicalDiseaseDocument, CollectionOnlyMedicalDocumentAdmin)
 admin.site.register(MedicalDocumentTitle, MedicalDocumentTitleAdmin)
 admin.site.register(MedicalDocumentChunk, ExtendedMedicalDocumentAdmin)
 admin.site.register(EmbeddingJob, EmbeddingJobAdmin)
-admin.site.register(EmbeddingAuditLog, EmbeddingAuditLogAdmin)
 
 
 @admin.register(ChatbotConfig)
@@ -491,8 +483,27 @@ class ChatbotConfigAdmin(admin.ModelAdmin):
     list_filter = ["category", "is_active"]
 
 
-@admin.register(UserPreference)
-class UserPreferenceAdmin(admin.ModelAdmin):
-    list_display = ["customer", "response_style", "language", "updated_at"]
+@admin.register(UserIntake)
+class UserIntakeAdmin(admin.ModelAdmin):
+    list_display = ["customer__id", "customer", "updated_at"]
     search_fields = ["customer__username"]
-    list_filter = ["response_style", "language"]
+    fields = (
+        "customer__id",
+        "customer__username",
+        "age",
+        "sex",
+        "pregnancy_status",
+        "onset_days",
+        "disease_name",
+        "symptoms",
+    )
+    readonly_fields = (
+        "customer__id",
+        "customer__username",
+        "age",
+        "sex",
+        "pregnancy_status",
+        "onset_days",
+        "disease_name",
+        "symptoms",
+    )

@@ -26,7 +26,6 @@ from chatbot.models import (
     EmbeddingJob,
     EmbeddingJobStatus,
     MedicalVectorDocument,
-    get_collection_model,
     iter_collection_models,
 )
 
@@ -691,46 +690,3 @@ class EmbeddingJobAdmin(admin.ModelAdmin):
         """Cancel pending jobs."""
         count = queryset.filter(status="pending").update(status="cancelled")
         messages.success(request, f"Cancelled {count} job(s).")
-
-
-class EmbeddingAuditLogAdmin(admin.ModelAdmin):
-    """Admin for embedding audit logs."""
-
-    list_display = ["timestamp", "user", "action_display", "document_title", "job_link"]
-    list_filter = ["action", "timestamp", "user"]
-    search_fields = ["collection_name", "document_id", "user__username", "notes"]
-    readonly_fields = ["timestamp", "changes_json"]
-
-    @admin.display(description="Action")
-    def action_display(self, obj: EmbeddingAuditLog) -> str:
-        label_map = dict(EmbeddingAuditLog.ACTION_CHOICES)
-        key = obj.action or ""
-        return label_map.get(key, key)
-
-    @admin.display(description="Document")
-    def document_title(self, obj: EmbeddingAuditLog) -> str:
-        if obj.document_id is None or not obj.collection_name:
-            return "-"
-
-        try:
-            model = get_collection_model(obj.collection_name)
-        except ValueError:
-            return f"Document #{obj.document_id}"
-
-        document = model.objects.filter(pk=obj.document_id).only("title").first()
-        if document is None:
-            return f"Missing document #{obj.document_id}"
-        return document.title[:50]
-
-    @admin.display(description="Job")
-    def job_link(self, obj: EmbeddingAuditLog) -> str:
-        if obj.embedding_job:
-            job_id = obj.embedding_job.pk
-            if job_id is not None:
-                url = f"/admin/chatbot/embeddingjob/{job_id}/change/"
-                return format_html('<a href="{}">Job #{}</a>', url, job_id)
-        return "-"
-
-    @admin.display(description="Changes")
-    def changes_json(self, obj: EmbeddingAuditLog) -> str:
-        return json.dumps(obj.changes, indent=2)
