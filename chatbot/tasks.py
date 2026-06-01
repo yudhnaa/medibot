@@ -103,9 +103,7 @@ def process_csv_upload(
         if job:
             _fail_embedding_job(job, exc)
 
-        _cleanup_file(file_path, warn_on_error=False)
-
-        return _retry_or_return_csv_error(self, exc)
+        return _retry_or_return_csv_error(self, exc, file_path=file_path)
 
 
 def _start_embedding_job(job_id: int | None):
@@ -237,13 +235,16 @@ def _cleanup_file(file_path: str, *, warn_on_error: bool = True) -> None:
             logger.warning(f"Failed to cleanup file {file_path}: {exc}")
 
 
-def _retry_or_return_csv_error(self: Any, exc: Exception) -> dict[str, Any]:
+def _retry_or_return_csv_error(
+    self: Any, exc: Exception, *, file_path: str
+) -> dict[str, Any]:
     if self.request.retries < self.max_retries:
         logger.info(
             f"Retrying task (attempt {self.request.retries + 1}/{self.max_retries})"
         )
         raise self.retry(exc=exc)
 
+    _cleanup_file(file_path, warn_on_error=False)
     return {
         "status": "error",
         "message": f"Failed to process CSV: {str(exc)}",

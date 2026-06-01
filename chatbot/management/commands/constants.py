@@ -26,7 +26,7 @@ DEFAULT_MODEL_CONFIG: dict[str, str | float | bool | int] = {
     "LLM_PROVIDER": "gemini",  # Active LLM provider: gemini | openrouter
     "LLM_MODEL": "gemini-2.5-flash",
     "EMBEDDING_PROVIDER": "openrouter",  # Active embedding provider: gemini | tei | transformers | openrouter
-    "EMBEDDING_MODEL": "text-embedding-3-small",
+    "EMBEDDING_MODEL": "openai/text-embedding-3-small",
     "OPENROUTER_BASE_URL": "https://openrouter.ai/api/v1",
     "TEMPERATURE": 0,
     "VECTOR_DIMENSIONS": 768,

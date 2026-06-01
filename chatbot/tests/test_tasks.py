@@ -1,6 +1,6 @@
 from types import SimpleNamespace
 from typing import Any, cast
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from django.test import SimpleTestCase
 
@@ -50,4 +50,52 @@ class ProcessCsvUploadTaskTests(SimpleTestCase):
         self.assertEqual(
             result["reports"]["medical_documents_chunks"]["failed_rows"], 1
         )
+        mock_remove.assert_called_once_with("/tmp/upload.csv")
+
+    @patch("chatbot.tasks.os.remove")
+    @patch("chatbot.tasks.os.path.exists", return_value=True)
+    def test_retry_keeps_temp_file_when_retries_remain(
+        self,
+        mock_exists,
+        mock_remove,
+    ):
+        task = SimpleNamespace(
+            request=SimpleNamespace(retries=0),
+            max_retries=3,
+            retry=MagicMock(side_effect=RuntimeError("retry")),
+        )
+
+        retry_or_return_csv_error = cast(Any, process_csv_upload).run.__globals__[
+            "_retry_or_return_csv_error"
+        ]
+
+        with self.assertRaises(RuntimeError):
+            retry_or_return_csv_error(
+                task,
+                FileNotFoundError("missing"),
+                file_path="/tmp/upload.csv",
+            )
+
+        mock_exists.assert_not_called()
+        mock_remove.assert_not_called()
+
+    @patch("chatbot.tasks.os.remove")
+    @patch("chatbot.tasks.os.path.exists", return_value=True)
+    def test_retry_cleans_temp_file_after_final_failure(
+        self,
+        mock_exists,
+        mock_remove,
+    ):
+        task = SimpleNamespace(request=SimpleNamespace(retries=3), max_retries=3)
+
+        result = cast(Any, process_csv_upload).run.__globals__[
+            "_retry_or_return_csv_error"
+        ](
+            task,
+            FileNotFoundError("missing"),
+            file_path="/tmp/upload.csv",
+        )
+
+        self.assertEqual(result["status"], "error")
+        mock_exists.assert_called_once_with("/tmp/upload.csv")
         mock_remove.assert_called_once_with("/tmp/upload.csv")

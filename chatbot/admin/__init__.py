@@ -100,9 +100,10 @@ class ExtendedMedicalDocumentAdmin(MedicalVectorDocumentAdmin):
                 # Save file to temporary location using absolute path
                 from django.conf import settings
 
-                temp_dir = os.path.join(settings.BASE_DIR, "tmp", "csv_uploads")
+                temp_dir = os.path.join(settings.MEDIA_ROOT, "csv_uploads")
                 os.makedirs(temp_dir, exist_ok=True)
-                file_path = os.path.join(temp_dir, csv_file.name)
+                file_name = os.path.basename(csv_file.name)
+                file_path = os.path.join(temp_dir, file_name)
 
                 # Save the uploaded file
                 with open(file_path, "wb+") as destination:

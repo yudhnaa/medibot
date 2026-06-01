@@ -4,38 +4,38 @@
 {% block object-tools-items %}
     {{ block.super }}
     {% if perms.chatbot.change_medicaldocumentchunk and user.is_superuser %}
-    <li>
-        <a href="{% url 'admin:chatbot_medicaldocumentchunk_dashboard' %}" class="historylink">
+    <li style="list-style: none;">
+        <a href="{% url 'admin:chatbot_medicaldocumentchunk_dashboard' %}" class="btn btn-outline-primary btn-sm">
             {% trans 'Embedding Dashboard' %}
         </a>
     </li>
-    <li>
-        <a href="{% url 'admin:chatbot_medicaldocumentchunk_vector_search' %}" class="historylink">
+    <li style="list-style: none;">
+        <a href="{% url 'admin:chatbot_medicaldocumentchunk_vector_search' %}" class="btn btn-outline-primary btn-sm">
             {% trans 'Vector Search' %}
         </a>
     </li>
-    <li>
-        <a href="{% url 'admin:chatbot_medicaldocumentchunk_quality_check' %}" class="historylink">
+    <li style="list-style: none;">
+        <a href="{% url 'admin:chatbot_medicaldocumentchunk_quality_check' %}" class="btn btn-outline-primary btn-sm">
             {% trans 'Quality Check' %}
         </a>
     </li>
-    <li>
-        <a href="{% url 'admin:chatbot_medicaldocumentchunk_reembed_manager' %}" class="historylink">
+    <li style="list-style: none;">
+        <a href="{% url 'admin:chatbot_medicaldocumentchunk_reembed_manager' %}" class="btn btn-outline-primary btn-sm">
             {% trans 'Re-embedding Manager' %}
         </a>
     </li>
-    <li>
-        <a href="{% url 'admin:chatbot_medicaldocumentchunk_upload_csv' %}" class="addlink">
+    <li style="list-style: none;">
+        <a href="{% url 'admin:chatbot_medicaldocumentchunk_upload_csv' %}" class="btn btn-success btn-sm">
             {% trans 'Upload & Embed Articles' %}
         </a>
     </li>
-    <li>
-        <a href="{% url 'admin:chatbot_medicaldocumentchunk_embed_url' %}" class="addlink">
+    <li style="list-style: none;">
+        <a href="{% url 'admin:chatbot_medicaldocumentchunk_embed_url' %}" class="btn btn-success btn-sm">
             {% trans 'Crawl URL & Embed' %}
         </a>
     </li>
-    <li>
-        <a href="{% url 'admin:chatbot_medicaldocumentchunk_paste_content' %}" class="addlink">
+    <li style="list-style: none;">
+        <a href="{% url 'admin:chatbot_medicaldocumentchunk_paste_content' %}" class="btn btn-success btn-sm">
             {% trans 'Paste Content & Embed' %}
         </a>
     </li>

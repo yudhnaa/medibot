@@ -6,9 +6,10 @@ from django.contrib.admin.sites import AdminSite
 from django.contrib.auth import get_user_model
 from django.contrib.messages.storage.fallback import FallbackStorage
 from django.contrib.sessions.middleware import SessionMiddleware
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.forms import ChoiceField
 from django.http import HttpResponse
-from django.test import RequestFactory, TestCase
+from django.test import RequestFactory, TestCase, override_settings
 
 from chatbot.admin import ExtendedMedicalDocumentAdmin, MedicalDocumentTitleAdmin
 from chatbot.forms import ArticlePasteEmbedForm, ArticleUrlEmbedForm, ReembeddingForm
@@ -208,6 +209,56 @@ class ExtendedMedicalDocumentAdminTests(TestCase):
         session_middleware.process_request(request)
         request.session.save()
         setattr(request, "_messages", FallbackStorage(request))
+
+    @override_settings(MEDIA_ROOT="/tmp/test-media")
+    @patch("builtins.open")
+    @patch("chatbot.admin.os.makedirs")
+    @patch("chatbot.tasks.process_csv_upload.delay")
+    @patch("vector_store.services.embedding_service.EmbeddingService.resolve_provider")
+    def test_upload_csv_view_uses_media_root_and_queues_task(
+        self,
+        mock_resolve_provider,
+        mock_delay,
+        mock_makedirs,
+        mock_open,
+    ):
+        mock_resolve_provider.return_value = "transformers"
+        mock_delay.return_value = MagicMock(id="csv-celery-task-id")
+        csv_file = SimpleUploadedFile(
+            "../lung_dataset.csv",
+            b"title,general\nFlu,Fever\n",
+            content_type="text/csv",
+        )
+        request = self.factory.post(
+            "/admin/chatbot/medicaldocumentchunk/upload-csv/",
+            data={
+                "csv_file": csv_file,
+                "collections": ["medical_documents_disease"],
+            },
+        )
+        request.user = self.superuser
+        self._attach_messages(request)
+
+        response = self.admin.upload_csv_view(request)
+
+        self.assertEqual(response.status_code, 302)
+        mock_makedirs.assert_called_once_with(
+            "/tmp/test-media/csv_uploads", exist_ok=True
+        )
+        mock_open.assert_called_once_with(
+            "/tmp/test-media/csv_uploads/lung_dataset.csv", "wb+"
+        )
+        job = EmbeddingJob.objects.get()
+        self.assertEqual(job.job_type, "csv_upload")
+        self.assertEqual(job.provider, "transformers")
+        self.assertEqual(job.celery_task_id, "csv-celery-task-id")
+        mock_delay.assert_called_once_with(
+            file_path="/tmp/test-media/csv_uploads/lung_dataset.csv",
+            collections=["medical_documents_disease"],
+            source="admin_upload",
+            user_id=self.superuser.pk,
+            job_id=job.pk,
+        )
 
     @patch("chatbot.tasks.process_article_url_embed.delay")
     @patch("vector_store.services.embedding_service.EmbeddingService.resolve_provider")

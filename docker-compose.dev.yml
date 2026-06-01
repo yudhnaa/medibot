@@ -24,6 +24,8 @@ services:
     environment:
       SECRET_KEY: ${SECRET_KEY}
       DJANGO_SETTINGS_MODULE: django_template.settings.dev
+      DB_HOST: medibot-db
+      DB_PORT: 5432
       DB_DEV_HOST: medibot-db
       DB_DEV_PORT: 5432
       BROKER_URL: redis://medibot-redis:6379/0
@@ -84,6 +86,8 @@ services:
       - .env
     environment:
       DJANGO_SETTINGS_MODULE: django_template.settings.dev
+      DB_HOST: medibot-db
+      DB_PORT: 5432
       DB_DEV_HOST: medibot-db
       DB_DEV_PORT: 5432
       BROKER_URL: redis://medibot-redis:6379/0
@@ -118,6 +122,8 @@ services:
       - .env
     environment:
       DJANGO_SETTINGS_MODULE: django_template.settings.dev
+      DB_HOST: medibot-db
+      DB_PORT: 5432
       DB_DEV_HOST: medibot-db
       DB_DEV_PORT: 5432
       BROKER_URL: redis://medibot-redis:6379/0
