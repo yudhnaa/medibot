@@ -1214,31 +1214,16 @@ class ChatbotService:
         titles: list[str],
         q_cleaned: str,
     ) -> list[dict[str, Any]]:
-        fetch_started = time.perf_counter()
         summaries: list[dict[str, Any]] = []
         for title in titles:
             normalized_title = str(title).strip().lower()
             if not normalized_title:
                 continue
-            search_started = time.perf_counter()
-            # TODO: Remove this log after patch
-            logger.info(
-                "[BOTTLENECK_TRACE] disease_summary_search_start title=%s query_len=%s",
-                normalized_title,
-                len(q_cleaned or normalized_title),
-            )
             docs = self.vector_manager.search_collection(
                 collection_name=MEDICAL_DOCUMENTS_DISEASE_COLLECTION,
                 query=q_cleaned or normalized_title,
                 k=1,
                 metadata_filters={"canonical_title": normalized_title},
-            )
-            # TODO: Remove this log after patch
-            logger.info(
-                "[BOTTLENECK_TRACE] disease_summary_search_done title=%s docs=%s elapsed_ms=%s",
-                normalized_title,
-                len(docs),
-                int((time.perf_counter() - search_started) * 1000),
             )
             if not docs:
                 continue
@@ -1253,13 +1238,6 @@ class ChatbotService:
                     "url": metadata.get("url") or metadata.get("source_url") or "",
                 }
             )
-        # TODO: Remove this log after patch
-        logger.info(
-            "[BOTTLENECK_TRACE] disease_summary_fetch_done titles=%s summaries=%s elapsed_ms=%s",
-            len(titles),
-            len(summaries),
-            int((time.perf_counter() - fetch_started) * 1000),
-        )
         return summaries
 
     def _build_single_disease_context_with_summary(
@@ -1377,16 +1355,8 @@ class ChatbotService:
             for text in unique_texts
             if text not in self._similarity_embedding_cache
         ]
-        # TODO: Remove this log after patch
-        logger.info(
-            "[BOTTLENECK_TRACE] negation_embedding_prime_start unique_texts=%s missing=%s batch_size=%s",
-            len(unique_texts),
-            len(missing),
-            batch_size,
-        )
         for start in range(0, len(missing), max(1, batch_size)):
             batch = missing[start : start + max(1, batch_size)]
-            batch_started = time.perf_counter()
             try:
                 if hasattr(emb_service, "embed_texts"):
                     vectors = emb_service.embed_texts(batch)
@@ -1397,12 +1367,6 @@ class ChatbotService:
                         f"Embedding batch returned {len(vectors)} vectors for {len(batch)} texts"
                     )
                 self._similarity_embedding_cache.update(zip(batch, vectors))
-                # TODO: Remove this log after patch
-                logger.info(
-                    "[BOTTLENECK_TRACE] negation_embedding_batch_done batch_len=%s elapsed_ms=%s",
-                    len(batch),
-                    int((time.perf_counter() - batch_started) * 1000),
-                )
             except Exception as exc:
                 logger.warning("Negation embedding batch failed: %s", exc)
                 for text in batch:
@@ -1439,57 +1403,26 @@ class ChatbotService:
             config = self._multi_disease_retrieval_config()
             q_symptom = str(analysis.get("q_symptom", "")).strip()
             q_cleaned = str(analysis.get("q_cleaned", "")).strip()
-            retrieval_started = time.perf_counter()
             docs_2a, docs_2b = self._multi_disease_search_docs(
                 q_symptom=q_symptom,
                 q_cleaned=q_cleaned,
                 k=config["k"],
-            )
-            # TODO: Remove this log after patch
-            logger.info(
-                "[BOTTLENECK_TRACE] multi_disease_chunks_done docs_2a=%s docs_2b=%s elapsed_ms=%s",
-                len(docs_2a),
-                len(docs_2b),
-                int((time.perf_counter() - retrieval_started) * 1000),
             )
             title_map = self._multi_disease_title_map(docs_2a=docs_2a, docs_2b=docs_2b)
             merged_items = self._multi_disease_merged_items(
                 title_map=title_map,
                 config=config,
             )
-            candidates_started = time.perf_counter()
-            # TODO: Remove this log after patch
-            logger.info(
-                "[BOTTLENECK_TRACE] multi_disease_candidates_start merged_items=%s",
-                len(merged_items),
-            )
             candidates, evidence_docs = self._multi_disease_candidates(
                 merged_items=merged_items,
                 analysis=analysis,
                 config=config,
             )
-            # TODO: Remove this log after patch
-            logger.info(
-                "[BOTTLENECK_TRACE] multi_disease_candidates_done candidates=%s evidence_docs=%s elapsed_ms=%s",
-                len(candidates),
-                len(evidence_docs),
-                int((time.perf_counter() - candidates_started) * 1000),
-            )
-            summaries_started = time.perf_counter()
-            result = self._with_multi_disease_summaries(
+            return self._with_multi_disease_summaries(
                 candidates=candidates,
                 evidence_docs=evidence_docs,
                 q_cleaned=q_cleaned,
             )
-            # TODO: Remove this log after patch
-            logger.info(
-                "[BOTTLENECK_TRACE] multi_disease_summaries_done candidates=%s summaries=%s elapsed_ms=%s total_elapsed_ms=%s",
-                len(result.get("candidates", [])),
-                len(result.get("summaries", {})),
-                int((time.perf_counter() - summaries_started) * 1000),
-                int((time.perf_counter() - retrieval_started) * 1000),
-            )
-            return result
         except Exception as ex:
             logger.error(f"Multi-disease retrieval error: {ex}")
             return {"candidates": [], "summaries": {}, "evidence_docs": []}
@@ -1641,21 +1574,9 @@ class ChatbotService:
             candidate_inputs.append((title, group, raw_docs, symptom_texts))
 
         if neg_symptoms:
-            # TODO: Remove this log after patch
-            logger.info(
-                "[BOTTLENECK_TRACE] negation_embedding_preprime_all_start candidates=%s texts=%s",
-                len(candidate_inputs),
-                len(all_similarity_texts),
-            )
-            preprime_started = time.perf_counter()
             self._prime_similarity_embeddings(
                 all_similarity_texts,
                 config["neg_embed_batch_size"],
-            )
-            # TODO: Remove this log after patch
-            logger.info(
-                "[BOTTLENECK_TRACE] negation_embedding_preprime_all_done elapsed_ms=%s",
-                int((time.perf_counter() - preprime_started) * 1000),
             )
 
         candidates = []
@@ -1764,15 +1685,6 @@ class ChatbotService:
         neg_thresh: float,
         batch_size: int,
     ) -> float:
-        started = time.perf_counter()
-        # TODO: Remove this log after patch
-        logger.info(
-            "[BOTTLENECK_TRACE] neg_frac_start neg_symptoms=%s symptom_texts=%s thresh=%s batch_size=%s",
-            len(neg_symptoms),
-            len(symptom_texts),
-            neg_thresh,
-            batch_size,
-        )
         if any(
             self._normalize_similarity_text(text)
             not in self._similarity_embedding_cache
@@ -1793,16 +1705,7 @@ class ChatbotService:
                     break
             if matched:
                 neg_matches += 1
-        result = neg_matches / max(1, len(symptom_texts))
-        # TODO: Remove this log after patch
-        logger.info(
-            "[BOTTLENECK_TRACE] neg_frac_done neg_matches=%s comparisons=%s result=%.4f elapsed_ms=%s",
-            neg_matches,
-            comparisons,
-            result,
-            int((time.perf_counter() - started) * 1000),
-        )
-        return result
+        return neg_matches / max(1, len(symptom_texts))
 
     def _with_multi_disease_summaries(
         self,
