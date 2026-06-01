@@ -250,6 +250,7 @@ class RouterAndRetrievalTests(SimpleTestCase):
             "RAG_MERGE_WEIGHT_ENTITIES": 0.5,
             "RAG_MERGE_WEIGHT_QUERY": 0.5,
             "RAG_NEG_SYM_SIM_THRESH": 0.75,
+            "RAG_NEG_EMBED_BATCH_SIZE": 32,
             "RAG_PENALTY_ALPHA": 0.5,
         }
         mock_get_config.side_effect = lambda key, default=None: config.get(key, default)
@@ -300,6 +301,8 @@ class RouterAndRetrievalTests(SimpleTestCase):
             a_summary_docs,  # Stage 6 summary fetch
         ]
 
+        service._similarity_embedding_cache = {}
+
         result = ChatbotService._multi_disease_retrieval(
             service,
             analysis={
@@ -334,6 +337,7 @@ class RouterAndRetrievalTests(SimpleTestCase):
             "RAG_MERGE_WEIGHT_QUERY": 0.0,
             "RAG_PENALTY_ALPHA": 0.0,
             "RAG_NEG_SYM_SIM_THRESH": 0.7,
+            "RAG_NEG_EMBED_BATCH_SIZE": 32,
         }
         mock_get_config.side_effect = lambda key, default=None: config.get(key, default)
 
@@ -344,6 +348,7 @@ class RouterAndRetrievalTests(SimpleTestCase):
             SimpleNamespace(symptoms=[], age=None, sex="unknown"),
         )
         service.vector_manager.embedding_service = None
+        service._similarity_embedding_cache = {}
 
         low_rank_doc = SimpleNamespace(
             distance=0.8,
@@ -402,6 +407,57 @@ class RouterAndRetrievalTests(SimpleTestCase):
             result["source_urls"],
             ["https://example.test/scoliosis", "https://example.test/covid"],
         )
+
+    def test_negation_similarity_primes_unique_texts_in_chunks(self) -> None:
+        service = object.__new__(ChatbotService)
+        service.vector_manager = MagicMock()
+        service._similarity_embedding_cache = {}
+        service.vector_manager.embedding_service.embed_texts.side_effect = [
+            [[1.0, 0.0], [0.0, 1.0]],
+            [[1.0, 0.0]],
+        ]
+
+        neg_frac = ChatbotService._multi_disease_neg_frac(
+            service,
+            neg_symptoms=["không sốt", "không sốt"],
+            symptom_texts=["không sốt", "ho khan"],
+            neg_thresh=0.8,
+            batch_size=2,
+        )
+
+        self.assertEqual(neg_frac, 1.0)
+        self.assertEqual(
+            service.vector_manager.embedding_service.embed_texts.call_count, 1
+        )
+        self.assertEqual(
+            service.vector_manager.embedding_service.embed_texts.call_args_list[0].args[
+                0
+            ],
+            ["không sốt", "ho khan"],
+        )
+
+    def test_negation_similarity_falls_back_to_lexical_on_embedding_failure(
+        self,
+    ) -> None:
+        service = object.__new__(ChatbotService)
+        service.vector_manager = MagicMock()
+        service._similarity_embedding_cache = {}
+        service.vector_manager.embedding_service.embed_texts.side_effect = RuntimeError(
+            "boom"
+        )
+        service.vector_manager.embedding_service.embed_text.side_effect = RuntimeError(
+            "boom"
+        )
+
+        neg_frac = ChatbotService._multi_disease_neg_frac(
+            service,
+            neg_symptoms=["đau bụng"],
+            symptom_texts=["đau bụng nhiều"],
+            neg_thresh=0.5,
+            batch_size=2,
+        )
+
+        self.assertEqual(neg_frac, 1.0)
 
 
 class IntakeRoutingTests(SimpleTestCase):

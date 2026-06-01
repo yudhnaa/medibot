@@ -8,6 +8,7 @@ import os
 
 import numpy as np
 from langchain_openai import OpenAIEmbeddings
+from openai import OpenAI
 from pydantic import SecretStr
 from typing_extensions import override
 
@@ -69,12 +70,14 @@ class OpenRouterEmbeddingProvider(EmbeddingProvider):
             or DEFAULT_OPENROUTER_BASE_URL
         )
 
+        self.model = model
         try:
             self.embeddings = OpenAIEmbeddings(
                 model=model,
                 api_key=SecretStr(api_key),
                 base_url=resolved_base_url,
             )
+            self.client = OpenAI(api_key=api_key, base_url=resolved_base_url)
         except TypeError:
             logger.error(
                 "Failed to initialize OpenRouterEmbeddings. Check if the model and base_url are correct."
@@ -111,6 +114,21 @@ class OpenRouterEmbeddingProvider(EmbeddingProvider):
             return self._normalize_768(raw_embedding)
         except Exception as e:
             logger.error(f"Error embedding text with OpenRouter: {e}")
+            raise
+
+    def embed_texts(self, texts: list[str]) -> list[list[float]]:
+        """Generate embedding vectors for multiple texts with one OpenRouter request."""
+        try:
+            response = self.client.embeddings.create(model=self.model, input=texts)
+            data = response.data
+            if len(data) != len(texts):
+                raise ValueError(
+                    f"OpenRouter returned {len(data)} embeddings for {len(texts)} texts"
+                )
+            ordered = sorted(data, key=lambda item: item.index)
+            return [self._normalize_768(item.embedding) for item in ordered]
+        except Exception as e:
+            logger.error(f"Error embedding text batch with OpenRouter: {e}")
             raise
 
     @override

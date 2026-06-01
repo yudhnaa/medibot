@@ -23,8 +23,8 @@ DEFAULT_RAG_CONFIG: dict[str, float | int] = {
 # =============================================================================
 DEFAULT_MODEL_CONFIG: dict[str, str | float | bool | int] = {
     "IS_USE_PAID_GOOGLE_GEMINI_API_KEY": False,
-    "LLM_PROVIDER": "gemini",  # Active LLM provider: gemini | openrouter
-    "LLM_MODEL": "gemini-2.5-flash",
+    "LLM_PROVIDER": "openrouter",  # Active LLM provider: gemini | openrouter
+    "LLM_MODEL": "google/gemini-2.5-flash",
     "EMBEDDING_PROVIDER": "openrouter",  # Active embedding provider: gemini | tei | transformers | openrouter
     "EMBEDDING_MODEL": "openai/text-embedding-3-small",
     "OPENROUTER_BASE_URL": "https://openrouter.ai/api/v1",

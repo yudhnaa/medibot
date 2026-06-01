@@ -118,6 +118,18 @@ class EmbeddingService:
 
         return self.provider.embed_documents(texts)
 
+    def embed_texts(self, texts: list[str]) -> list[list[float]]:
+        """Generate embedding vectors for multiple texts with provider batch fallback."""
+        if not texts:
+            raise ValueError("Texts list cannot be empty")
+        if any(not text or not text.strip() for text in texts):
+            raise ValueError("Text cannot be empty")
+
+        batch_embed = getattr(self.provider, "embed_texts", None)
+        if callable(batch_embed):
+            return batch_embed(texts)
+        return [self.embed_text(text) for text in texts]
+
     def get_provider_name(self) -> str:
         """Get the current provider name."""
         return self.provider_name

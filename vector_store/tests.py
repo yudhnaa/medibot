@@ -14,6 +14,8 @@ from django.test import TestCase
 from rest_framework.test import APIClient
 
 import pandas as pd
+from openai.types.create_embedding_response import CreateEmbeddingResponse
+from openai.types.embedding import Embedding
 
 from authentication.models import Customer
 from chatbot.models import (
@@ -33,8 +35,102 @@ from vector_store.services.embedding_docs_pipeline.covidqa_pipeline import (
 from vector_store.services.embedding_docs_pipeline.load_covid_qa import (
     get_unique_context_records,
 )
+from vector_store.services.embedding_providers.openrouter_provider import (
+    OpenRouterEmbeddingProvider,
+)
+from vector_store.services.embedding_service import EmbeddingService
 from vector_store.services.quality_service import QualityService
 from vector_store.services.vector_store_manager import VectorStoreManager
+
+
+class OpenRouterEmbeddingProviderTests(TestCase):
+    @patch("vector_store.services.embedding_providers.openrouter_provider.OpenAI")
+    @patch(
+        "vector_store.services.embedding_providers.openrouter_provider.OpenAIEmbeddings"
+    )
+    @patch(
+        "vector_store.services.embedding_providers.openrouter_provider.ChatbotConfig.get_config"
+    )
+    def test_embed_texts_sends_list_and_maps_response_order(
+        self,
+        mock_get_config: MagicMock,
+        _mock_embeddings_cls: MagicMock,
+        mock_openai_cls: MagicMock,
+    ) -> None:
+        mock_get_config.side_effect = lambda key, default=None: {
+            "EMBEDDING_MODEL": "test-model",
+            "OPENROUTER_API_KEY": "test-key",
+            "OPENROUTER_BASE_URL": "https://openrouter.test/api/v1",
+        }.get(key, default)
+        client = mock_openai_cls.return_value
+        client.embeddings.create.return_value = CreateEmbeddingResponse(
+            data=[
+                Embedding(embedding=[0.0, 2.0], index=1, object="embedding"),
+                Embedding(embedding=[2.0, 0.0], index=0, object="embedding"),
+            ],
+            model="test-model",
+            object="list",
+            usage={"prompt_tokens": 2, "total_tokens": 2},
+        )
+
+        provider = OpenRouterEmbeddingProvider()
+        result = provider.embed_texts(["first", "second"])
+
+        client.embeddings.create.assert_called_once_with(
+            model="test-model", input=["first", "second"]
+        )
+        self.assertEqual(result, [[1.0, 0.0], [0.0, 1.0]])
+
+    @patch("vector_store.services.embedding_providers.openrouter_provider.OpenAI")
+    @patch(
+        "vector_store.services.embedding_providers.openrouter_provider.OpenAIEmbeddings"
+    )
+    @patch(
+        "vector_store.services.embedding_providers.openrouter_provider.ChatbotConfig.get_config"
+    )
+    def test_embed_texts_rejects_response_count_mismatch(
+        self,
+        mock_get_config: MagicMock,
+        _mock_embeddings_cls: MagicMock,
+        mock_openai_cls: MagicMock,
+    ) -> None:
+        mock_get_config.side_effect = lambda key, default=None: {
+            "EMBEDDING_MODEL": "test-model",
+            "OPENROUTER_API_KEY": "test-key",
+            "OPENROUTER_BASE_URL": "https://openrouter.test/api/v1",
+        }.get(key, default)
+        client = mock_openai_cls.return_value
+        client.embeddings.create.return_value = CreateEmbeddingResponse(
+            data=[Embedding(embedding=[1.0, 0.0], index=0, object="embedding")],
+            model="test-model",
+            object="list",
+            usage={"prompt_tokens": 1, "total_tokens": 1},
+        )
+
+        provider = OpenRouterEmbeddingProvider()
+
+        with self.assertRaises(ValueError):
+            provider.embed_texts(["first", "second"])
+
+
+class EmbeddingServiceBatchTests(TestCase):
+    def test_embed_texts_uses_provider_batch_method(self) -> None:
+        service = object.__new__(EmbeddingService)
+        provider = MagicMock()
+        provider.embed_texts.return_value = [[1.0], [2.0]]
+        service.provider = provider
+
+        self.assertEqual(service.embed_texts(["a", "b"]), [[1.0], [2.0]])
+        provider.embed_texts.assert_called_once_with(["a", "b"])
+
+    def test_embed_texts_falls_back_to_sequential_embed_text(self) -> None:
+        service = object.__new__(EmbeddingService)
+        provider = MagicMock(spec=["embed_text"])
+        provider.embed_text.side_effect = [[1.0], [2.0]]
+        service.provider = provider
+
+        self.assertEqual(service.embed_texts(["a", "b"]), [[1.0], [2.0]])
+        self.assertEqual(provider.embed_text.call_count, 2)
 
 
 class VectorStoreEndpointPermissionTests(TestCase):
