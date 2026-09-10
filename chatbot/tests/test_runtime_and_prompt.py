@@ -809,6 +809,10 @@ class BenchmarkLanguagePolicyTests(SimpleTestCase):
             or ("The risk for older people is higher" in policy)
         )
 
+    @patch(
+        "chatbot.services.chatbot_benchmark_service.IS_SHAPE_BENCHMARK_ANSWER_ON",
+        True,
+    )
     def test_shape_benchmark_answer_for_what_is_symptom_question(self) -> None:
         service = object.__new__(ChatbotBenchmarkService)
 
@@ -824,6 +828,31 @@ class BenchmarkLanguagePolicyTests(SimpleTestCase):
 
         self.assertEqual(shaped, "COVID-19 is what cough is a symptom of.")
 
+    @patch(
+        "chatbot.services.chatbot_benchmark_service.IS_SHAPE_BENCHMARK_ANSWER_ON",
+        False,
+    )
+    def test_shape_benchmark_answer_can_be_disabled(
+        self,
+    ) -> None:
+        service = object.__new__(ChatbotBenchmarkService)
+
+        shaped = ChatbotBenchmarkService._shape_benchmark_answer(
+            service,
+            question="What is a cough a symptom of?",
+            answer="Cough is a symptom of COVID-19.",
+            retrieval_output={
+                "rerank": {"intent": {"target_sections": ["symptom", "general"]}}
+            },
+            output_language="en",
+        )
+
+        self.assertEqual(shaped, "Cough is a symptom of COVID-19.")
+
+    @patch(
+        "chatbot.services.chatbot_benchmark_service.IS_SHAPE_BENCHMARK_ANSWER_ON",
+        True,
+    )
     def test_shape_benchmark_answer_for_what_is_risk_question(self) -> None:
         service = object.__new__(ChatbotBenchmarkService)
 
@@ -839,6 +868,10 @@ class BenchmarkLanguagePolicyTests(SimpleTestCase):
 
         self.assertIn("The risk for older people is higher", shaped)
 
+    @patch(
+        "chatbot.services.chatbot_benchmark_service.IS_SHAPE_BENCHMARK_ANSWER_ON",
+        True,
+    )
     def test_shape_benchmark_answer_for_role_question(self) -> None:
         service = object.__new__(ChatbotBenchmarkService)
 
@@ -852,6 +885,10 @@ class BenchmarkLanguagePolicyTests(SimpleTestCase):
 
         self.assertIn("Fever plays the role", shaped)
 
+    @patch(
+        "chatbot.services.chatbot_benchmark_service.IS_SHAPE_BENCHMARK_ANSWER_ON",
+        True,
+    )
     def test_shape_benchmark_answer_for_main_cause_question(self) -> None:
         service = object.__new__(ChatbotBenchmarkService)
 

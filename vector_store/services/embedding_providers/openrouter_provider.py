@@ -110,8 +110,7 @@ class OpenRouterEmbeddingProvider(EmbeddingProvider):
             List of floats representing the embedding vector
         """
         try:
-            raw_embedding = self.embeddings.embed_query(text)
-            return self._normalize_768(raw_embedding)
+            return self.embed_texts([text])[0]
         except Exception as e:
             logger.error(f"Error embedding text with OpenRouter: {e}")
             raise
@@ -143,8 +142,7 @@ class OpenRouterEmbeddingProvider(EmbeddingProvider):
             List of embedding vectors
         """
         try:
-            raw_embeddings = self.embeddings.embed_documents(texts)
-            return [self._normalize_768(emb) for emb in raw_embeddings]
+            return self.embed_texts(texts)
         except Exception as e:
             logger.error(f"Error embedding documents with OpenRouter: {e}")
             raise

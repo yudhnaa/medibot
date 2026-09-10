@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from types import ModuleType, SimpleNamespace
 from typing import Any, cast
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from django.test import SimpleTestCase
 
@@ -161,7 +161,11 @@ class RagasJudgeEvaluatorTests(SimpleTestCase):
                 },
                 "retrieval_output": {
                     "summaries": {
-                        "coronavirus disease (covid-19)": "Summary support text."
+                        "coronavirus disease (covid-19)": (
+                            "coronavirus disease (covid-19)\n"
+                            "general overview text.\n"
+                            "Yếu tố nguy cơ: Summary support text."
+                        )
                     },
                     "retrieved_context_texts": ["Risk evidence text."],
                 },
@@ -194,12 +198,14 @@ class RagasJudgeEvaluatorTests(SimpleTestCase):
         self.assertEqual(len(results), 1)
         self.assertEqual(run_calls[0]["batch_size"], 1)
         retrieved_contexts = run_calls[0]["dataset"]["retrieved_contexts"][0]
-        self.assertIn("Summary support text.", retrieved_contexts)
+        self.assertIn(
+            "coronavirus disease (covid-19): Yếu tố nguy cơ: Summary support text.",
+            retrieved_contexts,
+        )
+        self.assertNotIn("general overview text.", retrieved_contexts)
         self.assertIn("Risk evidence text.", retrieved_contexts)
-        self.assertIn("Context snapshot from generation.", retrieved_contexts)
-        self.assertEqual(retrieved_contexts[0], "Risk evidence text.")
-        self.assertEqual(retrieved_contexts[-1], "Context snapshot from generation.")
 
+    @patch("rag_benchmark.services.ragas.IS_RAGAS_FORMAT_SECTION_CONTEXT_ON", True)
     def test_evaluate_batch_prioritizes_retrieved_items_and_dedups_contexts(self):
         evaluator = RagasJudgeEvaluator(metrics=["faithfulness"])
         fake_modules = self._build_fake_modules()
@@ -295,7 +301,8 @@ class RagasJudgeEvaluatorTests(SimpleTestCase):
                 "summaries": {
                     "coronavirus disease (covid-19)": (
                         "covid-19 is an infectious disease caused by the sars-cov-2 virus. "
-                        "main symptoms include fever, cough, and tiredness."
+                        "\nTriệu chứng: fever, cough, and tiredness."
+                        "\nNguyên nhân: sars-cov-2 virus."
                     )
                 },
                 "retrieved_items": [
@@ -323,8 +330,10 @@ class RagasJudgeEvaluatorTests(SimpleTestCase):
 
         self.assertGreaterEqual(len(contexts), 2)
         lowered = "\n".join(contexts).lower()
-        self.assertIn("symptom", lowered)
-        self.assertTrue("cause:" in lowered or "caused by" in lowered)
+        self.assertIn("fever cough tiredness", lowered)
+        self.assertIn("sars-cov-2 virus", lowered)
+        self.assertIn("triệu chứng", lowered)
+        self.assertIn("nguyên nhân", lowered)
         self.assertFalse(
             any(
                 text.lower().startswith("coronavirus disease (covid-19) ")
@@ -332,6 +341,7 @@ class RagasJudgeEvaluatorTests(SimpleTestCase):
             )
         )
 
+    @patch("rag_benchmark.services.ragas.IS_RAGAS_FORMAT_SECTION_CONTEXT_ON", True)
     def test_build_judge_contexts_drops_redundant_general_summary_for_risk_queries(
         self,
     ):
@@ -432,6 +442,62 @@ class RagasJudgeEvaluatorTests(SimpleTestCase):
 
         self.assertEqual(sections, {"aetiologies", "symptom"})
 
+    @patch("rag_benchmark.services.ragas.IS_RAGAS_FORMAT_SECTION_CONTEXT_ON", False)
+    def test_format_section_context_text_can_be_disabled(self):
+        evaluator = RagasJudgeEvaluator(metrics=["faithfulness"])
+
+        self.assertEqual(
+            evaluator._format_section_context_text(
+                text="fever, cough, tiredness.",
+                section="symptom",
+            ),
+            "fever, cough, tiredness.",
+        )
+        self.assertEqual(
+            evaluator._format_section_context_text(
+                text="sars-cov-2 virus",
+                section="aetiologies",
+            ),
+            "sars-cov-2 virus",
+        )
+
+    @patch("rag_benchmark.services.ragas.IS_RAGAS_SUMMARY_CONTEXT_ON", False)
+    def test_summary_context_candidates_can_be_disabled(self):
+        evaluator = RagasJudgeEvaluator(metrics=["faithfulness"])
+
+        candidates = evaluator._build_context_candidates(
+            retrieval_output={
+                "summaries": {"coronavirus disease (covid-19)": "summary support text"},
+                "retrieved_items": [
+                    {
+                        "title": "coronavirus disease (covid-19)",
+                        "section": "symptom",
+                        "content_preview": "fever cough tiredness",
+                    }
+                ],
+            },
+            question_tokens={"fever"},
+            target_sections={"symptom"},
+        )
+
+        self.assertEqual(
+            [candidate.source for candidate in candidates],
+            ["retrieved_items"],
+        )
+
+    @patch("rag_benchmark.services.ragas.IS_RAGAS_CONTEXT_SNAPSHOT_ON", False)
+    def test_context_snapshot_fallback_can_be_disabled(self):
+        evaluator = RagasJudgeEvaluator(metrics=["faithfulness"])
+        contexts: list[str] = []
+
+        evaluator._append_fallback_contexts(
+            contexts=contexts,
+            summaries={},
+            context_snapshot="Context snapshot support text.",
+        )
+
+        self.assertEqual(contexts, [])
+
     def test_prepare_ragas_contexts_dedupes_prefixed_and_raw_duplicates(self):
         evaluator = RagasJudgeEvaluator(metrics=["faithfulness"])
         contexts = evaluator._prepare_ragas_contexts(
@@ -475,7 +541,10 @@ class RagasJudgeEvaluatorTests(SimpleTestCase):
         self.assertEqual(contexts[0], f"Prevention guidance: {long_text}.")
         self.assertEqual(contexts[1], "Cause: sars-cov-2 virus.")
 
-    def test_evaluate_batch_includes_summary_for_sparse_single_section_evidence(self):
+    @patch("rag_benchmark.services.ragas.IS_RAGAS_FORMAT_SECTION_CONTEXT_ON", True)
+    def test_evaluate_batch_includes_targeted_summary_without_general_overview(
+        self,
+    ):
         evaluator = RagasJudgeEvaluator(metrics=["faithfulness"])
         fake_modules = self._build_fake_modules()
         run_calls: list[dict] = []
@@ -498,7 +567,11 @@ class RagasJudgeEvaluatorTests(SimpleTestCase):
                         }
                     },
                     "summaries": {
-                        "coronavirus disease (covid-19)": "Summary support text."
+                        "coronavirus disease (covid-19)": (
+                            "coronavirus disease (covid-19)\n"
+                            "general overview text.\n"
+                            "Yếu tố nguy cơ: Summary support text."
+                        )
                     },
                     "retrieved_items": [
                         {
@@ -541,8 +614,48 @@ class RagasJudgeEvaluatorTests(SimpleTestCase):
             retrieved_contexts[0],
             "Risk factors include Older people and diabetes are risk factors.",
         )
-        self.assertIn("Summary support text.", retrieved_contexts)
+        self.assertIn(
+            "coronavirus disease (covid-19): Yếu tố nguy cơ: Summary support text.",
+            retrieved_contexts,
+        )
+        self.assertNotIn("general overview text.", retrieved_contexts)
         self.assertNotIn("Broad context snapshot.", retrieved_contexts)
+
+    def test_summary_candidates_include_only_targeted_section_lines(self):
+        evaluator = RagasJudgeEvaluator(metrics=["faithfulness"])
+
+        candidates = evaluator._build_context_candidates(
+            retrieval_output={
+                "summaries": {
+                    "coronavirus disease (covid-19)": (
+                        "coronavirus disease (covid-19)\n"
+                        "Triệu chứng: fever, cough, tiredness.\n"
+                        "Nguyên nhân: sars-cov-2 virus."
+                    )
+                },
+                "retrieved_items": [
+                    {
+                        "title": "coronavirus disease (covid-19)",
+                        "section": "symptom",
+                        "content_preview": "fever cough tiredness",
+                    }
+                ],
+                "retrieved_context_texts": [],
+            },
+            question_tokens={"symptoms", "causes", "covid"},
+            target_sections={"symptom", "aetiologies"},
+        )
+
+        summary_texts = [
+            candidate.text for candidate in candidates if candidate.source == "summary"
+        ]
+        self.assertEqual(
+            summary_texts,
+            [
+                "coronavirus disease (covid-19): Triệu chứng: fever, cough, tiredness.",
+                "coronavirus disease (covid-19): Nguyên nhân: sars-cov-2 virus.",
+            ],
+        )
 
     def test_evaluate_batch_uses_fallback_sources_when_structured_sources_missing(self):
         evaluator = RagasJudgeEvaluator(metrics=["faithfulness"])
@@ -562,7 +675,7 @@ class RagasJudgeEvaluatorTests(SimpleTestCase):
                 },
                 "retrieval_output": {
                     "summaries": {
-                        "covid": "Legacy summary.",
+                        "covid": "Yếu tố nguy cơ: Legacy summary.",
                     },
                     "retrieved_context_texts": ["Legacy evidence."],
                     "retrieved_items": "invalid-shape",
@@ -595,9 +708,8 @@ class RagasJudgeEvaluatorTests(SimpleTestCase):
 
         self.assertEqual(len(results), 1)
         retrieved_contexts = run_calls[0]["dataset"]["retrieved_contexts"][0]
-        self.assertEqual(retrieved_contexts[0], "Legacy evidence.")
-        self.assertIn("Legacy summary.", retrieved_contexts)
-        self.assertEqual(retrieved_contexts[-1], "Legacy snapshot.")
+        self.assertIn("Legacy evidence.", retrieved_contexts)
+        self.assertIn("covid: Yếu tố nguy cơ: Legacy summary.", retrieved_contexts)
 
     def test_evaluate_batch_falls_back_to_legacy_order_when_collector_raises(self):
         evaluator = RagasJudgeEvaluator(metrics=["faithfulness"])
@@ -659,7 +771,50 @@ class RagasJudgeEvaluatorTests(SimpleTestCase):
 
         self.assertEqual(len(results), 1)
         retrieved_contexts = run_calls[0]["dataset"]["retrieved_contexts"][0]
-        self.assertEqual(retrieved_contexts[0], "Legacy snapshot.")
-        self.assertEqual(retrieved_contexts[1], "Legacy summary.")
-        self.assertEqual(retrieved_contexts[2], "Legacy evidence.")
-        self.assertEqual(len(retrieved_contexts), 3)
+        self.assertIn("Legacy summary.", retrieved_contexts)
+        self.assertIn("Legacy evidence.", retrieved_contexts)
+        self.assertEqual(len(retrieved_contexts), 2)
+
+    def test_openrouter_ragas_embeddings_use_raw_string_inputs(self):
+        evaluator = RagasJudgeEvaluator(metrics=["answer_relevancy"])
+        embeddings_client = MagicMock()
+        embeddings_client.embeddings.create.return_value = SimpleNamespace(
+            data=[
+                SimpleNamespace(index=1, embedding=[0.0, 2.0, 0.0]),
+                SimpleNamespace(index=0, embedding=[3.0, 4.0, 0.0]),
+            ]
+        )
+
+        with (
+            patch.object(
+                evaluator,
+                "_resolve_openrouter_api_key",
+                return_value="test-openrouter-key",
+            ),
+            patch.object(
+                evaluator,
+                "_resolve_openrouter_base_url",
+                return_value="https://openrouter.ai/api/v1",
+            ),
+            patch(
+                "rag_benchmark.services.ragas.ChatbotConfig.get_config",
+                return_value="qwen/qwen3-embedding-8b",
+            ),
+            patch(
+                "rag_benchmark.services.ragas.OpenAI",
+                return_value=embeddings_client,
+            ) as openai_cls,
+        ):
+            embeddings = evaluator._create_openrouter_embeddings()
+            vectors = embeddings.embed_documents(["alpha", "beta"])
+
+        openai_cls.assert_called_once_with(
+            api_key="test-openrouter-key",
+            base_url="https://openrouter.ai/api/v1",
+        )
+        embeddings_client.embeddings.create.assert_called_once_with(
+            model="qwen/qwen3-embedding-8b",
+            input=["alpha", "beta"],
+        )
+        self.assertEqual(vectors[0], [0.6, 0.8, 0.0])
+        self.assertEqual(vectors[1], [0.0, 1.0, 0.0])

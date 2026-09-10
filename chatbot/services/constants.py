@@ -227,6 +227,7 @@ DEFAULT_BENCHMARK_RETRIEVAL_CONTEXT_LIMIT = 3  # Cap contexts sent to Ragas per 
 DEFAULT_BENCHMARK_PROMPT_CONTEXT_CHAR_LIMIT = (
     2600  # Trim assembled benchmark prompt context before generation
 )
+IS_SHAPE_BENCHMARK_ANSWER_ON = False
 DEFAULT_BENCHMARK_SECTION_INTENT_BOOST = (
     0.18  # Boost docs whose section aligns with detected benchmark intent
 )

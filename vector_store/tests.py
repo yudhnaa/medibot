@@ -44,6 +44,13 @@ from vector_store.services.vector_store_manager import VectorStoreManager
 
 
 class OpenRouterEmbeddingProviderTests(TestCase):
+    def _mock_openrouter_config(self, key: str, default=None):
+        return {
+            "EMBEDDING_MODEL": "test-model",
+            "OPENROUTER_API_KEY": "test-key",
+            "OPENROUTER_BASE_URL": "https://openrouter.test/api/v1",
+        }.get(key, default)
+
     @patch("vector_store.services.embedding_providers.openrouter_provider.OpenAI")
     @patch(
         "vector_store.services.embedding_providers.openrouter_provider.OpenAIEmbeddings"
@@ -57,11 +64,7 @@ class OpenRouterEmbeddingProviderTests(TestCase):
         _mock_embeddings_cls: MagicMock,
         mock_openai_cls: MagicMock,
     ) -> None:
-        mock_get_config.side_effect = lambda key, default=None: {
-            "EMBEDDING_MODEL": "test-model",
-            "OPENROUTER_API_KEY": "test-key",
-            "OPENROUTER_BASE_URL": "https://openrouter.test/api/v1",
-        }.get(key, default)
+        mock_get_config.side_effect = self._mock_openrouter_config
         client = mock_openai_cls.return_value
         client.embeddings.create.return_value = CreateEmbeddingResponse(
             data=[
@@ -94,11 +97,7 @@ class OpenRouterEmbeddingProviderTests(TestCase):
         _mock_embeddings_cls: MagicMock,
         mock_openai_cls: MagicMock,
     ) -> None:
-        mock_get_config.side_effect = lambda key, default=None: {
-            "EMBEDDING_MODEL": "test-model",
-            "OPENROUTER_API_KEY": "test-key",
-            "OPENROUTER_BASE_URL": "https://openrouter.test/api/v1",
-        }.get(key, default)
+        mock_get_config.side_effect = self._mock_openrouter_config
         client = mock_openai_cls.return_value
         client.embeddings.create.return_value = CreateEmbeddingResponse(
             data=[Embedding(embedding=[1.0, 0.0], index=0, object="embedding")],
@@ -111,6 +110,71 @@ class OpenRouterEmbeddingProviderTests(TestCase):
 
         with self.assertRaises(ValueError):
             provider.embed_texts(["first", "second"])
+
+    @patch("vector_store.services.embedding_providers.openrouter_provider.OpenAI")
+    @patch(
+        "vector_store.services.embedding_providers.openrouter_provider.OpenAIEmbeddings"
+    )
+    @patch(
+        "vector_store.services.embedding_providers.openrouter_provider.ChatbotConfig.get_config"
+    )
+    def test_embed_text_uses_raw_openrouter_client(
+        self,
+        mock_get_config: MagicMock,
+        mock_embeddings_cls: MagicMock,
+        mock_openai_cls: MagicMock,
+    ) -> None:
+        mock_get_config.side_effect = self._mock_openrouter_config
+        client = mock_openai_cls.return_value
+        client.embeddings.create.return_value = CreateEmbeddingResponse(
+            data=[Embedding(embedding=[0.0, 3.0], index=0, object="embedding")],
+            model="test-model",
+            object="list",
+            usage={"prompt_tokens": 1, "total_tokens": 1},
+        )
+
+        provider = OpenRouterEmbeddingProvider()
+        result = provider.embed_text("single")
+
+        client.embeddings.create.assert_called_once_with(
+            model="test-model", input=["single"]
+        )
+        mock_embeddings_cls.return_value.embed_query.assert_not_called()
+        self.assertEqual(result, [0.0, 1.0])
+
+    @patch("vector_store.services.embedding_providers.openrouter_provider.OpenAI")
+    @patch(
+        "vector_store.services.embedding_providers.openrouter_provider.OpenAIEmbeddings"
+    )
+    @patch(
+        "vector_store.services.embedding_providers.openrouter_provider.ChatbotConfig.get_config"
+    )
+    def test_embed_documents_uses_raw_openrouter_client(
+        self,
+        mock_get_config: MagicMock,
+        mock_embeddings_cls: MagicMock,
+        mock_openai_cls: MagicMock,
+    ) -> None:
+        mock_get_config.side_effect = self._mock_openrouter_config
+        client = mock_openai_cls.return_value
+        client.embeddings.create.return_value = CreateEmbeddingResponse(
+            data=[
+                Embedding(embedding=[0.0, 3.0], index=0, object="embedding"),
+                Embedding(embedding=[4.0, 0.0], index=1, object="embedding"),
+            ],
+            model="test-model",
+            object="list",
+            usage={"prompt_tokens": 2, "total_tokens": 2},
+        )
+
+        provider = OpenRouterEmbeddingProvider()
+        result = provider.embed_documents(["first", "second"])
+
+        client.embeddings.create.assert_called_once_with(
+            model="test-model", input=["first", "second"]
+        )
+        mock_embeddings_cls.return_value.embed_documents.assert_not_called()
+        self.assertEqual(result, [[0.0, 1.0], [1.0, 0.0]])
 
 
 class EmbeddingServiceBatchTests(TestCase):

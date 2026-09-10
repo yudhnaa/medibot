@@ -71,6 +71,9 @@ class OfflineBenchmarkRunnerTests(TestCase):
         self.assertEqual(run.total_cases, 1)
         self.assertEqual(BenchmarkCaseResult.objects.filter(run=run).count(), 1)
         self.assertTrue(isinstance(run.release_gate, dict))
+        self.assertIn("IS_RAGAS_FORMAT_SECTION_CONTEXT_ON", run.config_snapshot)
+        self.assertIn("IS_RAGAS_SUMMARY_CONTEXT_ON", run.config_snapshot)
+        self.assertIn("IS_RAGAS_CONTEXT_SNAPSHOT_ON", run.config_snapshot)
 
     def _create_dataset_with_cases(self):
         dataset = self._create_dataset()

@@ -12,6 +12,7 @@ from django.utils import timezone
 
 from chatbot.models import ChatbotConfig, ChatSession, iter_collection_models
 from chatbot.services.chatbot_benchmark_service import ChatbotBenchmarkService
+from chatbot.services.constants import IS_SHAPE_BENCHMARK_ANSWER_ON
 from rag_benchmark.models import (
     BenchmarkCase,
     BenchmarkCaseResult,
@@ -26,6 +27,9 @@ from rag_benchmark.models import (
 from rag_benchmark.services.constants import (
     BENCHMARK_RUNNER_USERNAME,
     DEFAULT_RAGAS_METRICS,
+    IS_RAGAS_CONTEXT_SNAPSHOT_ON,
+    IS_RAGAS_FORMAT_SECTION_CONTEXT_ON,
+    IS_RAGAS_SUMMARY_CONTEXT_ON,
     RAGAS_JUDGE_METRICS,
     RAGAS_RELEASE_GATE_THRESHOLDS,
 )
@@ -608,6 +612,12 @@ class OfflineBenchmarkRunner:
         )
         for key in keys:
             snapshot[key] = ChatbotConfig.get_config(key, None)
+        snapshot["IS_SHAPE_BENCHMARK_ANSWER_ON"] = IS_SHAPE_BENCHMARK_ANSWER_ON
+        snapshot["IS_RAGAS_FORMAT_SECTION_CONTEXT_ON"] = (
+            IS_RAGAS_FORMAT_SECTION_CONTEXT_ON
+        )
+        snapshot["IS_RAGAS_SUMMARY_CONTEXT_ON"] = IS_RAGAS_SUMMARY_CONTEXT_ON
+        snapshot["IS_RAGAS_CONTEXT_SNAPSHOT_ON"] = IS_RAGAS_CONTEXT_SNAPSHOT_ON
         return snapshot
 
     def _build_corpus_signature(self) -> tuple[str, dict[str, Any]]:

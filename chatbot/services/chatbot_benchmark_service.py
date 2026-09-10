@@ -21,6 +21,7 @@ from chatbot.services.constants import (
     DEFAULT_BENCHMARK_SECTION_OFF_TARGET_PENALTY,
     DEFAULT_BENCHMARK_SINGLE_DISEASE_DOCS_K,
     DEFAULT_DOCS_CACHE_SIZE,
+    IS_SHAPE_BENCHMARK_ANSWER_ON,
 )
 
 logger = logging.getLogger(__name__)
@@ -758,6 +759,8 @@ class ChatbotBenchmarkService(ChatbotService):
         text = str(answer or "").strip()
         if not text:
             return ""
+        if not IS_SHAPE_BENCHMARK_ANSWER_ON:
+            return text
 
         question_lower = str(question or "").strip().lower()
         rerank_info = (

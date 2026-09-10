@@ -9,8 +9,11 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
+import numpy as np
+from langchain_core.embeddings import Embeddings
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+from langchain_openai import ChatOpenAI
+from openai import OpenAI
 from pydantic import SecretStr
 
 from chatbot.models import ChatbotConfig
@@ -26,6 +29,9 @@ from rag_benchmark.services.constants import (
     DEFAULT_RAGAS_METRICS,
     DEFAULT_RAGAS_RETRY_MAX_TOKENS,
     DEFAULT_RAGAS_TIMEOUT_SECONDS,
+    IS_RAGAS_CONTEXT_SNAPSHOT_ON,
+    IS_RAGAS_FORMAT_SECTION_CONTEXT_ON,
+    IS_RAGAS_SUMMARY_CONTEXT_ON,
 )
 from vector_store.services.constants import (
     DEFAULT_OPENROUTER_BASE_URL,
@@ -44,6 +50,35 @@ class _ContextCandidate:
     section: str
     title: str
     score: float
+
+
+class _OpenRouterRagasEmbeddings(Embeddings):
+    """LangChain embeddings adapter that keeps OpenRouter inputs as raw strings."""
+
+    def __init__(self, *, api_key: str, base_url: str, model: str) -> None:
+        self.model = model
+        self.client = OpenAI(api_key=api_key, base_url=base_url)
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        response = self.client.embeddings.create(model=self.model, input=texts)
+        data = response.data
+        if len(data) != len(texts):
+            raise ValueError(
+                f"OpenRouter returned {len(data)} embeddings for {len(texts)} texts"
+            )
+        ordered = sorted(data, key=lambda item: item.index)
+        return [self._normalize_768(item.embedding) for item in ordered]
+
+    def embed_query(self, text: str) -> list[float]:
+        return self.embed_documents([text])[0]
+
+    def _normalize_768(self, embedding: list[float]) -> list[float]:
+        truncated = embedding[:768]
+        arr = np.array(truncated, dtype=float)
+        norm = np.linalg.norm(arr)
+        if norm > 0:
+            arr = arr / norm
+        return arr.tolist()
 
 
 class RagasJudgeEvaluator:
@@ -859,15 +894,15 @@ class RagasJudgeEvaluator:
             streaming=False,
         )
 
-    def _create_openrouter_embeddings(self) -> OpenAIEmbeddings:
+    def _create_openrouter_embeddings(self) -> Embeddings:
         api_key = self._resolve_openrouter_api_key()
         base_url = self._resolve_openrouter_base_url()
         model = str(
             ChatbotConfig.get_config("EMBEDDING_MODEL", DEFAULT_OPENROUTER_MODEL)
         )
-        return OpenAIEmbeddings(
+        return _OpenRouterRagasEmbeddings(
             model=model,
-            api_key=SecretStr(api_key),
+            api_key=api_key,
             base_url=base_url,
         )
 
@@ -1098,12 +1133,18 @@ class RagasJudgeEvaluator:
         contexts: list[str],
         summaries: dict[str, Any],
         context_snapshot: str,
+        target_sections: set[str] | None = None,
     ) -> None:
-        for summary in summaries.values():
-            text = str(summary).strip()
-            if text:
-                contexts.append(text)
-        if context_snapshot:
+        if IS_RAGAS_SUMMARY_CONTEXT_ON:
+            for title, summary in summaries.items():
+                summary_texts = self._extract_targeted_summary_texts(
+                    raw_text=str(summary),
+                    target_sections=target_sections or set(),
+                    title=str(title).strip().lower(),
+                )
+                for text in summary_texts:
+                    contexts.append(text)
+        if IS_RAGAS_CONTEXT_SNAPSHOT_ON and context_snapshot:
             contexts.append(context_snapshot)
 
     def _should_include_context_snapshot(
@@ -1112,6 +1153,8 @@ class RagasJudgeEvaluator:
         current_contexts: list[str],
         target_sections: set[str],
     ) -> bool:
+        if not IS_RAGAS_CONTEXT_SNAPSHOT_ON:
+            return False
         section_count = self._estimate_section_count_from_targets(target_sections)
         if section_count <= 1 and len(current_contexts) >= 1:
             return False
@@ -1185,6 +1228,7 @@ class RagasJudgeEvaluator:
                 contexts=contexts,
                 summaries={},
                 context_snapshot=context_snapshot,
+                target_sections=target_sections,
             )
 
         deduped = self._dedupe_context_list(contexts)
@@ -1425,6 +1469,7 @@ class RagasJudgeEvaluator:
             ),
             summaries=summaries_map,
             context_snapshot=context_snapshot,
+            target_sections=target_sections,
         )
         return self._finalize_contexts_for_judge(
             contexts=legacy,
@@ -1439,12 +1484,14 @@ class RagasJudgeEvaluator:
         contexts: list[str],
         summaries: dict[str, Any],
         context_snapshot: str,
+        target_sections: set[str] | None = None,
     ) -> list[str]:
         legacy = list(contexts)
         self._append_fallback_contexts(
             contexts=legacy,
             summaries=summaries,
             context_snapshot=context_snapshot,
+            target_sections=target_sections or set(),
         )
         return self._dedupe_context_list(legacy)
 
@@ -1486,7 +1533,7 @@ class RagasJudgeEvaluator:
         target_sections: set[str],
     ) -> list[_ContextCandidate]:
         candidates: list[_ContextCandidate] = []
-        if target_sections:
+        if IS_RAGAS_SUMMARY_CONTEXT_ON and target_sections:
             candidates.extend(
                 self._build_summary_candidates(
                     retrieval_output=retrieval_output,
@@ -1592,14 +1639,16 @@ class RagasJudgeEvaluator:
         raw_contexts: list[str] = []
 
         context_snapshot = str(generation_output.get("context_snapshot", "")).strip()
-        if context_snapshot:
+        if IS_RAGAS_CONTEXT_SNAPSHOT_ON and context_snapshot:
             raw_contexts.append(context_snapshot)
 
         summaries = retrieval_output.get("summaries", {})
-        if isinstance(summaries, dict):
+        if IS_RAGAS_SUMMARY_CONTEXT_ON and isinstance(summaries, dict):
             for summary in summaries.values():
-                text = str(summary).strip()
-                if text:
+                for text in self._extract_targeted_summary_texts(
+                    raw_text=str(summary),
+                    target_sections=set(),
+                ):
                     raw_contexts.append(text)
 
         raw_contexts.extend(
@@ -1665,45 +1714,137 @@ class RagasJudgeEvaluator:
 
         candidates: list[_ContextCandidate] = []
         for title, raw_text in summaries.items():
-            text = str(raw_text).strip()
-            if not text:
-                continue
-            lowered = text.lower()
-            section = ""
-            if target_sections:
-                for target in target_sections:
-                    marker = str(target).strip().lower()
-                    if marker and marker in lowered:
-                        section = marker
-                        break
-                if not section:
-                    retrieved_items = retrieval_output.get("retrieved_items")
-                    if (
-                        len(target_sections) == 1
-                        and isinstance(retrieved_items, list)
-                        and len(retrieved_items) > 0
-                    ):
-                        section = next(iter(target_sections))
-                    else:
-                        continue
-            score = self._score_context_candidate(
-                text=text,
-                section=section,
-                title=str(title).strip().lower(),
-                question_tokens=question_tokens,
+            normalized_title = str(title).strip().lower()
+            summary_texts = self._extract_targeted_summary_texts(
+                raw_text=str(raw_text),
                 target_sections=target_sections,
-                source="summary",
+                title=normalized_title,
             )
-            candidates.append(
-                _ContextCandidate(
+            if not summary_texts:
+                continue
+
+            for text in summary_texts:
+                detected_sections = self._detect_context_sections(
                     text=text,
-                    source="summary",
-                    section=section,
-                    title=str(title).strip().lower(),
-                    score=score,
+                    target_sections=target_sections,
                 )
-            )
+                section = ""
+                if detected_sections:
+                    section = sorted(detected_sections)[0]
+                score = self._score_context_candidate(
+                    text=text,
+                    section=section,
+                    title=normalized_title,
+                    question_tokens=question_tokens,
+                    target_sections=target_sections,
+                    source="summary",
+                )
+                candidates.append(
+                    _ContextCandidate(
+                        text=text,
+                        source="summary",
+                        section=section,
+                        title=normalized_title,
+                        score=score,
+                    )
+                )
         return candidates
+
+    def _extract_targeted_summary_texts(
+        self,
+        *,
+        raw_text: str,
+        target_sections: set[str],
+        title: str = "",
+    ) -> list[str]:
+        text = str(raw_text or "").strip()
+        if not text:
+            return []
+
+        if not target_sections:
+            return [text]
+
+        section_lines = self._extract_summary_section_lines(text)
+        if not section_lines:
+            return []
+
+        selected: list[str] = []
+        for section, line in section_lines:
+            if section in target_sections:
+                selected.append(
+                    self._format_targeted_summary_line(
+                        title=title,
+                        line=line,
+                    )
+                )
+        return selected
+
+    def _format_targeted_summary_line(self, *, title: str, line: str) -> str:
+        normalized_line = re.sub(r"\s+", " ", str(line or "")).strip()
+        normalized_title = re.sub(r"\s+", " ", str(title or "")).strip()
+        if not normalized_line or not normalized_title:
+            return normalized_line
+        if normalized_line.lower().startswith(normalized_title.lower()):
+            return normalized_line
+        return f"{normalized_title}: {normalized_line}"
+
+    def _extract_summary_section_lines(self, text: str) -> list[tuple[str, str]]:
+        section_markers = {
+            "symptom": (
+                "triệu chứng",
+                "trieu chung",
+                "symptom",
+                "symptoms",
+                "main symptoms",
+            ),
+            "aetiologies": (
+                "nguyên nhân",
+                "nguyen nhan",
+                "cause",
+                "causes",
+                "aetiology",
+                "etiology",
+            ),
+            "risk": (
+                "yếu tố nguy cơ",
+                "yeu to nguy co",
+                "risk",
+                "risk factor",
+                "risk factors",
+            ),
+            "diagnose_and_treaty": (
+                "chẩn đoán và điều trị",
+                "chan doan va dieu tri",
+                "diagnosis",
+                "treatment",
+                "diagnosis & treatment",
+            ),
+            "living_and_preventive": (
+                "sinh hoạt và phòng ngừa",
+                "sinh hoat va phong ngua",
+                "prevention",
+                "preventive",
+                "lifestyle",
+                "phòng ngừa",
+                "phong ngua",
+            ),
+        }
+
+        lines = [
+            re.sub(r"\s+", " ", line).strip()
+            for line in str(text or "").splitlines()
+            if re.sub(r"\s+", " ", line).strip()
+        ]
+        section_lines: list[tuple[str, str]] = []
+        for line in lines:
+            lowered = line.lower()
+            if re.fullmatch(r"[a-z_]+_top3_count=\d+", lowered):
+                continue
+            for section, markers in section_markers.items():
+                if any(lowered.startswith(f"{marker}:") for marker in markers):
+                    section_lines.append((section, line))
+                    break
+        return section_lines
 
     def _build_retrieved_text_candidates(
         self,
@@ -1840,6 +1981,8 @@ class RagasJudgeEvaluator:
         normalized_text = str(text).strip()
         if not normalized_text:
             return ""
+        if not IS_RAGAS_FORMAT_SECTION_CONTEXT_ON:
+            return normalized_text
         normalized_text = re.sub(r"[.!?]+$", "", normalized_text)
         section_key = str(section).strip().lower()
         if section_key == "risk":
